@@ -1,0 +1,3 @@
+[install]
+# later slices share one version of each dependency, the Agent SDK first
+exact = true

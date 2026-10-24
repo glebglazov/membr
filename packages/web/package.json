@@ -1,0 +1,9 @@
+{
+  "name": "@membr/web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@membr/core": "workspace:*",
+    "@membr/protocol": "workspace:*"
+  }
+}

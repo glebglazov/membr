@@ -1,0 +1,15 @@
+{
+  "name": "membr",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "bin": { "membr": "packages/server/src/main.ts" },
+  "scripts": {
+    "test": "bun test",
+    "serve": "bun packages/server/src/main.ts serve"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

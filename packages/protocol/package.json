@@ -1,0 +1,6 @@
+{
+  "name": "@membr/protocol",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}
