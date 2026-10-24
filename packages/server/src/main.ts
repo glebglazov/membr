@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { lock } from "./lock.ts";
+import { serveHub } from "./hub.ts";
 
 const USAGE = "usage: membr serve [--port N]";
 
@@ -32,13 +33,10 @@ if ("heldBy" in taken) {
   process.exit(1);
 }
 
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port,
-  fetch: () => new Response("membr"),
-});
+const { server, token } = serveHub({ dir, port });
 url = server.url.href;
 console.log(`membr: serving ${dir} at ${url}`);
+console.log(`membr: sign in at ${url}?token=${encodeURIComponent(token)}`);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

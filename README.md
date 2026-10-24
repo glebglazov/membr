@@ -44,3 +44,45 @@ They write their measurements to `docs/p0-results.json`. The P0 report,
 - `packages/web` is the web renderer. It draws the client core's view model.
 - `packages/server` is the `membr` entry point and the server. Its Engine,
   `src/engine.ts`, is the only code that imports the Agent SDK.
+
+## WebSocket protocol
+
+Connect to `/ws`. The server prints a sign-in link with its bearer token.
+Supply that token in `Authorization: Bearer TOKEN`, the `token` query parameter,
+the `token` cookie, or the hello message. If you supply more than one token,
+all must match. The token stays in the data directory with mode `0600`.
+
+Send hello first:
+
+```json
+{"type":"hello","version":"1.0","kind":"term","device":null,"token":"TOKEN"}
+```
+
+The server replays logged `entry` events, then sends `ready`. A different major
+version gets `refused` with a reason. Both `web` and `term` use the same protocol.
+A token supplied by the connection allows `"token":null` in hello.
+
+Send a message with an act id that remains the same across retries:
+
+```json
+{"type":"act","id":"message-1","act":"say","text":"Hello"}
+```
+
+Every connected client gets the same `entry`. The sender gets an `answer` with
+its act id and the entry index. The server writes the entry and answer together
+before it sends either event. A repeat act returns the first answer, including
+after a restart. It never writes a second message for that id.
+
+Reads use their own request ids:
+
+```json
+{"type":"read","id":"tree-1","read":"roots"}
+{"type":"read","id":"message-1","read":"zoom","part":{"l":0,"i":0}}
+```
+
+A `read` event returns the request id, `parts` and `entries`. Level zero names
+one message. Higher levels name a block of `2 ** l` messages at `i * 2 ** l`.
+This slice has no summaries or model calls. Other acts return a saved failure
+answer. Agent reads return an error. `packages/protocol/src/index.ts` defines
+all message types and their boundary parsers. The reusable S1 test client is
+`packages/server/test/client.ts`.
