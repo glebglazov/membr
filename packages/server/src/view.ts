@@ -57,7 +57,7 @@ export function merge(lines: readonly Line[], low: number, read: (part: Part) =>
 export class View {
   private lines: Line[] = [];
   private savedPick: Pick | null = null;
-  readonly goal: string | null;
+  private savedGoal: string | null = null;
   private readonly file: string;
 
   constructor(dir: string, private readonly log: Log, private readonly tree: Tree, private readonly initialPick: Pick) {
@@ -72,14 +72,33 @@ export class View {
         at = end(item);
       }
       this.savedPick = raw.pick === null ? null : parsePick(raw.pick);
-      this.goal = raw.goal;
-    } else this.goal = null;
+      this.savedGoal = raw.goal;
+    }
     this.sync();
   }
 
   get parts(): Part[] { return this.lines.map(({ l, i }) => ({ l, i })); }
   get pick(): Pick { return this.log.pick ?? this.savedPick ?? this.initialPick; }
+  get goal(): string | null { return this.log.goal.value; }
   text(upto = this.log.count): string { return HEAD + render(this.lines.filter((part) => end(part) <= upto)); }
+
+  goalContext(): string {
+    let at = this.log.count;
+    let bytes = 0;
+    while (at > 0 && (at === this.log.count || bytes < 32000)) {
+      const entry = this.log.read(--at)!;
+      bytes += Buffer.byteLength(entry.kind + ": " + entry.text);
+    }
+    const crossing = this.lines.find((part) => part.i * 2 ** part.l < at && end(part) > at);
+    if (crossing) at = crossing.i * 2 ** crossing.l;
+    const older = this.lines.filter((part) => end(part) <= at);
+    let recent = "";
+    for (let i = at; i < this.log.count; i++) {
+      const entry = this.log.read(i)!;
+      recent += `${i}+1|${entry.kind}: ${entry.text}\n`;
+    }
+    return "<chat>\n" + older.map(line).join("") + recent + "</chat>\n";
+  }
 
   sync(): void {
     let changed = !fs.existsSync(this.file);
@@ -91,6 +110,7 @@ export class View {
     }
     const pick = this.pick;
     if (JSON.stringify(pick) !== JSON.stringify(this.savedPick)) { this.savedPick = pick; changed = true; }
+    if (this.goal !== this.savedGoal) { this.savedGoal = this.goal; changed = true; }
     if (changed) this.save();
   }
 

@@ -2,19 +2,22 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import { type Act, type Answer, type Entry, type Event, type Pick, type State } from "@membr/protocol";
-import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
+import { claude, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
 import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import type { Memory } from "./memory.ts";
 
-type SummaryWait = { phase: "summaries"; id: number; pending: string[]; halt: AbortController };
-type Turn = SummaryWait | { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closed" };
+type PendingInput = { text: string; from: From };
+type SummaryWait = { phase: "summaries"; id: number; pending: PendingInput[]; halt: AbortController };
+type GoalCheck = { phase: "checking"; revision: number; goal: string; halt: AbortController };
+type Turn = SummaryWait | GoalCheck | { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closed" };
 type Session = { id: string; epoch: Epoch };
 const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
 const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
 const PROMPT = fs.readFileSync(new URL("./prompt.txt", import.meta.url), "utf8");
+const GOAL_NO = "The goal isn't satisfied yet: keep working.";
 
 export class Chat {
   private readonly approvals: Approvals;
@@ -46,7 +49,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: [], usage: this.usage };
+    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: [], usage: this.usage };
   }
 
   act(act: Act): Answer {
@@ -55,29 +58,20 @@ export class Chat {
     if (act.act === "answer") return this.approvals.answer(act, id, refusal);
     const result = this.log.apply(act, id, refusal);
     if (!result.fresh || !result.answer.ok) return result.answer;
-    let batch = false;
+    if ((act.act === "say" || act.act === "goal" || act.act === "stop") && this.turn.phase === "checking") {
+      this.turn.halt.abort();
+      this.turn = { phase: "idle" };
+    }
     try {
       this.view.sync();
       if (result.entry) this.record(result.entry);
-      if (act.act === "say" && this.turn.phase === "idle") batch = this.view.over(id);
     } catch (error) {
       if (act.act === "say" && this.turn.phase === "idle") this.turn = { phase: "running", id };
       this.fail(error);
       return result.answer;
     }
     if (act.act === "say") {
-      if (this.turn.phase === "summaries") { this.turn.pending.push(act.text); return result.answer; }
-      if (batch) {
-        const wait: SummaryWait = { phase: "summaries", id, pending: [act.text], halt: new AbortController() };
-        this.turn = wait;
-        this.change();
-        void this.rotate(wait);
-        return result.answer;
-      }
-      const priority = this.turn.phase === "running" ? "next" : "now";
-      this.turn = { phase: "running", id };
-      this.change();
-      try { this.sent = this.session.epoch.send(act.text, priority, "user"); } catch (error) { this.fail(error); }
+      try { this.start({ text: act.text, from: "user" }, id); } catch (error) { this.fail(error); }
     } else if (act.act === "stop" && this.turn.phase === "summaries") {
       this.turn.halt.abort();
       try {
@@ -100,12 +94,15 @@ export class Chat {
       }).catch((error) => {
         if (session === this.session && this.turn.phase !== "closed" && this.turn.phase !== "failed") this.fail(error);
       });
+    } else if (act.act === "goal" || act.act === "stop") {
+      this.change();
     }
     return result.answer;
   }
 
   close(): void {
     if (this.turn.phase === "summaries") this.turn.halt.abort();
+    if (this.turn.phase === "checking") this.turn.halt.abort();
     this.turn = { phase: "closed" };
     this.approvals.cancel();
     this.session.epoch.close();
@@ -113,6 +110,25 @@ export class Chat {
 
   private open(upto = this.log.count): Session {
     return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options) };
+  }
+
+  private start(input: PendingInput, id: number): void {
+    if (this.turn.phase === "summaries") { this.turn.pending.push(input); return; }
+    let batch = false;
+    if (this.turn.phase === "idle") {
+      try { batch = this.view.over(id); } catch (error) { this.turn = { phase: "running", id }; throw error; }
+    }
+    if (batch) {
+      const wait: SummaryWait = { phase: "summaries", id, pending: [input], halt: new AbortController() };
+      this.turn = wait;
+      this.change();
+      void this.rotate(wait);
+      return;
+    }
+    const priority = this.turn.phase === "running" ? "next" : "now";
+    this.turn = { phase: "running", id };
+    this.change();
+    this.sent = this.session.epoch.send(input.text, priority, input.from);
   }
 
   private async rotate(wait: SummaryWait): Promise<void> {
@@ -125,7 +141,7 @@ export class Chat {
       void this.read(this.session);
       this.emit({ type: "view", parts: this.view.parts });
       this.turn = { phase: "running", id: wait.id };
-      for (const [i, text] of wait.pending.entries()) this.sent = this.session.epoch.send(text, i === 0 ? "now" : "next", "user");
+      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(input.text, i === 0 ? "now" : "next", input.from);
       this.change();
     } catch (error) {
       if (!wait.halt.signal.aborted) this.fail(error);
@@ -154,7 +170,13 @@ export class Chat {
             if (this.turn.phase === "running" && event.through >= this.sent) {
               const entry = this.log.finish(this.turn.id, event.error === null ? undefined : `The turn failed: ${event.error}`);
               if (entry) this.record(entry);
-              this.turn = { phase: "idle" };
+              const goal = event.error === null ? this.log.goal : { revision: 0, value: null };
+              if (goal.value === null) this.turn = { phase: "idle" };
+              else {
+                const check: GoalCheck = { phase: "checking", revision: goal.revision, goal: goal.value, halt: new AbortController() };
+                this.turn = check;
+                void this.check(check);
+              }
             }
             this.change();
             break;
@@ -178,11 +200,43 @@ export class Chat {
     }
   }
 
+  private async check(check: GoalCheck): Promise<void> {
+    let met: boolean;
+    try {
+      met = await this.engine.checkGoal(check.goal, this.view.goalContext(), check.halt.signal);
+    } catch (error) {
+      if (this.turn !== check || check.halt.signal.aborted) return;
+      try {
+        const reason = error instanceof Error ? error.message : "The goal check failed";
+        this.record(this.log.append("note", `No goal check: ${reason.replace(/\.$/, "")}. The goal stays; /halt drops it.`));
+        this.turn = { phase: "idle" };
+        this.change();
+      } catch (failure) { this.fail(failure); }
+      return;
+    }
+    if (this.turn !== check || check.halt.signal.aborted || this.log.goal.revision !== check.revision) return;
+    try {
+      if (met) {
+        const entry = this.log.completeGoal(check.revision);
+        if (entry) this.record(entry);
+        this.turn = { phase: "idle" };
+        this.change();
+      } else {
+        const entry = this.log.continueGoal(GOAL_NO);
+        this.turn = { phase: "running", id: entry.i };
+        this.record(entry);
+        this.turn = { phase: "idle" };
+        this.start({ text: GOAL_NO, from: "membr" }, entry.i);
+      }
+    } catch (error) { this.fail(error); }
+  }
+
   private fail(error: unknown): void {
     if (this.turn.phase === "closed" || this.turn.phase === "failed") return;
     const reason = error instanceof Error ? error.message : "The Engine failed";
     const turn = this.turn;
     if (turn.phase === "summaries") turn.halt.abort();
+    if (turn.phase === "checking") turn.halt.abort();
     this.turn = { phase: "failed", reason };
     this.approvals.cancel();
     this.session.epoch.close();

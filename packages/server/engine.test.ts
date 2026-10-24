@@ -41,6 +41,24 @@ test("every injected SDK message is synthetic and prefixed while typed user text
   ]);
 });
 
+test("goal checks use one isolated Haiku turn and propagate query failure", async () => {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-goal-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+  const wire = JSON.parse(stdout);
+  expect(wire.met).toBe(true);
+  expect(wire.failure).toBe("goal check failed: unavailable");
+  expect(wire.calls).toHaveLength(2);
+  for (const call of wire.calls) {
+    expect(call).toMatchObject({ model: "haiku", tools: [], settingSources: [], persistSession: false, maxTurns: 1, abortController: true });
+    expect(call.systemPrompt).toContain("Answer yes if the chat shows the goal fully satisfied now");
+    expect(call.messages).toHaveLength(1);
+    expect(call.messages[0].isSynthetic).toBe(true);
+    expect(call.messages[0].message.content.startsWith("[membr]\n<chat>")).toBe(true);
+  }
+  expect(wire.calls[0].messages[0].message.content).toContain("The goal:\n\nFinish the job");
+});
+
 test("the Engine registers zoom and date and sends their text, errors and images through MCP", async () => {
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-memory-wire.ts")], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);

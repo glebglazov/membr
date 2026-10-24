@@ -145,7 +145,7 @@ test("bad credentials and incompatible versions have reasons and reveal no log",
   }
 });
 
-test("malformed messages cannot change the log, and unsupported acts keep their first answer", async () => {
+test("malformed messages cannot change the log, and a resent goal act keeps its first answer", async () => {
   const server = await serve();
   const client = await connect(server);
   for (const bad of ["{", JSON.stringify({ type: "act", act: "say", id: "bad", text: 42 }), JSON.stringify({ type: "read", id: "bad", read: "zoom", part: { l: -1, i: 0 } })]) {
@@ -154,11 +154,11 @@ test("malformed messages cannot change the log, and unsupported acts keep their 
     expect((await client.wait("error", mark)).reason.length).toBeGreaterThan(0);
   }
   expect(records(server.dir)).toHaveLength(0);
-  client.act({ type: "act", id: "unsupported", act: "goal", text: "Future work" });
+  client.act({ type: "act", id: "goal", act: "goal", text: "Future work" });
   const answer = await client.wait("answer");
-  expect(answer.ok).toBe(false);
+  expect(answer.ok).toBe(true);
   const mark = client.events.length;
-  client.act({ type: "act", id: "unsupported", act: "say", text: "Do not log" });
+  client.act({ type: "act", id: "goal", act: "say", text: "Do not log" });
   expect(await client.wait("answer", mark)).toEqual(answer);
   expect(records(server.dir)).toHaveLength(1);
   expect(records(server.dir)[0].kind).toBeUndefined();

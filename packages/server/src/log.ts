@@ -9,8 +9,9 @@ const SLOT = 16;
 const DAY = 86_400_000;
 type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
+type SavedGoal = { revision: number; value: string | null };
 export type AllowRule = { tool: string; input: Record<string, unknown> };
-type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; allow?: AllowRule };
+type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule };
 type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
@@ -49,6 +50,7 @@ export class Log {
   private failure: unknown;
   private readonly allowed: AllowRule[] = [];
   private savedPick: SavedPick | null = null;
+  private savedGoal: SavedGoal = { revision: 0, value: null };
 
   constructor(private readonly dir: string) {
     fs.mkdirSync(path.join(dir, "main"), { recursive: true });
@@ -83,6 +85,12 @@ export class Log {
           } else if ("event" in raw && typeof raw.event === "string" && !this.events.has(raw.event)) {
             this.events.add(raw.event);
           } else throw new Error(`Invalid log record in ${file}`);
+          if ("goal" in raw) {
+            const goal = raw.goal;
+            if (goal === null || typeof goal !== "object" || !("revision" in goal) || typeof goal.revision !== "number" || !Number.isSafeInteger(goal.revision) || goal.revision < 1 || !("value" in goal) || (goal.value !== null && typeof goal.value !== "string")) throw new Error(`Invalid goal in ${file}`);
+            if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid goal in ${file}`);
+            if (goal.revision > this.savedGoal.revision) this.savedGoal = { revision: goal.revision, value: goal.value };
+          }
           if ("turn" in raw) {
             const turn = raw.turn;
             if (turn === null || typeof turn !== "object" || !("id" in turn) || typeof turn.id !== "number" || !Number.isSafeInteger(turn.id) || turn.id < 0 || !("phase" in turn) || (turn.phase !== "running" && turn.phase !== "done")) throw new Error(`Invalid turn in ${file}`);
@@ -112,6 +120,7 @@ export class Log {
   get count(): number { return this.locations.length; }
   get allows(): readonly AllowRule[] { return this.allowed; }
   get pick(): Pick | null { return this.savedPick?.value ?? null; }
+  get goal(): SavedGoal { return this.savedGoal; }
 
   read(i: number): Entry | null {
     const location = this.locations[i];
@@ -132,20 +141,35 @@ export class Log {
     if (previous) return { answer: previous, entry: null, fresh: false };
     const entry = refusal ? null : act.act === "say"
       ? this.entry("user", act.text, act.images)
-      : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.") : null;
+      : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.")
+      : act.act === "goal" && act.text === null ? this.entry("note", "Goal halted by the user.") : null;
     const pick = !refusal && act.act === "pick" ? { revision: (this.savedPick?.revision ?? 0) + 1, value: act.pick } : undefined;
+    const goal = !refusal && act.act === "goal" ? { revision: this.savedGoal.revision + 1, value: act.text } : undefined;
     const approved = !refusal && act.act === "answer" && approval !== undefined;
     const allow = approved && act.act === "answer" && act.choice === "always" ? approval : undefined;
-    const answer: Answer = entry || pick || approved
+    const answer: Answer = entry || pick || goal || approved
       ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
       : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
-    this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(allow ? { allow } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
+    this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(goal ? { goal } : {}), ...(allow ? { allow } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
     return { answer, entry, fresh: true };
   }
 
   append(kind: Entry["kind"], text: string): Entry {
     const entry = this.entry(kind, text);
     this.write({ ...entry, event: crypto.randomUUID() });
+    return entry;
+  }
+
+  continueGoal(text: string): Entry {
+    const entry = this.entry("note", text);
+    this.write({ ...entry, event: crypto.randomUUID(), turn: { id: entry.i, phase: "running" } });
+    return entry;
+  }
+
+  completeGoal(revision: number): Entry | null {
+    if (this.savedGoal.revision !== revision || this.savedGoal.value === null) return null;
+    const entry = this.entry("note", "Goal met.");
+    this.write({ ...entry, event: crypto.randomUUID(), goal: { revision: revision + 1, value: null } });
     return entry;
   }
 
@@ -192,6 +216,7 @@ export class Log {
       if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
       if (record.allow) this.allowed.push(record.allow);
       if (record.pick) this.savedPick = record.pick;
+      if (record.goal) this.savedGoal = record.goal;
       if (entry) {
         const index = fs.openSync(path.join(this.dir, "main.index"), "r+");
         try { this.place(index, entry.i, { day, at, length: bytes.length - 1 }); } finally { fs.closeSync(index); }

@@ -44,6 +44,8 @@ export class FakeEpoch implements Epoch {
 
 export class FakeEngine implements Engine {
   readonly epochs: FakeEpoch[] = [];
+  readonly checks: Array<{ goal: string; chat: string; signal: AbortSignal }> = [];
+  onCheck: (goal: string, chat: string, signal: AbortSignal) => Promise<boolean> = async () => true;
   constructor(private readonly script: (epoch: FakeEpoch, message: Message) => void = () => {}) {}
   open(view: string, options: EpochOptions): Epoch {
     const epoch = new FakeEpoch(view, options, this.script);
@@ -52,5 +54,9 @@ export class FakeEngine implements Engine {
     return epoch;
   }
   async compact(_prompt: string): Promise<string | null> { return "A compacted message."; }
+  async checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean> {
+    this.checks.push({ goal, chat, signal });
+    return this.onCheck(goal, chat, signal);
+  }
   async account(): Promise<Account> { throw new Error("No account was scripted"); }
 }

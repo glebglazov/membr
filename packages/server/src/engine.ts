@@ -75,8 +75,12 @@ export interface Engine {
   open(view: string, options: EpochOptions): Epoch;
   // one line, or null when the model gives none
   compact(prompt: string): Promise<string | null>;
+  checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean>;
   account(): Promise<Account>;
 }
+
+// Ported from UniiChat Server.ts at 0500bf6 (Apache-2.0).
+const GOAL = "You check a goal. Below is a chat between a user and Unii, an AI agent: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the user set with /goal. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, nothing else.";
 
 // ported from UniiChat (commit 0500bf6, Apache-2.0): the compaction part of
 // UniiChat's prompt.txt, word for word
@@ -380,6 +384,40 @@ async function compact(prompt: string): Promise<string | null> {
   throw new Error("compaction ended with no result");
 }
 
+async function checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
+  const abort = new AbortController();
+  const cancel = () => abort.abort(signal.reason);
+  signal.addEventListener("abort", cancel, { once: true });
+  const inbox = new Inbox();
+  inbox.push(message(chat + "\nThe goal:\n\n" + goal, "next", "membr"));
+  inbox.end();
+  const session = query({
+    prompt: inbox,
+    options: {
+      abortController: abort,
+      env: env(),
+      model: "haiku",
+      systemPrompt: GOAL,
+      tools: [],
+      settingSources: [],
+      persistSession: false,
+      maxTurns: 1,
+    },
+  });
+  try {
+    for await (const sdk of session) {
+      if (sdk.type !== "result") continue;
+      if (sdk.subtype !== "success" || sdk.is_error) throw new Error(`goal check failed: ${sdk.subtype === "success" ? sdk.result : sdk.errors.join("; ") || sdk.subtype}`);
+      return /^\W*yes\b/i.test(sdk.result);
+    }
+    throw new Error("goal check ended with no result");
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    session.close();
+  }
+}
+
 // a session that sends no message, so it asks Claude Code about the login
 // without a model call
 async function account(): Promise<Account> {
@@ -400,4 +438,4 @@ async function account(): Promise<Account> {
   }
 }
 
-export const claude: Engine = { open, compact, account };
+export const claude: Engine = { open, compact, checkGoal, account };
