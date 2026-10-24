@@ -10,6 +10,7 @@ import type { ChatConfig } from "./config.ts";
 import { readConfig } from "./config.ts";
 import { web } from "./web.ts";
 import { imagePath, IMAGE_COUNT, storeImage } from "./images.ts";
+import { cleanupEpochs } from "./export-cleanup.ts";
 
 type Connection = { phase: "hello"; tokens: string[]; local: boolean } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -121,6 +122,10 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
           return Response.json(answer, { status: answer.ok ? 200 : 400 });
         }
       }
+      if (url.pathname === "/export") {
+        if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
+        return Response.json(chat!.export(), { headers: { "Content-Disposition": 'attachment; filename="membr-memory.json"', "Cache-Control": "no-store" } });
+      }
       if (url.pathname.startsWith("/docs/images/")) {
         if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
         try {
@@ -184,8 +189,12 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     throw error;
   }
   let shutdown: Promise<void> | null = null;
+  const purge = () => void cleanupEpochs(log, options.engine ?? claude, chat!.activeEpoch, Date.now(), options.epoch?.cwd ?? process.cwd()).catch((error) => console.error("membr: session cleanup failed", error));
+  purge();
+  const cleanupTimer = setInterval(purge, 86_400_000);
   return { server, token, close(): Promise<void> {
     if (shutdown) return shutdown;
+    clearInterval(cleanupTimer);
     const importing = imports?.close() ?? Promise.resolve();
     server.stop(true);
     const done = Promise.all([chat?.close(), importing]).then(() => {});

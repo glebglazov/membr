@@ -281,6 +281,7 @@ function App() {
       ],
       h("div", { ref: end })),
     h("footer", null,
+      h("a", { href: "/export" }, "Export memory"),
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),

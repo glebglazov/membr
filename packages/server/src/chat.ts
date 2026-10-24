@@ -60,6 +60,11 @@ export class Chat {
   }
 
   get live() { return this.streaming; }
+  get activeEpoch() { return this.session.id; }
+
+  export() {
+    return { messages: this.log.entries, lines: this.view.summaries, view: this.view.text(), goal: this.view.goal, pick: this.view.pick };
+  }
 
   get parts() { return this.view.parts; }
   get lines() { return this.view.summaries; }

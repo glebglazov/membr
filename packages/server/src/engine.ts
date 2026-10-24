@@ -80,6 +80,7 @@ export interface Engine {
   compact(prompt: string): Promise<string | null>;
   checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean>;
   account(): Promise<Account>;
+  deleteSession(session: string, cwd?: string): Promise<void>;
 }
 
 // Ported from UniiChat Server.ts at 0500bf6 (Apache-2.0).
@@ -450,4 +451,7 @@ async function account(): Promise<Account> {
   }
 }
 
-export const claude: Engine = { open, compact, checkGoal, account };
+export const claude: Engine = { open, compact, checkGoal, account, async deleteSession(session, cwd) {
+  const sdk = await import("@anthropic-ai/claude-agent-sdk/core");
+  await sdk.deleteSession(session, cwd ? { dir: cwd } : undefined);
+} };

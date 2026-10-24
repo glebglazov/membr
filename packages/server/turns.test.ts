@@ -62,7 +62,7 @@ test("two clients get live text and each Engine block in order, with one send pe
   const entries = a.events.filter((event) => event.type === "entry").map((event) => event.entry);
   expect(JSON.parse(entries[2].text)).toEqual({ id: "call-1", name: "Read", input: { file_path: "/tmp/example" } });
   expect(JSON.parse(entries[3].text)).toEqual({ id: "call-1", text: "contents", error: false });
-  expect(Object.values(JSON.parse(fs.readFileSync(path.join(hub.dir, "epochs.json"), "utf8")))).toEqual(["fake-session-1"]);
+  expect(Object.values(JSON.parse(fs.readFileSync(path.join(hub.dir, "epochs.json"), "utf8"))).map((record) => (record as { session: string }).session)).toEqual(["fake-session-1"]);
   expect(hub.engine.epochs[0].options.append).toContain("the server machine");
   expect(hub.engine.epochs[0].options.append).not.toContain("# Compactions");
 });

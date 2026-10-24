@@ -56,6 +56,22 @@ test("loopback opens the page and socket without a token", async () => {
   expect((await fetch(hub.url, { headers: { Cookie: "token=wrong" } })).status).toBe(401);
 });
 
+test("the export JSON matches the saved chat and memory", async () => {
+  const hub = start();
+  const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
+  clients.push(client);
+  await client.wait("ready");
+  client.act({ type: "act", act: "say", id: "export-message", text: "Keep this in the export." });
+  const saved = await client.wait("entry", 0, (event) => event.entry.text === "Keep this in the export.");
+  const response = await fetch(new URL("/export", hub.server.url));
+  expect(response.headers.get("content-disposition")).toContain("membr-memory.json");
+  const value = await response.json();
+  expect(value.messages).toContainEqual(saved.entry);
+  expect(value.lines).toContainEqual(expect.objectContaining({ text: "user: Keep this in the export." }));
+  expect(value).toMatchObject({ goal: null, pick: { model: "sonnet", effort: "high", fast: false } });
+  expect(value.view).toContain("<chat>");
+});
+
 test("a non-loopback request needs a token and the sign-in link sets a reusable cookie", async () => {
   const address = Object.values(os.networkInterfaces()).flat().find((entry) => entry?.family === "IPv4" && !entry.internal)?.address;
   if (!address) throw new Error("This access test needs a non-loopback IPv4 interface");
