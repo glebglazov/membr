@@ -153,7 +153,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
             }
             sockets.add(socket);
             for (const ask of chat!.asks) send(socket, ask);
-            send(socket, { type: "view", parts: chat!.parts, lines: chat!.lines, turn: chat!.latestTurn });
+            send(socket, chat!.viewEvent());
             send(socket, { type: "state", state: chat!.state });
             if (chat!.live) send(socket, { type: "live", text: chat!.live, agent: null });
             send(socket, { type: "imports", imports: imports!.status });

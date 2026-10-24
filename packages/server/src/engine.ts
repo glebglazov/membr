@@ -16,7 +16,8 @@ declare const MEMBR_STANDALONE: boolean | undefined;
 
 const CLI_PATH = process.env.MEMBR_CLAUDE_CLI ?? (typeof MEMBR_STANDALONE === "undefined" ? undefined : "claude");
 
-export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = typeof EFFORTS[number];
 
 // the user's choice of model, effort and fast mode
 export type Pick = { model: string; effort: Effort; fast: boolean };
@@ -200,7 +201,7 @@ function open(view: string, options: EpochOptions): Epoch {
     }, { annotations: { readOnlyHint: true } }),
     tool("date", "The date and time of message id.", { id: z.number().int() }, async ({ id }) => ({ content: [{ type: "text", text: memory.date(id) }] }), { annotations: { readOnlyHint: true } }),
     ...(agents ? [
-      tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.string()), effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: agents.spawn(tasks, effort) }] })),
+      tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.string()), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: agents.spawn(tasks, effort) }] })),
       tool("tell", "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: agents.tell(name, message) }] })),
     ] : []),
   ] }) } : undefined;

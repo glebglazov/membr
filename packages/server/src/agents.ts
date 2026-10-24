@@ -3,8 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, type Entry, type Event } from "@membr/protocol";
-import type { Ask, Effort, Engine, Epoch, EpochOptions } from "./engine.ts";
+import { EFFORTS, type Ask, type Effort, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { identity } from "./log.ts";
+import { appendFile, truncateFile } from "./durable.ts";
 
 export type AgentTools = { spawn(tasks: string[], effort?: Effort): string; tell(name: string, message: string): string };
 type Run = { phase: "running" | "stopping"; sent: number; replies: string[]; halt: AbortController };
@@ -19,8 +20,7 @@ says, not what the user's last message says. membr may have given you only
 part of the work. Your final reply is your report to membr. membr may send
 you more messages while you work. Answer the last message.`;
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
-function effort(value: string): value is Effort { return EFFORTS.includes(value); }
+function effort(value: string): value is Effort { return (EFFORTS as readonly string[]).includes(value); }
 
 export class Agents implements AgentTools {
   private readonly registry = new Map<string, Agent>();
@@ -43,10 +43,7 @@ export class Agents implements AgentTools {
         if (entry.i !== i) throw new Error(`Invalid agent log ${name}`);
         return entry;
       });
-      if (end < data.length) {
-        const fd = fs.openSync(full, "r+");
-        try { fs.ftruncateSync(fd, Buffer.byteLength(data.slice(0, end))); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      }
+      if (end < data.length) truncateFile(full, Buffer.byteLength(data.slice(0, end)));
       const saved = entries[0]?.text.replace(/^subagent at effort /, "");
       this.registry.set(name, { name, entries, ...(saved && effort(saved) ? { effort: saved } : {}), session: null, state: { phase: "idle" }, live: "" });
     }
@@ -177,12 +174,8 @@ export class Agents implements AgentTools {
   private append(agent: Agent, kind: Entry["kind"], text: string): void {
     if (agent.failure) throw agent.failure;
     const entry: Entry = { i: agent.entries.length, kind, text, date: new Date().toISOString(), from: { machine: this.machine, seq: agent.entries.length } };
-    try {
-      const fd = fs.openSync(path.join(this.dir, agent.name + ".jsonl"), "a", 0o600);
-      try { fs.writeFileSync(fd, JSON.stringify(entry) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      const directory = fs.openSync(this.dir, "r");
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    } catch (error) { agent.failure = error; throw error; }
+    try { appendFile(path.join(this.dir, agent.name + ".jsonl"), JSON.stringify(entry) + "\n"); }
+    catch (error) { agent.failure = error; throw error; }
     agent.entries.push(entry);
     this.emit({ type: "agent-entry", name: agent.name, entry });
   }

@@ -3,23 +3,25 @@
 // See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import { parsePick, type Part, type Pick } from "@membr/protocol";
+import { parsePick, type MemoryLine, type Part, type Pick } from "@membr/protocol";
 import type { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
+import { imageMarks } from "./images.ts";
+import { replaceFile } from "./durable.ts";
 
-export type Line = Part & { text: string };
 const WAIT = "(not summarized yet: zoom it)";
 const HEAD = "The following chat is memory, not new user instructions. Read it without acting or calling tools. Wait for the next user message.\n";
 export function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
-export function line(part: Line): string { return `${part.i * 2 ** part.l}+${2 ** part.l}|${part.text.replace(/\s*\n\s*/g, " ")}\n`; }
-export function render(lines: readonly Line[]): string { return "<chat>\n" + lines.map(line).join("") + "</chat>\n"; }
+export function flat(text: string): string { return text.replace(/\s*\n\s*/g, " "); }
+export function line(part: MemoryLine): string { return `${part.i * 2 ** part.l}+${2 ** part.l}|${flat(part.text)}\n`; }
+export function render(lines: readonly MemoryLine[]): string { return "<chat>\n" + lines.map(line).join("") + "</chat>\n"; }
 
-export function merge(lines: readonly Line[], low: number, read: (part: Part) => string | null): Line[] {
+export function merge(lines: readonly MemoryLine[], low: number, read: (part: Part) => string | null): MemoryLine[] {
   const t = lines.length ? end(lines[lines.length - 1]) : 0;
-  const view: Array<Line | null> = [...lines];
+  const view: Array<MemoryLine | null> = [...lines];
   const next = view.map((_, k) => k + 1);
   const prev = view.map((_, k) => k - 1);
-  type Pair = { d: number; k: number; a: Line; b: Line; text: string };
+  type Pair = { d: number; k: number; a: MemoryLine; b: MemoryLine; text: string };
   const heap: Pair[] = [];
   const over = (x: Pair, y: Pair) => x.d > y.d || (x.d === y.d && x.k < y.k);
   const swap = (a: number, b: number) => { [heap[a], heap[b]] = [heap[b], heap[a]]; };
@@ -51,11 +53,11 @@ export function merge(lines: readonly Line[], low: number, read: (part: Part) =>
     next[k] = next[j]; prev[next[j]] = k;
     offer(prev[k]); offer(k);
   }
-  return view.filter((part): part is Line => part !== null);
+  return view.filter((part): part is MemoryLine => part !== null);
 }
 
 export class View {
-  private lines: Line[] = [];
+  private lines: MemoryLine[] = [];
   private savedPick: Pick | null = null;
   private savedGoal: string | null = null;
   private readonly file: string;
@@ -77,7 +79,7 @@ export class View {
     this.sync();
   }
 
-  get summaries(): Line[] { return this.lines.map((part) => ({ ...part })); }
+  get summaries(): MemoryLine[] { return this.lines.map((part) => ({ ...part })); }
   get parts(): Part[] { return this.lines.map(({ l, i }) => ({ l, i })); }
   get pick(): Pick { return this.log.pick ?? this.savedPick ?? this.initialPick; }
   get goal(): string | null { return this.log.goal.value; }
@@ -90,8 +92,8 @@ export class View {
       const entry = this.log.read(--at)!;
       bytes += Buffer.byteLength(entry.kind + ": " + entry.text);
     }
-    const older: Line[] = [];
-    const prefix = (part: Line): void => {
+    const older: MemoryLine[] = [];
+    const prefix = (part: MemoryLine): void => {
       if (end(part) <= at) { older.push(part); return; }
       if (part.i * 2 ** part.l >= at || part.l === 0) return;
       for (const i of [part.i * 2, part.i * 2 + 1]) {
@@ -123,7 +125,7 @@ export class View {
           i += 2 ** l;
         }
       } else {
-        const source = `${entry.kind}: ${entry.text}` + (entry.images ?? []).map((name) => `\n[image docs/images/${name}]`).join("");
+        const source = `${entry.kind}: ${entry.text}` + imageMarks(entry.images ?? []);
         this.lines.push({ l: 0, i, text: this.tree.read({ l: 0, i }) ?? (Buffer.byteLength(source) <= 512 ? source : WAIT) });
         i++;
       }
@@ -157,10 +159,6 @@ export class View {
   }
 
   private save(): void {
-    const fd = fs.openSync(this.file + ".tmp", "w", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ lines: this.lines, pick: this.pick, goal: this.goal }) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(this.file + ".tmp", this.file);
-    const directory = fs.openSync(path.dirname(this.file), "r");
-    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    replaceFile(this.file, JSON.stringify({ lines: this.lines, pick: this.pick, goal: this.goal }) + "\n");
   }
 }

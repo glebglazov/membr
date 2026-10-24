@@ -2,6 +2,7 @@
 // Copyright 2026 Higher Order Company. Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
+import { syncDirectory } from "./durable.ts";
 
 export const IMAGE_COUNT = 20;
 const FIT = 1568;
@@ -14,6 +15,11 @@ export type Image = { data: string; mimeType: typeof TYPES[keyof typeof TYPES] }
 export function imagePath(dir: string, name: string): string {
   if (!/^[A-Za-z0-9_-]+\.(png|jpg|jpeg|gif|webp)$/.test(name)) throw new Error("Invalid image name");
   return path.join(dir, "docs", "images", name);
+}
+
+// how a message's images read in the text the model sees, one line each
+export function imageMarks(names: readonly string[]): string {
+  return names.map((name) => `\n[image docs/images/${name}]`).join("");
 }
 
 export function readImage(dir: string, name: string): Image {
@@ -58,7 +64,6 @@ export async function storeImage(dir: string, bytes: Buffer, declared: string): 
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (model) write(file + ".jpg", model);
   write(file, bytes);
-  const directory = fs.openSync(path.dirname(file), "r");
-  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+  syncDirectory(path.dirname(file));
   return name;
 }

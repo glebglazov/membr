@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick, type ImportEstimate, type ImportMark } from "@membr/protocol";
+import { appendFile, replaceFile, syncDirectory, truncateFile } from "./durable.ts";
 
 const SLOT = 16;
 const DAY = 86_400_000;
@@ -35,11 +36,6 @@ export function identity(dir: string, name: string): string {
   }
   syncDirectory(dir);
   return value;
-}
-
-function syncDirectory(dir: string) {
-  const fd = fs.openSync(dir, "r");
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
 export class Log {
@@ -119,10 +115,7 @@ export class Log {
           }
           at = end + 1;
         }
-        if (at < data.length) {
-          const fd = fs.openSync(full, "r+");
-          try { fs.ftruncateSync(fd, at); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
+        if (at < data.length) truncateFile(full, at);
       }
       for (let i = 0; i < this.locations.length; i++) {
         if (!this.locations[i]) throw new Error(`Missing message ${i}`);
@@ -251,10 +244,7 @@ export class Log {
     const file = path.join(this.dir, "epochs.json");
     const previous: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
     if (previous === null || typeof previous !== "object" || Array.isArray(previous) || Object.values(previous).some((value) => typeof value !== "string" && (!value || typeof value !== "object" || !("session" in value) || typeof value.session !== "string" || !("date" in value) || typeof value.date !== "string"))) throw new Error("Invalid epoch map");
-    const fd = fs.openSync(file + ".tmp", "w", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ ...previous, [epoch]: { session, date } }) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(file + ".tmp", file);
-    syncDirectory(this.dir);
+    replaceFile(file, JSON.stringify({ ...previous, [epoch]: { session, date } }) + "\n");
   }
 
   get epochs(): Record<string, EpochRecord> {
@@ -275,10 +265,7 @@ export class Log {
     const file = path.join(this.dir, "epochs.json");
     const previous: Record<string, unknown> = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
     for (const [epoch, record] of Object.entries(all)) if (record.date === "" && typeof previous[epoch] === "string") (all as Record<string, unknown>)[epoch] = previous[epoch];
-    const fd = fs.openSync(file + ".tmp", "w", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(all) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(file + ".tmp", file);
-    syncDirectory(this.dir);
+    replaceFile(file, JSON.stringify(all) + "\n");
   }
 
   get entries(): Entry[] { return Array.from({ length: this.count }, (_, i) => this.read(i)!); }
@@ -295,14 +282,7 @@ export class Log {
     const day = Date.parse(date.slice(0, 10)) / DAY;
     const file = this.file(day);
     try {
-      const fd = fs.openSync(file, "a", 0o600);
-      let at: number;
-      try {
-        at = fs.fstatSync(fd).size;
-        fs.writeFileSync(fd, bytes);
-        fs.fsyncSync(fd);
-      } finally { fs.closeSync(fd); }
-      syncDirectory(path.join(this.dir, "main"));
+      const at = appendFile(file, bytes);
       if ("act" in record) this.answers.set(record.act, record.ans);
       else this.events.add(record.event);
       if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);

@@ -1,7 +1,8 @@
 // Memory browsing and paging ported from UniiChat Memory.ts and Clip.ts at 0500bf6.
 // Copyright 2026 Higher Order Company. Licensed under Apache-2.0.
 // See licenses/UniiChat.txt.
-import { readImage } from "./images.ts";
+import { imageMarks, readImage } from "./images.ts";
+import { flat } from "./view.ts";
 import type { Entry, Part, MemoryLine } from "@membr/protocol";
 import type { Log } from "./log.ts";
 import type { Agents } from "./agents.ts";
@@ -20,7 +21,7 @@ const WAIT = "(not summarized yet: zoom it)";
 const CAP = 30000;
 
 function ref(part: Part): string { return `${part.i * 2 ** part.l}+${2 ** part.l}`; }
-function line(part: MemoryLine): string { return ref(part) + "|" + part.text.replace(/\s*\n\s*/g, " "); }
+function line(part: MemoryLine): string { return ref(part) + "|" + flat(part.text); }
 function page(text: string, at: number): string {
   let end = text.length;
   if (text.length - at > CAP) {
@@ -60,7 +61,7 @@ export class Memory implements MemoryTools {
     const entry = opened.entry;
     const names = at === 0 ? entry.images ?? [] : [];
     const images = names.map((name) => readImage(this.dir, name));
-    return { text: `${entry.i}+0|${entry.kind}: ${page(entry.text, at)}` + names.map((name) => `\n[image docs/images/${name}]`).join(""), error: false, images };
+    return { text: `${entry.i}+0|${entry.kind}: ${page(entry.text, at)}` + imageMarks(names), error: false, images };
   }
 
   date(id: number): string {

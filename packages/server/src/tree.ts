@@ -3,10 +3,12 @@
 // See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import type { Part } from "@membr/protocol";
+import type { MemoryLine, Part } from "@membr/protocol";
 import type { Engine } from "./engine.ts";
 import type { Log } from "./log.ts";
-import { merge, render, type Line } from "./view.ts";
+import { end, flat, merge, render } from "./view.ts";
+import { imageMarks } from "./images.ts";
+import { appendFile, syncDirectory, truncateFile } from "./durable.ts";
 
 const NODE = 512;
 const JOBS = 4;
@@ -31,18 +33,12 @@ type Node = Part & { text: string; size: number };
 type Location = { day: number; at: number; length: number };
 
 function key({ l, i }: Part): number { return (2 * i + 1) * 2 ** l - 1; }
-function end({ l, i }: Part): number { return (i + 1) * 2 ** l; }
 function context(part: Part): number { return part.l === 0 ? part.i : end(part); }
-function flat(text: string): string { return text.replace(/\s*\n\s*/g, " "); }
 function cut(text: string): string {
   const bytes = Buffer.from(text);
   let length = Math.min(bytes.length, NODE);
   if (length < bytes.length) while (length > 0 && (bytes[length] & 0xc0) === 0x80) length--;
   return bytes.subarray(0, length).toString("utf8");
-}
-function syncDirectory(dir: string): void {
-  const fd = fs.openSync(dir, "r");
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
 export class Tree {
@@ -51,7 +47,7 @@ export class Tree {
   private readonly busy = new Set<number>();
   private readonly delays = new Map<ReturnType<typeof setTimeout>, () => void>();
   private readonly waiting = new Set<() => void>();
-  private seen: Line[] = [];
+  private seen: MemoryLine[] = [];
   private readonly importCounts: number[] = [0];
   onChange: () => void = () => {};
   private failure: unknown;
@@ -193,10 +189,7 @@ export class Tree {
           nodes.push(part);
           at = stop + 1;
         }
-        if (at < data.length) {
-          const fd = fs.openSync(full, "r+");
-          try { fs.ftruncateSync(fd, at); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
+        if (at < data.length) truncateFile(full, at);
       }
       for (const part of nodes) {
         if (part.l > 0 && (!this.locations.has(key({ l: part.l - 1, i: part.i * 2 })) || !this.locations.has(key({ l: part.l - 1, i: part.i * 2 + 1 })))) throw new Error("Tree parent has a missing child");
@@ -237,7 +230,7 @@ export class Tree {
     if (part.l === 0) {
       const entry = this.log.read(part.i);
       if (!entry) throw new Error(`Missing message ${part.i}`);
-      return `${entry.kind}: ${Buffer.from(entry.text).toString("utf8")}` + (entry.images ?? []).map((name) => `\n[image docs/images/${name}]`).join("");
+      return `${entry.kind}: ${Buffer.from(entry.text).toString("utf8")}` + imageMarks(entry.images ?? []);
     }
     const a = this.read({ l: part.l - 1, i: part.i * 2 });
     const b = this.read({ l: part.l - 1, i: part.i * 2 + 1 });
@@ -249,10 +242,7 @@ export class Tree {
     const day = Math.floor(Date.now() / DAY);
     const record: Node = { ...part, text, size: Buffer.byteLength(text) };
     const bytes = Buffer.from(JSON.stringify(record) + "\n");
-    const fd = fs.openSync(this.file(day), "a", 0o600);
-    let at: number;
-    try { at = fs.fstatSync(fd).size; fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    syncDirectory(path.join(this.dir, "tree"));
+    const at = appendFile(this.file(day), bytes);
     const index = fs.openSync(path.join(this.dir, "tree.index"), "r+");
     try { this.place(index, part, { day, at, length: bytes.length - 1 }); fs.fsyncSync(index); } finally { fs.closeSync(index); }
     this.ready.delete(key(part));
