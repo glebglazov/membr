@@ -34,6 +34,22 @@ bun test
 Run this from the repository root. It runs the tests of all packages,
 including the check that the client core imports no DOM and no terminal code.
 
+To run the browser checks, install Chromium once after `bun install`:
+
+```sh
+bunx playwright install chromium
+```
+
+Then run all three checks with one command from the repository root:
+
+```sh
+bun run test:web
+```
+
+The checks start the real server with a fake Engine in a temporary data
+directory. They check a live turn in two tabs, approval answers across tabs,
+and light and dark layouts at desktop width and 390 px. They make no model calls.
+
 The Engine contract tests run Claude Code on your plan, so `bun test` skips
 them. To run them, set `MEMBR_REAL_SDK=1`:
 
