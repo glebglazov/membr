@@ -35,3 +35,19 @@ nav a[aria-current=page] { color: var(--ink); text-decoration: underline; }
 .memory-open { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--frame); }
 .close-block { padding: 4px 9px; font-size: 13px; color: var(--mid); }
 @media (max-width: 440px) { header { flex-wrap: wrap; gap: 8px; } .memory-open { padding-left: 8px; } }
+
+.controls { width: min(740px, 100% - 32px); margin: 12px auto 0; }
+.chips, .pick-bar, .approval-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 4px 9px; background: var(--block); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; max-width: 100%; }
+.pick-bar { margin-top: 10px; align-items: center; }
+.pick-bar label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+select { padding: 6px; background: var(--paper); color: var(--ink); border: 1px solid var(--frame); border-radius: 8px; font: inherit; }
+select:focus-visible, input:focus-visible { outline: 2px solid var(--mid); outline-offset: 2px; }
+.approvals { width: min(740px, 100%); margin: auto; max-height: 40dvh; overflow-y: auto; }
+.approval { padding: 12px; margin-bottom: 12px; border: 1px solid var(--edge); border-radius: 12px; background: var(--lift); }
+.approval h2 { margin: 0; font-size: 16px; }
+.approval pre, .info pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, monospace; }
+.approval .label { margin: 8px 0 0; }
+.info { padding: 12px; border: 1px solid var(--frame); border-radius: 12px; }
+.toast { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--red); border-radius: 12px; background: var(--paper); }
+@media (max-width: 440px) { .pick-bar { gap: 10px; } .approvals { max-height: 35dvh; } }

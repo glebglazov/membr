@@ -295,3 +295,21 @@ test("a failed send after a batch fails the new epoch and ends the wait", async 
   expect(hub.engine.epochs).toHaveLength(2);
   expect(hub.engine.epochs[1].closed).toBe(true);
 });
+
+test("epoch usage resets at a batch merge while last-turn usage stays available", async () => {
+  const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
+  const engine = new FakeEngine((epoch) => epoch.emit({ ...END, usage }));
+  const hub = await serve(engine);
+  for (let index = 0; index < 300; index++) {
+    const mark = hub.client.events.length;
+    await say(hub, `usage-${index}`, bytes(index, 500));
+    const completed = await hub.client.wait("state", mark, (event) => !event.state.busy);
+    expect(completed.state.usage).toEqual(usage);
+    if (engine.epochs.length > 1) {
+      expect(completed.state.epoch).toEqual(usage);
+      return;
+    }
+    expect(completed.state.epoch?.input).toBe(100 * (index + 1));
+  }
+  throw new Error("The view never started a second epoch");
+});

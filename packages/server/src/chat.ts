@@ -1,7 +1,7 @@
 // Prompt and after hook adapted from UniiChat at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
-import { type Act, type Answer, type Entry, type Event, type Pick, type State } from "@membr/protocol";
+import { type Act, type Answer, type Entry, type Event, type Pick, type State, type Usage } from "@membr/protocol";
 import { claude, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
 import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
@@ -28,6 +28,7 @@ export class Chat {
   private turn: Turn = { phase: "idle" };
   private session: Session;
   private usage: State["usage"] = null;
+  private epochUsage: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
   private sent = 0;
   private streaming = "";
   private options: EpochOptions;
@@ -64,7 +65,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, usage: this.usage };
+    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, usage: this.usage, epoch: this.epochUsage };
   }
 
   act(act: Act): Answer {
@@ -133,6 +134,7 @@ export class Chat {
   }
 
   private open(upto = this.log.count): Session {
+    this.epochUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
     return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options) };
   }
 
@@ -212,6 +214,10 @@ export class Chat {
           case "compacted": throw new Error("The Engine compacted the epoch unexpectedly");
           case "end":
             this.usage = event.usage;
+            this.epochUsage = {
+              input: this.epochUsage.input + event.usage.input, cacheRead: this.epochUsage.cacheRead + event.usage.cacheRead,
+              cacheWrite: this.epochUsage.cacheWrite + event.usage.cacheWrite, output: this.epochUsage.output + event.usage.output,
+            };
             if (this.turn.phase === "running" && event.through >= this.sent) {
               const entry = this.log.finish(this.turn.id, event.error === null ? undefined : `The turn failed: ${event.error}`);
               const goal = event.error === null ? this.log.goal : { revision: 0, value: null };

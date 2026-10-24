@@ -1,6 +1,6 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
-import type { Act, Entry, Event, MemoryLine, Part, Read, State } from "@membr/protocol";
+import type { Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
 
 export type Model = {
   connection: "offline" | "connecting" | "ready" | "refused";
@@ -18,10 +18,16 @@ export type Model = {
   readSequence: number;
   pending: ReadonlyMap<string, Act>;
   error: string | null;
+  info: string | null;
+  approvals: ReadonlyMap<string, Extract<Event, { type: "ask" }>>;
 };
 export type Input =
   | { type: "send"; id: string; text: string }
-  | { type: "stop"; id: string }
+  | { type: "stop"; id: string; agent?: string | null }
+  | { type: "pick"; id: string; change: Partial<Pick> }
+  | { type: "answer"; id: string; approval: string; choice: Extract<Act, { act: "answer" }>["choice"] }
+  | { type: "dismiss-error" }
+  | { type: "dismiss-info" }
   | { type: "open"; id: string; part: Part }
   | { type: "close"; part: Part }
   | { type: "fold" }
@@ -40,7 +46,7 @@ function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
 export function createModel(): Model {
   return {
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
-    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null,
+    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(),
     state: { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null },
   };
 }
@@ -55,10 +61,21 @@ function requestRoots(model: Model): Model {
 
 export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
-    case "connecting": return { ...model, connection: "connecting", live: "" };
+    case "connecting": return { ...model, connection: "connecting", live: "", approvals: new Map() };
     case "offline": return { ...model, connection: model.connection === "refused" ? "refused" : "offline", live: "" };
     case "ready": return { ...model, connection: "ready" };
     case "refused": return { ...model, connection: "refused", error: event.reason, live: "" };
+    case "ask":
+    case "approval": {
+      const approvals = new Map(model.approvals);
+      approvals.set(event.id, { ...event, type: "ask" });
+      return { ...model, approvals };
+    }
+    case "ask-closed": {
+      const approvals = new Map(model.approvals);
+      approvals.delete(event.id);
+      return { ...model, approvals };
+    }
     case "entry": {
       const entries = new Map(model.entries);
       entries.set(event.entry.i, event.entry);
@@ -109,7 +126,9 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
   const output = (next: Model, acts: Act[] = [], reads: Read[] = []) => ({ model: next, acts: next.connection === "ready" ? acts : [], reads: next.connection === "ready" ? reads : [] });
   if (input.type === "flush") return output(model, [...model.pending.values()], [...model.reads.values()]);
   if (input.type === "reads") return output(model, [], [...model.reads.values()]);
-  if (input.type === "send" && input.text.trim() === "/fold") return act(model, { type: "fold" });
+  if (input.type === "dismiss-error") return output({ ...model, error: null });
+  if (input.type === "dismiss-info") return output({ ...model, info: null });
+  if (input.type === "send" && input.text.trim().startsWith("/")) return command(model, input);
   if (input.type === "fold" || input.type === "page") {
     const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>(), error: null };
     if (input.type === "fold") next.folded = !model.folded;
@@ -132,17 +151,86 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     reads.set(input.id, request);
     return output({ ...model, open, reads, error: null }, [], [request]);
   }
-  if (input.type === "send" && !input.text.trim()) return output(model);
-  if (model.pending.has(input.id)) return output(model);
-  const message: Act = input.type === "send"
-    ? { type: "act", act: "say", id: input.id, text: input.text }
-    : { type: "act", act: "stop", id: input.id, agent: null };
+  if (input.type === "send") return input.text.trim() ? post(model, [{ type: "act", act: "say", id: input.id, text: input.text }]) : output(model);
+  if (input.type === "stop") return post(model, [{ type: "act", act: "stop", id: input.id, agent: input.agent ?? null }]);
+  if (input.type === "answer") {
+    if (!model.approvals.has(input.approval) || answering(model, input.approval)) return output(model);
+    return post(model, [{ type: "act", act: "answer", id: input.id, approval: input.approval, choice: input.choice }]);
+  }
+  const pick = effectivePick(model);
+  return pick ? post(model, [{ type: "act", act: "pick", id: input.id, pick: { ...pick, ...input.change } }]) : output({ ...model, error: "The pick is not available yet." });
+}
+
+export const MODELS = ["opus", "sonnet", "haiku"];
+export const EFFORTS: Pick["effort"][] = ["low", "medium", "high", "xhigh", "max"];
+export const HELP = [
+  "/goal <message>  Set a goal and send the message.",
+  "/halt  Clear the goal. The current turn continues.",
+  "/stop [name]  Stop all work, or one named agent.",
+  "/model [name]  Show models, or select one.",
+  "/effort [level]  Show effort levels, or select one.",
+  "/speed [normal|fast]  Show speeds, or select one.",
+  "/fold  Fold or unfold the chat.",
+  "/tree  Open the memory tree.",
+  "/help  Show these commands.",
+].join("\n");
+
+function post(model: Model, messages: Act[]): ReturnType<typeof act> {
+  const fresh = messages.filter((message) => !model.pending.has(message.id));
   const pending = new Map(model.pending);
-  pending.set(message.id, message);
-  const next = input.type === "send" && model.folded
+  for (const message of fresh) pending.set(message.id, message);
+  const next = fresh.some((message) => message.act === "say") && model.folded
     ? { ...model, folded: false, open: new Set<string>(), reads: new Map<string, Read>() }
     : model;
-  return output({ ...next, pending, error: null }, [message]);
+  return { model: { ...next, pending, error: null }, acts: model.connection === "ready" ? fresh : [], reads: [] };
+}
+
+export function effectivePick(model: Model): Pick | null {
+  let pick = model.state.pick;
+  for (const message of model.pending.values()) if (message.act === "pick") pick = message.pick;
+  return pick;
+}
+
+export function answering(model: Model, approval: string): boolean {
+  return [...model.pending.values()].some((message) => message.act === "answer" && message.approval === approval);
+}
+
+export function inputTokens(usage: Usage): number { return usage.input + usage.cacheRead + usage.cacheWrite; }
+export function cacheShare(usage: Usage | null): number | null {
+  return usage && inputTokens(usage) > 0 ? usage.cacheRead / inputTokens(usage) : null;
+}
+
+function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnType<typeof act> {
+  const text = input.text.trim();
+  const name = text.split(/\s+/, 1)[0];
+  const argument = text.slice(name.length).trim();
+  const fail = (error: string) => ({ model: { ...model, error }, acts: [], reads: [] });
+  const info = (text: string) => ({ model: { ...model, info: text, error: null }, acts: [], reads: [] });
+  switch (name) {
+    case "/goal":
+      if (input.id.length > 252) return fail("The goal request id is too long.");
+      return argument ? post(model, [
+        { type: "act", act: "goal", id: input.id, text: argument },
+        { type: "act", act: "say", id: `${input.id}:say`, text: argument },
+      ]) : fail("Use /goal <message>.");
+    case "/halt": return argument ? fail("Use /halt without an argument.") : post(model, [{ type: "act", act: "goal", id: input.id, text: null }]);
+    case "/stop": return /\s/.test(argument) ? fail("Use /stop [name].") : act(model, { type: "stop", id: input.id, agent: argument || null });
+    case "/model":
+      if (!argument) return info(`Models: ${MODELS.join(", ")}.`);
+      return MODELS.includes(argument) ? act(model, { type: "pick", id: input.id, change: { model: argument } }) : fail(`Choose a model: ${MODELS.join(", ")}.`);
+    case "/effort": {
+      if (!argument) return info(`Effort levels: ${EFFORTS.join(", ")}.`);
+      const effort = EFFORTS.find((value) => value === argument);
+      return effort ? act(model, { type: "pick", id: input.id, change: { effort } }) : fail(`Choose an effort: ${EFFORTS.join(", ")}.`);
+    }
+    case "/speed":
+      if (!argument) return info("Speeds: normal, fast.");
+      return argument === "normal" || argument === "fast" ? act(model, { type: "pick", id: input.id, change: { fast: argument === "fast" } }) : fail("Choose a speed: normal, fast.");
+    case "/fold": return argument ? fail("Use /fold without an argument.") : act(model, { type: "fold" });
+    case "/tree": return argument ? fail("Use /tree without an argument.") : act(model, { type: "page", page: "tree" });
+    case "/help": return argument ? fail("Use /help without an argument.") : info(HELP);
+    default: return fail(`Unknown command ${name}. Use /help.`);
+  }
 }
 
 export function rows(model: Model): Row[] {

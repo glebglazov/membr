@@ -257,3 +257,21 @@ test("a failed epoch cannot reopen when an earlier interrupt finishes", async ()
   expect((await client.wait("answer", 0, (event) => event.id === "after-failure")).ok).toBe(false);
   expect(hub.engine.epochs).toHaveLength(1);
 });
+
+test("epoch usage adds completed main turns and starts at zero after restart", async () => {
+  const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
+  const hub = serve(new FakeEngine((epoch) => epoch.emit({ ...END, usage })));
+  const client = await connect(hub);
+  expect((await client.wait("state")).state.epoch).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
+  for (let index = 1; index <= 2; index++) {
+    const mark = client.events.length;
+    client.act({ type: "act", act: "say", id: `usage-${index}`, text: "Work" });
+    const completed = await client.wait("state", mark, (event) => !event.state.busy);
+    expect(completed.state.usage).toEqual(usage);
+    expect(completed.state.epoch).toEqual({ input: 100 * index, cacheRead: 700 * index, cacheWrite: 200 * index, output: 50 * index });
+  }
+  client.close();
+  await hub.close();
+  const restarted = await connect(serve(new FakeEngine(), hub.dir));
+  expect((await restarted.wait("state")).state.epoch).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
+});

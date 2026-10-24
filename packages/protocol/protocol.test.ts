@@ -1,4 +1,3 @@
-// every client takes the protocol as is, so it has no runtime dependencies
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,4 +12,13 @@ test("the protocol has no runtime dependencies", async () => {
       expect(spec).toStartWith(".");
     }
   }
+});
+
+test("state events parse optional epoch usage and reject invalid counts", async () => {
+  const { parseEvent } = await import("./src/index.ts");
+  const state = { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null };
+  const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
+  expect(parseEvent({ type: "state", state })).toEqual({ type: "state", state });
+  expect(parseEvent({ type: "state", state: { ...state, epoch: usage } })).toEqual({ type: "state", state: { ...state, epoch: usage } });
+  expect(() => parseEvent({ type: "state", state: { ...state, epoch: { ...usage, input: -1 } } })).toThrow("Expected a nonnegative integer");
 });
