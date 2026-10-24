@@ -1,7 +1,7 @@
 import type { Account, Engine, EngineEvent, Epoch, EpochOptions, From, Pick, Priority } from "../src/engine.ts";
 
 export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, fast: null, through: 0 };
-type Message = { text: string; priority: Priority; from: From };
+type Message = { text: string; priority: Priority; from: From; images?: import("../src/images.ts").Image[] };
 
 export class FakeEpoch implements Epoch {
   readonly messages: Message[] = [];
@@ -16,9 +16,9 @@ export class FakeEpoch implements Epoch {
 
   constructor(readonly view: string, readonly options: EpochOptions, private readonly script: (epoch: FakeEpoch, message: Message) => void) {}
 
-  send(text: string, priority: Priority, from: From): number {
+  send(text: string, priority: Priority, from: From, images?: import("../src/images.ts").Image[]): number {
     if (this.closed) throw new Error("The fake epoch is closed");
-    const message = { text, priority, from };
+    const message = { text, priority, from, ...(images?.length ? { images } : {}) };
     this.messages.push(message);
     this.script(this, message);
     return this.messages.length;

@@ -10,6 +10,7 @@ import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SDKU
 import { z } from "zod";
 import type { AgentTools } from "./agents.ts";
 import type { MemoryTools } from "./memory.ts";
+import type { Image } from "./images.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -56,7 +57,7 @@ export type Fast = { state: "off" | "on" | "cooldown"; blocked: string | null };
 
 export interface Epoch {
   // The returned sequence identifies input; end.through completes that prefix.
-  send(text: string, priority: Priority, from: From): number;
+  send(text: string, priority: Priority, from: From, images?: Image[]): number;
   // one reader only: the events of every turn of the epoch, in order
   events: AsyncIterable<EngineEvent>;
   // Resolves after current input ends or is cancelled. The epoch stays open.
@@ -168,11 +169,15 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-function message(text: string, priority: Priority, from: From): SDKUserMessage & { uuid: string } {
+function message(text: string, priority: Priority, from: From, images: Image[] = []): SDKUserMessage & { uuid: string } {
+  const content = from === "membr" ? `[membr]\n${text}` : text;
   return {
     type: "user",
     uuid: crypto.randomUUID(),
-    message: { role: "user", content: from === "membr" ? `[membr]\n${text}` : text },
+    message: { role: "user", content: images.length ? [
+      ...(content ? [{ type: "text" as const, text: content }] : []),
+      ...images.map(({ data, mimeType }) => ({ type: "image" as const, source: { type: "base64" as const, data, media_type: mimeType } })),
+    ] : content },
     parent_tool_use_id: null,
     priority,
     isSynthetic: from === "membr",
@@ -257,8 +262,8 @@ function open(view: string, options: EpochOptions): Epoch {
     }
   }
   return {
-    send(text, priority, from) {
-      const input = message(text, priority, from);
+    send(text, priority, from, images) {
+      const input = message(text, priority, from, images);
       const sent = ++sequence;
       pending.set(input.uuid, sent);
       if (viewing) waiting.push(input);

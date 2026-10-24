@@ -53,6 +53,7 @@ export class Agents implements AgentTools {
   }
 
   get active(): string[] { return [...this.registry.values()].filter((agent) => agent.state.phase === "running" || agent.state.phase === "stopping").map((agent) => agent.name); }
+  get names(): string[] { return [...this.registry.keys()]; }
   has(name: string): boolean { return this.registry.has(name); }
   read(name: string): { entries: Entry[]; live: string } | null {
     const agent = this.registry.get(name);

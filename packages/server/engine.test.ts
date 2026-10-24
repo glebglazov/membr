@@ -93,3 +93,18 @@ test("main MCP registers spawn and tell while child input stays synthetic", asyn
     [true, "[membr]\nview and saved agent chat"], [true, "[membr]\nAgent task"], [true, "[membr]\nAgent correction"],
   ]);
 });
+
+test("the Engine sends text and image-only inputs as SDK image blocks", async () => {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-images-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+  const messages = JSON.parse(stdout);
+  expect(messages[1].message.content).toEqual([
+    { type: "text", text: "Look" },
+    { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "cGljdHVyZQ==" } },
+  ]);
+  expect(messages[2].message.content).toEqual([
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+  ]);
+  expect(messages.slice(1).every((message: { isSynthetic: boolean }) => !message.isSynthetic)).toBe(true);
+});

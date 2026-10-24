@@ -140,6 +140,11 @@ export class Log {
 
   get interrupted(): number[] { return [...this.started].filter((id) => !this.finished.has(id)); }
 
+  answer(id: string): Answer | undefined {
+    if (this.failure) throw this.failure;
+    return this.answers.get(id);
+  }
+
   apply(act: Act, turn: number, refusal?: string, approval?: AllowRule): { answer: Answer; entry: Entry | null; fresh: boolean } {
     if (this.failure) throw this.failure;
     const previous = this.answers.get(act.id);

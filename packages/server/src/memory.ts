@@ -1,8 +1,7 @@
 // Memory browsing and paging ported from UniiChat Memory.ts and Clip.ts at 0500bf6.
 // Copyright 2026 Higher Order Company. Licensed under Apache-2.0.
 // See licenses/UniiChat.txt.
-import fs from "node:fs";
-import path from "node:path";
+import { readImage } from "./images.ts";
 import type { Entry, Part, MemoryLine } from "@membr/protocol";
 import type { Log } from "./log.ts";
 import type { Agents } from "./agents.ts";
@@ -60,7 +59,7 @@ export class Memory implements MemoryTools {
     if (opened.kind === "lines") return { text: opened.lines.map(line).join("\n"), error: false, images: [] };
     const entry = opened.entry;
     const names = at === 0 ? entry.images ?? [] : [];
-    const images = names.map((name) => this.image(name));
+    const images = names.map((name) => readImage(this.dir, name));
     return { text: `${entry.i}+0|${entry.kind}: ${page(entry.text, at)}` + names.map((name) => `\n[image docs/images/${name}]`).join(""), error: false, images };
   }
 
@@ -85,10 +84,4 @@ export class Memory implements MemoryTools {
 
   private summary(part: Part): MemoryLine { return { ...part, text: this.tree.read(part) ?? WAIT }; }
 
-  private image(name: string): { data: string; mimeType: string } {
-    if (!/^[A-Za-z0-9_-]+\.[a-z]+$/.test(name)) throw new Error("Invalid image name");
-    const file = path.join(this.dir, "docs", "images", name);
-    const fit = fs.existsSync(file + ".jpg");
-    return { data: fs.readFileSync(file + (fit ? ".jpg" : "")).toString("base64"), mimeType: fit ? "image/jpeg" : "image/" + name.split(".")[1] };
-  }
 }

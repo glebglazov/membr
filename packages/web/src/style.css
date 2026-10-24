@@ -51,3 +51,10 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--mid); outli
 .info { padding: 12px; border: 1px solid var(--frame); border-radius: 12px; }
 .toast { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--red); border-radius: 12px; background: var(--paper); }
 @media (max-width: 440px) { .pick-bar { gap: 10px; } .approvals { max-height: 35dvh; } }
+.agent-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 10px 16px; border-bottom: 1px solid var(--hair); }
+.agent-tabs button { white-space: nowrap; }
+.agent-tabs [aria-selected="true"] { border-color: var(--ink); background: var(--block); }
+.attached-image { display: block; max-width: 100%; max-height: 400px; border-radius: 8px; margin-top: 8px; }
+.attachments { display: flex; gap: 12px; overflow-x: auto; margin: 0 0 12px; }
+.attachments > div { flex: 0 0 120px; }
+.attachments img { width: 120px; height: 90px; object-fit: contain; }

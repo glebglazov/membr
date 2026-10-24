@@ -129,6 +129,8 @@ test("short sources need no call and LEAF and MERGE requests match UniiChat", as
   expect(nodes(hub.dir)[0].text).toBe("user: " + "x".repeat(506));
   expect(hub.engine.prompts).toHaveLength(0);
   const image = "a".repeat(64) + ".png";
+  fs.mkdirSync(path.join(hub.dir, "docs", "images"), { recursive: true });
+  fs.writeFileSync(path.join(hub.dir, "docs", "images", image), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lWQAAAAASUVORK5CYII=", "base64"));
   await say(hub, "long", "🌍".repeat(150), [image]);
   await settled(hub, 2);
   const ruler = "-".repeat(512);

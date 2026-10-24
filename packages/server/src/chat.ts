@@ -10,8 +10,9 @@ import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import type { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
+import { IMAGE_COUNT, readImage, type Image } from "./images.ts";
 
-type PendingInput = { text: string; from: From };
+type PendingInput = { text: string; from: From; images?: Image[] };
 type SummaryWait = { phase: "summaries"; id: number; pending: PendingInput[]; halt: AbortController };
 type GoalCheck = { phase: "checking"; revision: number; goal: string; halt: AbortController };
 type Turn = SummaryWait | GoalCheck | { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closing" | "closed" };
@@ -35,7 +36,7 @@ export class Chat {
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
 
-  constructor(private readonly log: Log, tree: Tree, memory: Memory, dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
+  constructor(private readonly log: Log, tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
     this.approvals = new Approvals(log, emit);
     this.options = { pick: PICK, cwd: process.cwd(), ...options, append: (options.append ?? PROMPT) + (config.rulesText ? "\n\n" + config.rulesText : ""), memory, ask: (tool, input, signal) => {
       if (this.turn.phase === "closed" || this.turn.phase === "closing" || this.turn.phase === "failed" || this.turn.phase === "stopping") return Promise.resolve(false);
@@ -65,11 +66,21 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, usage: this.usage, epoch: this.epochUsage };
+    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, epoch: this.epochUsage };
   }
 
   act(act: Act): Answer {
-    const refusal = this.turn.phase === "closed" || this.turn.phase === "closing" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
+    const previous = this.log.answer(act.id);
+    if (previous) return previous;
+    let images: Image[] | undefined;
+    let imageError: string | undefined;
+    if (act.act === "say" && act.images?.length) {
+      try {
+        if (act.images.length > IMAGE_COUNT) throw new Error("Attach at most 20 images.");
+        images = act.images.map((name) => readImage(this.dir, name));
+      } catch (error) { imageError = error instanceof Error ? error.message : "The image could not be read."; }
+    }
+    const refusal = imageError ?? (this.turn.phase === "closed" || this.turn.phase === "closing" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined);
     const id = this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" ? this.turn.id : this.log.count;
     if (act.act === "answer") return this.approvals.answer(act, id, refusal);
     const result = this.log.apply(act, id, refusal ?? (act.act === "stop" && act.agent !== null && !this.agents.has(act.agent) ? "No agent " + act.agent + "." : undefined));
@@ -91,7 +102,7 @@ export class Chat {
       return result.answer;
     }
     if (act.act === "say") {
-      try { this.start({ text: act.text, from: "user" }, id); } catch (error) { this.fail(error); }
+      try { this.start({ text: act.text, from: "user", images }, id); } catch (error) { this.fail(error); }
     } else if (act.act === "stop" && this.turn.phase === "summaries") {
       this.turn.halt.abort();
       try {
@@ -154,7 +165,7 @@ export class Chat {
     const priority = this.turn.phase === "running" ? "next" : "now";
     this.turn = { phase: "running", id: this.turn.phase === "running" ? this.turn.id : id };
     this.change();
-    this.sent = this.session.epoch.send(this.inputText(input.text), priority, input.from);
+    this.sent = this.session.epoch.send(this.inputText(input.text), priority, input.from, input.images);
   }
 
   private async rotate(wait: SummaryWait): Promise<void> {
@@ -167,7 +178,7 @@ export class Chat {
       void this.read(this.session);
       this.emit({ type: "view", parts: this.view.parts, lines: this.view.summaries, turn: this.log.latestTurn });
       this.turn = { phase: "running", id: wait.id };
-      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(this.inputText(input.text), i === 0 ? "now" : "next", input.from);
+      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(this.inputText(input.text), i === 0 ? "now" : "next", input.from, input.images);
       this.change();
     } catch (error) {
       if (!wait.halt.signal.aborted) this.fail(error);

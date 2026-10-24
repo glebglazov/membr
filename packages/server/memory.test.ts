@@ -146,8 +146,8 @@ test("zoom pages retain all text, keep surrogate pairs, and include images only 
   expect(memory.zoom(0).images).toEqual([{ data: Buffer.from("original").toString("base64"), mimeType: "image/png" }]);
   const mark = client.events.length;
   client.act({ type: "act", act: "say", id: "bad-image", text: "Invalid image pointer", images: ["../private.txt"] });
-  const added = await client.wait("entry", mark, (event) => event.entry.kind === "user");
-  expect(() => memory.zoom(added.entry.i)).toThrow("Invalid image name");
+  expect(await client.wait("answer", mark, (event) => event.id === "bad-image")).toMatchObject({ ok: false, reason: "Invalid image name" });
+  expect(client.events.slice(mark).some((event) => event.type === "entry")).toBe(false);
 });
 
 test("geometric roots and unbuilt summaries remain navigable while compaction waits", async () => {

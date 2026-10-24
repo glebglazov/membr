@@ -32,7 +32,7 @@ export type Answer = { type: "answer"; id: string } & (
   | { ok: false; reason: string }
 );
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
-export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; agents: string[]; usage: Usage | null; epoch?: Usage };
+export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; agents: string[]; agentNames?: string[]; usage: Usage | null; epoch?: Usage };
 export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }
@@ -168,7 +168,7 @@ export function parseEvent(value: unknown): Event {
         const u = object(value);
         return { input: integer(u.input), cacheRead: integer(u.cacheRead), cacheWrite: integer(u.cacheWrite), output: integer(u.output) };
       };
-      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), agents: list(s.agents, id), usage: nullable(s.usage, usage), ...(s.epoch === undefined ? {} : { epoch: usage(s.epoch) }) } };
+      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), agents: list(s.agents, id), ...(s.agentNames === undefined ? {} : { agentNames: list(s.agentNames, id) }), usage: nullable(s.usage, usage), ...(s.epoch === undefined ? {} : { epoch: usage(s.epoch) }) } };
     }
     default: throw new Error("Unknown event");
   }

@@ -2,7 +2,14 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import type { Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
 
+export type Attachment = { id: string; name: string; type: string; data: string };
+export type Upload = { id: string; text: string; images: Attachment[] };
+export type AgentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
 export type Model = {
+  agent: string | null;
+  agents: ReadonlyMap<string, AgentLog>;
+  attachments: Attachment[];
+  uploads: ReadonlyMap<string, Upload>;
   connection: "offline" | "connecting" | "ready" | "refused";
   entries: ReadonlyMap<number, Entry>;
   live: string;
@@ -23,6 +30,9 @@ export type Model = {
 };
 export type Input =
   | { type: "send"; id: string; text: string }
+  | { type: "tab"; name: string | null }
+  | { type: "attach"; images: Attachment[] }
+  | { type: "detach"; id: string }
   | { type: "stop"; id: string; agent?: string | null }
   | { type: "pick"; id: string; change: Partial<Pick> }
   | { type: "answer"; id: string; approval: string; choice: Extract<Act, { act: "answer" }>["choice"] }
@@ -45,14 +55,27 @@ function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
 
 export function createModel(): Model {
   return {
+    agent: null, agents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
     roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(),
     state: { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null },
   };
 }
 
+function requestAgent(model: Model, name: string): Model {
+  const reads = new Map([...model.reads].filter(([, request]) => request.read !== "agent" || request.name !== name));
+  const readSequence = model.readSequence + 1;
+  const request: Read = { type: "read", read: "agent", id: `agent-${readSequence}`, name };
+  reads.set(request.id, request);
+  return { ...model, reads, readSequence };
+}
+
+function agentLog(model: Model, name: string): AgentLog {
+  return model.agents.get(name) ?? { entries: new Map(), live: "", loaded: false };
+}
+
 function requestRoots(model: Model): Model {
-  const reads = new Map([...model.reads].filter(([, request]) => request.read === "zoom"));
+  const reads = new Map([...model.reads].filter(([, request]) => request.read !== "roots" && request.read !== "root"));
   const readSequence = model.readSequence + 1;
   const request: Read = { type: "read", read: "roots", id: `memory-roots-${readSequence}` };
   reads.set(request.id, request);
@@ -61,7 +84,10 @@ function requestRoots(model: Model): Model {
 
 export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
-    case "connecting": return { ...model, connection: "connecting", live: "", approvals: new Map() };
+    case "connecting": {
+      const next: Model = { ...model, connection: "connecting", live: "", approvals: new Map(), agents: new Map([...model.agents].map(([name, log]) => [name, { ...log, live: "" }])) };
+      return model.agent === null ? next : requestAgent(next, model.agent);
+    }
     case "offline": return { ...model, connection: model.connection === "refused" ? "refused" : "offline", live: "" };
     case "ready": return { ...model, connection: "ready" };
     case "refused": return { ...model, connection: "refused", error: event.reason, live: "" };
@@ -81,8 +107,24 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       entries.set(event.entry.i, event.entry);
       return { ...model, entries, live: event.entry.kind === "unii" ? "" : model.live };
     }
-    case "live": return event.agent === null ? { ...model, live: model.live + event.text } : model;
-    case "state": return { ...model, state: event.state, live: event.state.busy ? model.live : "" };
+    case "agent-entry": {
+      const log = agentLog(model, event.name), entries = new Map(log.entries), agents = new Map(model.agents);
+      entries.set(event.entry.i, event.entry);
+      agents.set(event.name, { ...log, entries, live: event.entry.kind === "unii" ? "" : log.live });
+      return { ...model, agents };
+    }
+    case "live": {
+      if (event.agent === null) return { ...model, live: model.live + event.text };
+      const log = agentLog(model, event.agent), agents = new Map(model.agents);
+      agents.set(event.agent, { ...log, live: log.live + event.text });
+      return { ...model, agents };
+    }
+    case "state": {
+      const agents = new Map(model.agents);
+      for (const name of event.state.agentNames ?? event.state.agents) agents.set(name, agentLog(model, name));
+      for (const [name, log] of agents) if (!event.state.agents.includes(name)) agents.set(name, { ...log, live: "" });
+      return { ...model, agents, state: event.state, live: event.state.busy ? model.live : "" };
+    }
     case "view": {
       const nodes = new Map(model.nodes);
       for (const line of event.lines ?? []) nodes.set(partKey(line), line);
@@ -95,6 +137,11 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       const reads = new Map(model.reads);
       reads.delete(event.id);
       if (event.error) return readFailure({ ...model, reads }, request, event.error);
+      if (request.read === "agent") {
+        const agents = new Map(model.agents);
+        agents.set(request.name, { entries: new Map(event.entries.map((entry) => [entry.i, entry])), live: event.live ?? "", loaded: true });
+        return { ...model, reads, agents };
+      }
       const nodes = new Map(model.nodes), entries = new Map(model.entries);
       for (const line of event.lines) nodes.set(partKey(line), line);
       for (const entry of event.entries) entries.set(entry.i, entry);
@@ -103,7 +150,9 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
     case "answer": {
       const pending = new Map(model.pending);
       pending.delete(event.id);
-      return { ...model, pending, error: event.ok ? model.error : event.reason };
+      const uploads = new Map(model.uploads);
+      uploads.delete(event.id);
+      return { ...model, pending, uploads, error: event.ok ? model.error : event.reason };
     }
     case "error": {
       const request = event.id === null ? undefined : model.reads.get(event.id);
@@ -122,17 +171,31 @@ function readFailure(model: Model, request: Read, reason: string): Model {
   return { ...model, open, error: reason };
 }
 
-export function act(model: Model, input: Input): { model: Model; acts: Act[]; reads: Read[] } {
-  const output = (next: Model, acts: Act[] = [], reads: Read[] = []) => ({ model: next, acts: next.connection === "ready" ? acts : [], reads: next.connection === "ready" ? reads : [] });
-  if (input.type === "flush") return output(model, [...model.pending.values()], [...model.reads.values()]);
+export function act(model: Model, input: Input): { model: Model; acts: Act[]; reads: Read[]; uploads: Upload[] } {
+  const output = (next: Model, acts: Act[] = [], reads: Read[] = [], uploads: Upload[] = []) => ({ model: next, acts: next.connection === "ready" ? acts : [], reads: next.connection === "ready" ? reads : [], uploads: next.connection === "ready" ? uploads : [] });
+  if (input.type === "flush") return output(model, [...model.pending.values()].filter((request) => !model.uploads.has(request.id)), [...model.reads.values()], [...model.uploads.values()]);
+  if (input.type === "tab") {
+    if (input.name !== null && !model.agents.has(input.name)) return output(model);
+    const next = { ...model, agent: input.name, page: "chat" as const };
+    const refreshed = input.name === null ? next : requestAgent(next, input.name);
+    return output(refreshed, [], [...refreshed.reads.values()]);
+  }
+  if (input.type === "attach") {
+    const attachments = [...model.attachments, ...input.images];
+    if (attachments.length > 20) return output({ ...model, error: "Attach at most 20 images." });
+    if (input.images.some((image) => !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(image.type) || !image.data)) return output({ ...model, error: "Choose a PNG, JPEG, GIF, or WebP image." });
+    return output({ ...model, attachments, error: null });
+  }
+  if (input.type === "detach") return output({ ...model, attachments: model.attachments.filter((image) => image.id !== input.id) });
   if (input.type === "reads") return output(model, [], [...model.reads.values()]);
   if (input.type === "dismiss-error") return output({ ...model, error: null });
   if (input.type === "dismiss-info") return output({ ...model, info: null });
-  if (input.type === "send" && input.text.trim().startsWith("/")) return command(model, input);
+  if (input.type === "send" && input.text.trim().startsWith("/")) return model.attachments.length
+    ? output({ ...model, error: "Remove images before you use a command." }) : command(model, input);
   if (input.type === "fold" || input.type === "page") {
-    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>(), error: null };
+    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "agent")), error: null };
     if (input.type === "fold") next.folded = !model.folded;
-    else next.page = input.page;
+    else { next.page = input.page; if (input.page === "tree") next.agent = null; }
     const refreshed = next.folded || next.page === "tree" ? requestRoots(next) : next;
     return output(refreshed, [], [...refreshed.reads.values()]);
   }
@@ -151,7 +214,15 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     reads.set(input.id, request);
     return output({ ...model, open, reads, error: null }, [], [request]);
   }
-  if (input.type === "send") return input.text.trim() ? post(model, [{ type: "act", act: "say", id: input.id, text: input.text }]) : output(model);
+  if (input.type === "send") {
+    if (!input.text.trim() && !model.attachments.length || model.pending.has(input.id)) return output(model);
+    if (!model.attachments.length) return post(model, [{ type: "act", act: "say", id: input.id, text: input.text }]);
+    const upload = { id: input.id, text: input.text, images: model.attachments.slice() };
+    const uploads = new Map(model.uploads);
+    uploads.set(input.id, upload);
+    const sent = post({ ...model, uploads, attachments: [] }, [{ type: "act", act: "say", id: input.id, text: input.text }]);
+    return output(sent.model, [], [], [upload]);
+  }
   if (input.type === "stop") return post(model, [{ type: "act", act: "stop", id: input.id, agent: input.agent ?? null }]);
   if (input.type === "answer") {
     if (!model.approvals.has(input.approval) || answering(model, input.approval)) return output(model);
@@ -182,7 +253,7 @@ function post(model: Model, messages: Act[]): ReturnType<typeof act> {
   const next = fresh.some((message) => message.act === "say") && model.folded
     ? { ...model, folded: false, open: new Set<string>(), reads: new Map<string, Read>() }
     : model;
-  return { model: { ...next, pending, error: null }, acts: model.connection === "ready" ? fresh : [], reads: [] };
+  return { model: { ...next, pending, error: null }, acts: model.connection === "ready" ? fresh : [], reads: [], uploads: [] };
 }
 
 export function effectivePick(model: Model): Pick | null {
@@ -204,8 +275,8 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
   const text = input.text.trim();
   const name = text.split(/\s+/, 1)[0];
   const argument = text.slice(name.length).trim();
-  const fail = (error: string) => ({ model: { ...model, error }, acts: [], reads: [] });
-  const info = (text: string) => ({ model: { ...model, info: text, error: null }, acts: [], reads: [] });
+  const fail = (error: string) => ({ model: { ...model, error }, acts: [], reads: [], uploads: [] });
+  const info = (text: string) => ({ model: { ...model, info: text, error: null }, acts: [], reads: [], uploads: [] });
   switch (name) {
     case "/goal":
       if (input.id.length > 252) return fail("The goal request id is too long.");

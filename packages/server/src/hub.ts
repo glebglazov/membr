@@ -8,6 +8,7 @@ import { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { readConfig } from "./config.ts";
 import { web } from "./web.ts";
+import { imagePath, IMAGE_COUNT, storeImage } from "./images.ts";
 
 type Connection = { phase: "hello"; tokens: string[]; local: boolean } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -64,7 +65,8 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   const server = Bun.serve<Connection>({
     hostname: options.hostname ?? "127.0.0.1",
     port: options.port,
-    fetch(request, server) {
+    maxRequestBodySize: 32 * 2 ** 20,
+    async fetch(request, server) {
       const url = new URL(request.url);
       const origin = request.headers.get("origin");
       if (origin !== null && origin !== url.origin) return new Response("Invalid origin", { status: 403 });
@@ -85,6 +87,38 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
           Location: "/", "Set-Cookie": `token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${url.protocol === "https:" ? "; Secure" : ""}`,
           "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         } });
+      }
+      if (url.pathname === "/act/say") {
+        if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { Allow: "POST" } });
+        const id = url.searchParams.get("id") ?? "";
+        try {
+          parseClientMessage({ type: "act", act: "say", id, text: "" });
+          const previous = log.answer(id);
+          if (previous) return Response.json(previous);
+          const form = await request.formData();
+          const text = form.get("text");
+          const files = form.getAll("images");
+          if (typeof text !== "string" || !files.length || files.length > IMAGE_COUNT || files.some((file) => !(file instanceof File))) throw new Error("Attach 1 to 20 images and a text field.");
+          const images: string[] = [];
+          for (const file of files) {
+            if (!(file instanceof File)) throw new Error("Expected an image file.");
+            images.push(await storeImage(options.dir, Buffer.from(await file.arrayBuffer()), file.type));
+          }
+          return Response.json(chat!.act({ type: "act", act: "say", id, text, images }));
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "The image upload failed.";
+          if (!id || id.length > 256) return new Response(reason, { status: 400 });
+          const answer = log.apply({ type: "act", act: "say", id, text: "" }, log.count, reason).answer;
+          return Response.json(answer, { status: answer.ok ? 200 : 400 });
+        }
+      }
+      if (url.pathname.startsWith("/docs/images/")) {
+        if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
+        try {
+          const file = Bun.file(imagePath(options.dir, decodeURIComponent(url.pathname.slice("/docs/images/".length))));
+          if (!(await file.exists())) return new Response("Not found", { status: 404 });
+          return new Response(request.method === "HEAD" ? null : file, { headers: { "Content-Type": file.type, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=31536000, immutable" } });
+        } catch { return new Response("Not found", { status: 404 }); }
       }
       return web(request);
     },

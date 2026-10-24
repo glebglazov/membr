@@ -1,12 +1,39 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Input, type Row } from "@membr/core";
+import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row } from "@membr/core";
 import { VERSION, parseEvent, type Entry } from "@membr/protocol";
 import "./style.css";
+import { speechRecognition, type Recognition } from "./speech.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
 let changed = () => {};
+const uploading = new Set<string>();
+
+async function upload(request: Upload) {
+  if (uploading.has(request.id)) return;
+  uploading.add(request.id);
+  try {
+    const form = new FormData();
+    form.set("text", request.text);
+    for (const image of request.images) {
+      const bytes = Uint8Array.from(atob(image.data), (byte) => byte.charCodeAt(0));
+      form.append("images", new Blob([bytes], { type: image.type }), image.name);
+    }
+    const response = await fetch(`/act/say?id=${encodeURIComponent(request.id)}`, { method: "POST", body: form });
+    const event = response.headers.get("content-type")?.includes("application/json")
+      ? parseEvent(await response.json())
+      : { type: "answer", id: request.id, ok: false, reason: await response.text() || "The image upload failed." } as const;
+    if (event.type !== "answer" || event.id !== request.id) throw new Error("The server sent an invalid upload answer.");
+    model = hear(model, event);
+  } catch {
+    model = hear(model, { type: "error", id: null, reason: "The image upload failed. Retrying when connected." });
+    setTimeout(() => { if (model.uploads.has(request.id) && model.connection === "ready") void upload(request); }, 1000);
+  } finally {
+    uploading.delete(request.id);
+    changed();
+  }
+}
 
 function id(): string { return [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 
@@ -18,6 +45,7 @@ function input(value: Input) {
   for (const message of [...result.acts, ...result.reads]) {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   }
+  for (const request of result.uploads) void upload(request);
   changed();
 }
 
@@ -57,7 +85,8 @@ function connect() {
 function Block({ entry }: { entry: Entry }) {
   const label = { user: "You", unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note" }[entry.kind];
   return h("article", { class: `message ${entry.kind}`, "data-entry": entry.i },
-    h("div", { class: "label" }, label), h("div", { class: "text" }, entry.text));
+    h("div", { class: "label" }, label), h("div", { class: "text" }, entry.text),
+    entry.images?.map((name) => h("a", { href: `/docs/images/${encodeURIComponent(name)}`, target: "_blank", rel: "noreferrer", key: name }, h("img", { class: "attached-image", src: `/docs/images/${encodeURIComponent(name)}`, alt: "Attached image", loading: "lazy" }))));
 }
 
 function MemoryBlock({ row }: { row: Row }): ComponentChild {
@@ -114,9 +143,33 @@ function ApprovalCards() {
 function App() {
   const [, update] = useState(0);
   const [draft, setDraft] = useState("");
+  const [readingImages, setReadingImages] = useState(false);
+  const [voice, setVoice] = useState<"idle" | "listening">("idle");
+  const recognition = useRef<Recognition | null>(null);
+  const files = useRef<HTMLInputElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   changed = () => update((value) => value + 1);
+  useEffect(() => {
+    const Constructor = speechRecognition();
+    if (!Constructor) return;
+    const speech = new Constructor();
+    recognition.current = speech;
+    speech.lang = navigator.language;
+    speech.interimResults = false;
+    speech.onresult = (event) => {
+      const words: string[] = [];
+      for (let i = event.resultIndex; i < event.results.length; i++) if (event.results[i].isFinal) words.push(event.results[i][0].transcript);
+      if (words.length) setDraft((text) => text + (text && !/\s$/.test(text) ? " " : "") + words.join(" "));
+    };
+    speech.onend = () => setVoice("idle");
+    speech.onerror = (event) => {
+      setVoice("idle");
+      model = hear(model, { type: "error", id: null, reason: `Voice input failed. ${event.error}.` });
+      changed();
+    };
+    return () => { speech.onresult = null; speech.onend = null; speech.onerror = null; speech.abort(); recognition.current = null; };
+  }, []);
   useEffect(() => {
     const scroll = () => { follow.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120; };
     const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : "chat" });
@@ -125,38 +178,83 @@ function App() {
     window.addEventListener("hashchange", page);
     return () => { window.removeEventListener("scroll", scroll); window.removeEventListener("hashchange", page); };
   }, []);
-  useEffect(() => { if (follow.current && model.page === "chat" && !model.folded) end.current?.scrollIntoView({ block: "end" }); }, [model.entries, model.live]);
+  useEffect(() => { if (follow.current && model.page === "chat" && !model.folded) end.current?.scrollIntoView({ block: "end" }); }, [model.entries, model.live, model.agents, model.agent]);
+  async function attach(selected: File[]) {
+    setReadingImages(true);
+    try {
+      const images = await Promise.all(selected.map((file) => new Promise<Attachment>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("The image could not be read."));
+        reader.onload = () => {
+          if (typeof reader.result !== "string") return reject(new Error("The image could not be read."));
+          resolve({ id: id(), name: file.name, type: file.type, data: reader.result.slice(reader.result.indexOf(",") + 1) });
+        };
+        reader.readAsDataURL(file);
+      })));
+      input({ type: "attach", images });
+    } catch (error) {
+      model = hear(model, { type: "error", id: null, reason: error instanceof Error ? error.message : "The image could not be read." });
+      changed();
+    } finally { setReadingImages(false); }
+  }
   function send() {
-    if (!draft.trim() || model.connection === "refused") return;
+    if ((!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused") return;
     input({ type: "send", id: id(), text: draft });
-    setDraft("");
+    if (!model.error) setDraft("");
+    recognition.current?.stop();
     follow.current = true;
   }
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
   const body = rows(model);
+  const agent = model.agent === null ? null : model.agents.get(model.agent);
   return h("div", { class: "app" },
     h("header", null, h("h1", null, "membr"),
       h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Tree")),
       h("span", { role: "status" }, status)),
     h(Controls, null),
-    h("main", { "aria-label": model.page === "tree" ? "Memory tree" : "Chat" },
+    h("div", { class: "agent-tabs", role: "tablist", "aria-label": "Conversations" },
+      h("button", { type: "button", role: "tab", "aria-selected": model.agent === null && model.page === "chat", onClick: () => input({ type: "tab", name: null }) }, "Main chat"),
+      [...model.agents.keys()].map((name) => h("button", { type: "button", role: "tab", key: name, "aria-selected": model.agent === name, onClick: () => input({ type: "tab", name }) }, name, model.state.agents.includes(name) ? " · working" : ""))),
+    h("main", { "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
-      model.page === "chat" && h("button", { type: "button", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all"),
-      model.folded && model.page === "chat" && h("p", { class: "label" }, "The whole chat in the fewest blocks."),
-      body.length === 0 && !model.live && h("p", { class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
-      body.map((row) => h(MemoryBlock, { row, key: row.kind === "message" ? `entry-${row.entry.i}` : partKey(row.part) })),
-      model.page === "chat" && model.live && h("article", { class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h("div", { class: "text" }, model.live)),
+      model.page === "chat" && model.agent === null && h("button", { type: "button", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all"),
+      model.folded && model.page === "chat" && model.agent === null && h("p", { class: "label" }, "The whole chat in the fewest blocks."),
+      agent ? [
+        h("h2", { key: "title" }, `${model.agent} log`),
+        !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
+        [...agent.entries.values()].sort((a, b) => a.i - b.i).map((entry) => h(Block, { entry, key: entry.i })),
+        agent.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h("div", { class: "text" }, agent.live)),
+      ] : [
+        body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
+        body.map((row) => h(MemoryBlock, { row, key: row.kind === "message" ? `entry-${row.entry.i}` : partKey(row.part) })),
+        model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h("div", { class: "text" }, model.live)),
+      ],
       h("div", { ref: end })),
     h("footer", null,
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),
-      model.page === "chat" && h("form", { onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
+      model.page === "chat" && model.agent !== null && h("button", { type: "button", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`),
+      model.page === "chat" && model.agent === null && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
+      model.page === "chat" && model.agent === null && h("form", { onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
         h("textarea", { "aria-label": "Message", placeholder: "Message membr", value: draft, rows: 2,
           onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) setDraft(event.currentTarget.value); },
           onKeyDown: (event: KeyboardEvent) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) { event.preventDefault(); send(); } } }),
-        h("button", { type: "submit", disabled: !draft.trim() || model.connection === "refused" }, "Send"),
+        h("input", { type: "file", multiple: true, accept: "image/png,image/jpeg,image/gif,image/webp", hidden: true, ref: files, "aria-label": "Attach images", onChange: (event: Event) => {
+          if (!(event.currentTarget instanceof HTMLInputElement)) return;
+          const selected = [...event.currentTarget.files ?? []];
+          event.currentTarget.value = "";
+          if (selected.length) void attach(selected);
+        } }),
+        h("button", { type: "button", disabled: readingImages || model.connection === "refused", onClick: () => files.current?.click() }, readingImages ? "Reading images..." : "Attach"),
+        speechRecognition() && h("button", { type: "button", "aria-label": "Voice input", "aria-pressed": voice === "listening", onClick: () => {
+          if (voice === "listening") recognition.current?.stop();
+          else try { recognition.current?.start(); setVoice("listening"); } catch {
+            model = hear(model, { type: "error", id: null, reason: "Voice input could not start." }); changed();
+          }
+        } }, voice === "listening" ? "Stop voice" : "Voice"),
+        h("button", { type: "submit", disabled: (!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused" }, "Send"),
         h("button", { type: "button", disabled: !model.state.busy || model.connection !== "ready", onClick: () => input({ type: "stop", id: id() }) }, "Stop"))));
 }
 
