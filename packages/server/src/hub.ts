@@ -1,6 +1,8 @@
 import type { ServerWebSocket } from "bun";
 import { VERSION, parseClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
 import { Log, identity } from "./log.ts";
+import { Chat } from "./chat.ts";
+import type { Engine, EpochOptions } from "./engine.ts";
 
 type Connection = { phase: "hello"; tokens: string[] } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -22,7 +24,7 @@ function credentials(request: Request): string[] {
   return tokens;
 }
 
-export function serveHub(options: { dir: string; port: number }) {
+export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions> }) {
   const log = new Log(options.dir);
   const token = identity(options.dir, "token");
   const sockets = new Set<Socket>();
@@ -78,14 +80,13 @@ export function serveHub(options: { dir: string; port: number }) {
               if (entry) send(socket, { type: "entry", entry });
             }
             sockets.add(socket);
+            send(socket, { type: "state", state: chat.state });
             send(socket, { type: "ready", version: VERSION });
             return;
           }
           if (message.type === "hello") return refuse(socket, "Hello was already received");
           if (message.type === "read") return read(socket, message);
-          const result = log.apply(message);
-          if (result.entry) for (const client of sockets) send(client, { type: "entry", entry: result.entry });
-          send(socket, result.answer);
+          send(socket, chat.act(message));
         } catch (error) {
           const reason = error instanceof Error ? error.message : "Request failed";
           if (socket.data.phase === "hello") refuse(socket, reason);
@@ -95,5 +96,12 @@ export function serveHub(options: { dir: string; port: number }) {
       close(socket) { sockets.delete(socket); },
     },
   });
-  return { server, token };
+  let chat: Chat;
+  try {
+    chat = new Chat(log, (event) => { for (const client of sockets) send(client, event); }, options.engine, options.epoch);
+  } catch (error) {
+    server.stop(true);
+    throw error;
+  }
+  return { server, token, close() { chat.close(); server.stop(true); } };
 }

@@ -7,7 +7,8 @@ import { parseEntry, parseEvent, type Act, type Answer, type Entry } from "@memb
 
 const SLOT = 16;
 const DAY = 86_400_000;
-type Record = { act: string; ans: Answer } & Partial<Entry>;
+type Turn = { id: number; phase: "running" | "done" };
+type Record = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn };
 type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
@@ -40,6 +41,9 @@ export class Log {
   private readonly locations: Array<Location | undefined> = [];
   private readonly machine: string;
   private seq = 0;
+  private readonly started = new Set<number>();
+  private readonly finished = new Set<number>();
+  private readonly events = new Set<string>();
   private failure: unknown;
 
   constructor(private readonly dir: string) {
@@ -55,10 +59,19 @@ export class Log {
         let at = 0;
         for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, at)) {
           const raw: unknown = JSON.parse(data.subarray(at, end).toString("utf8"));
-          if (raw === null || typeof raw !== "object" || !("act" in raw) || typeof raw.act !== "string" || !("ans" in raw)) throw new Error(`Invalid log record in ${file}`);
-          const ans = parseEvent(raw.ans);
-          if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
-          this.answers.set(raw.act, ans);
+          if (raw === null || typeof raw !== "object") throw new Error(`Invalid log record in ${file}`);
+          if ("act" in raw && typeof raw.act === "string" && "ans" in raw) {
+            const ans = parseEvent(raw.ans);
+            if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
+            this.answers.set(raw.act, ans);
+          } else if ("event" in raw && typeof raw.event === "string" && !this.events.has(raw.event)) {
+            this.events.add(raw.event);
+          } else throw new Error(`Invalid log record in ${file}`);
+          if ("turn" in raw) {
+            const turn = raw.turn;
+            if (turn === null || typeof turn !== "object" || !("id" in turn) || typeof turn.id !== "number" || !Number.isSafeInteger(turn.id) || turn.id < 0 || !("phase" in turn) || (turn.phase !== "running" && turn.phase !== "done")) throw new Error(`Invalid turn in ${file}`);
+            (turn.phase === "running" ? this.started : this.finished).add(turn.id);
+          }
           if ("i" in raw) {
             const entry = parseEntry(raw);
             if (this.locations[entry.i]) throw new Error(`Duplicate message index in ${file}`);
@@ -93,20 +106,54 @@ export class Log {
     } finally { fs.closeSync(fd); }
   }
 
-  apply(act: Act): { answer: Answer; entry: Entry | null } {
+  get interrupted(): number[] { return [...this.started].filter((id) => !this.finished.has(id)); }
+
+  apply(act: Act, turn: number, refusal?: string): { answer: Answer; entry: Entry | null; fresh: boolean } {
     if (this.failure) throw this.failure;
     const previous = this.answers.get(act.id);
-    if (previous) return { answer: previous, entry: null };
-    const date = new Date().toISOString();
-    const entry: Entry | null = act.act === "say" ? {
-      i: this.count, kind: "user", text: act.text, date,
-      from: { machine: this.machine, seq: this.seq },
-      ...(act.images === undefined ? {} : { images: act.images }),
-    } : null;
+    if (previous) return { answer: previous, entry: null, fresh: false };
+    const entry = refusal ? null : act.act === "say"
+      ? this.entry("user", act.text, act.images)
+      : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.") : null;
     const answer: Answer = entry
       ? { type: "answer", id: act.id, ok: true, entry: entry.i }
-      : { type: "answer", id: act.id, ok: false, reason: `Act ${act.act} is not available yet` };
-    const record: Record = { ...entry, act: act.id, ans: answer };
+      : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
+    this.write({ ...entry, act: act.id, ans: answer, ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
+    return { answer, entry, fresh: true };
+  }
+
+  append(kind: Entry["kind"], text: string): Entry {
+    const entry = this.entry(kind, text);
+    this.write({ ...entry, event: crypto.randomUUID() });
+    return entry;
+  }
+
+  finish(turn: number, note?: string): Entry | null {
+    if (this.failure) throw this.failure;
+    if (this.finished.has(turn)) return null;
+    const entry = note === undefined ? null : this.entry("note", note);
+    this.write({ ...entry, event: `turn:${turn}:done`, turn: { id: turn, phase: "done" } });
+    return entry;
+  }
+
+  epoch(epoch: string, session: string): void {
+    const file = path.join(this.dir, "epochs.json");
+    const previous: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+    if (previous === null || typeof previous !== "object" || Array.isArray(previous) || Object.values(previous).some((value) => typeof value !== "string")) throw new Error("Invalid epoch map");
+    const fd = fs.openSync(file + ".tmp", "w", 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify({ ...previous, [epoch]: session }) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(file + ".tmp", file);
+    syncDirectory(this.dir);
+  }
+
+  private entry(kind: Entry["kind"], text: string, images?: string[]): Entry {
+    return { i: this.count, kind, text, date: new Date().toISOString(), from: { machine: this.machine, seq: this.seq }, ...(images === undefined ? {} : { images }) };
+  }
+
+  private write(record: Record): void {
+    if (this.failure) throw this.failure;
+    const date = record.date ?? new Date().toISOString();
+    const entry = record.i === undefined ? null : parseEntry(record);
     const bytes = Buffer.from(JSON.stringify(record) + "\n");
     const day = Date.parse(date.slice(0, 10)) / DAY;
     const file = this.file(day);
@@ -119,7 +166,9 @@ export class Log {
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       syncDirectory(path.join(this.dir, "main"));
-      this.answers.set(act.id, answer);
+      if ("act" in record) this.answers.set(record.act, record.ans);
+      else this.events.add(record.event);
+      if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
       if (entry) {
         const index = fs.openSync(path.join(this.dir, "main.index"), "r+");
         try { this.place(index, entry.i, { day, at, length: bytes.length - 1 }); } finally { fs.closeSync(index); }
@@ -131,7 +180,6 @@ export class Log {
       this.failure = error;
       throw error;
     }
-    return { answer, entry };
   }
 
   private file(day: number): string {

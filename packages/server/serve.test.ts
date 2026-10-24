@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const MAIN = path.join(import.meta.dir, "src/main.ts");
+const MAIN = path.join(import.meta.dir, "test/serve.ts");
 const running: Bun.Subprocess[] = [];
 
 afterEach(() => {

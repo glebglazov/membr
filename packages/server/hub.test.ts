@@ -21,7 +21,7 @@ function directory() {
 }
 
 async function serve(dir = directory()) {
-  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "src/main.ts"), "serve", "--port", "0"], {
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve", "--port", "0"], {
     env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe",
   });
   processes.push(proc);
@@ -45,8 +45,8 @@ async function connect(server: Awaited<ReturnType<typeof serve>>, options: Param
   return client;
 }
 
-function records(dir: string) {
-  return fs.readdirSync(path.join(dir, "main")).flatMap((file) => fs.readFileSync(path.join(dir, "main", file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)));
+function records(dir: string, all = false) {
+  return fs.readdirSync(path.join(dir, "main")).flatMap((file) => fs.readFileSync(path.join(dir, "main", file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((record) => all || "act" in record));
 }
 
 test("two clients see one durable entry and simultaneous resends get its first answer", async () => {
@@ -214,11 +214,11 @@ test("recovery uses message indexes when a clock change reverses daily file orde
   }
   before.proc.kill("SIGKILL");
   await before.proc.exited;
-  const saved = records(before.dir);
+  const saved = records(before.dir, true);
   const main = path.join(before.dir, "main");
   for (const file of fs.readdirSync(main)) fs.rmSync(path.join(main, file));
-  fs.writeFileSync(path.join(main, "2026-10-23.jsonl"), JSON.stringify(saved[0]) + "\n");
-  fs.writeFileSync(path.join(main, "2026-10-22.jsonl"), JSON.stringify(saved[1]) + "\n");
+  fs.writeFileSync(path.join(main, "2026-10-23.jsonl"), saved.filter((record) => record.turn?.id === 0).map((record) => JSON.stringify(record)).join("\n") + "\n");
+  fs.writeFileSync(path.join(main, "2026-10-22.jsonl"), saved.filter((record) => record.turn?.id === 1).map((record) => JSON.stringify(record)).join("\n") + "\n");
   const after = await serve(before.dir);
   const recovered = await connect(after);
   expect(recovered.events.filter((event) => event.type === "entry").map((event) => event.entry.text)).toEqual(["first-day", "second-day"]);

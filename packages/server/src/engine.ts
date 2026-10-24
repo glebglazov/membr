@@ -43,16 +43,18 @@ export type EngineEvent =
   | { kind: "tool"; id: string; name: string; input: unknown }
   | { kind: "echo"; id: string; text: string; error: boolean }
   | { kind: "compacted" }
-  | { kind: "end"; reply: string; error: string | null; usage: Usage; fast: Fast | null };
+  | { kind: "end"; reply: string; error: string | null; usage: Usage; fast: Fast | null; through: number };
 
 // whether fast mode serves the session, and why not: "preference" means the
 // organization turned it off
 export type Fast = { state: "off" | "on" | "cooldown"; blocked: string | null };
 
 export interface Epoch {
-  send(text: string, priority: Priority, from: From): void;
+  // The returned sequence identifies input; end.through completes that prefix.
+  send(text: string, priority: Priority, from: From): number;
   // one reader only: the events of every turn of the epoch, in order
   events: AsyncIterable<EngineEvent>;
+  // Resolves after current input ends or is cancelled. The epoch stays open.
   interrupt(): Promise<void>;
   pick(pick: Pick): Promise<void>;
   close(): void;
@@ -135,6 +137,8 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
     this.wake?.();
   }
 
+  clear(): SDKUserMessage[] { return this.queue.splice(0); }
+
   end() {
     this.ended = true;
     this.wake?.();
@@ -155,9 +159,10 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-function message(text: string, priority: Priority, from: From): SDKUserMessage {
+function message(text: string, priority: Priority, from: From): SDKUserMessage & { uuid: string } {
   return {
     type: "user",
+    uuid: crypto.randomUUID(),
     message: { role: "user", content: text },
     parent_tool_use_id: null,
     priority,
@@ -187,52 +192,93 @@ function open(view: string, options: EpochOptions): Epoch {
           : { behavior: "deny", message: "The user did not allow this tool call." },
     },
   });
-  // every message starts a turn of its own, so the view gets a turn too. Its
-  // reply is not part of the chat, so its events are dropped. A message sent
-  // with `now` during that turn cuts it and the view is lost, so until it
-  // ends every message waits with `next`
   inbox.push(message(view, "next", "membr"));
   let viewing = true;
+  let sequence = 0;
+  let through = 0;
+  const pending = new Map<string, number>();
+  const waiting: SDKUserMessage[] = [];
+  let stopped: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+  let interruptAccepted = false;
+
+  function settleStop() {
+    if (interruptAccepted && pending.size === 0) stopped?.resolve();
+  }
+
   async function* stream(): AsyncGenerator<EngineEvent> {
-    for await (const event of events(session)) {
-      if (!viewing || event.kind === "session") {
-        yield event;
-      } else if (event.kind === "end") {
-        viewing = false;
+    try {
+      for await (const sdk of session) {
+        if (sdk.type === "system" && sdk.subtype === "init") {
+          yield { kind: "session", id: sdk.session_id };
+        }
+        if (sdk.type === "result") {
+          if (viewing) {
+            viewing = false;
+            if (sdk.subtype !== "success" || sdk.is_error) throw new Error("The Engine could not load the chat view");
+            for (const input of waiting.splice(0)) inbox.push(input);
+            continue;
+          }
+          const ids = sdk.user_message_uuids ?? (sdk.user_message_uuid ? [sdk.user_message_uuid] : []);
+          for (const id of ids) through = Math.max(through, pending.get(id) ?? 0);
+          for (const [id, sent] of pending) if (sent <= through) pending.delete(id);
+          if (ids.length === 0 && pending.size > 0) throw new Error("The SDK result did not identify the input it completed");
+          settleStop();
+        }
+        if (!viewing) yield* translate(sdk, through);
       }
+      stopped?.reject(new Error("The Engine closed during stop"));
+    } catch (error) {
+      stopped?.reject(error);
+      throw error;
     }
   }
   return {
     send(text, priority, from) {
-      inbox.push(message(text, viewing ? "next" : priority, from));
+      const input = message(text, priority, from);
+      const sent = ++sequence;
+      pending.set(input.uuid, sent);
+      if (viewing) waiting.push(input);
+      else inbox.push(input);
+      return sent;
     },
     events: stream(),
     async interrupt() {
-      await session.interrupt();
+      for (const input of viewing ? waiting.splice(0) : inbox.clear()) {
+        if (input.uuid) pending.delete(input.uuid);
+      }
+      if (viewing) return;
+      stopped = Promise.withResolvers<void>();
+      interruptAccepted = false;
+      // SDK 0.3.310 implements cancelQueued, but its Query declaration omits it.
+      const cancel: (options?: { cancelQueued: boolean }) => ReturnType<Query["interrupt"]> = session.interrupt.bind(session);
+      try {
+        await Promise.all([
+          cancel({ cancelQueued: true }).then((receipt) => {
+            for (const id of receipt?.cancelled ?? []) pending.delete(id);
+            if (receipt?.still_queued.some((id) => pending.has(id))) throw new Error("The SDK did not cancel queued input");
+            interruptAccepted = true;
+            settleStop();
+          }),
+          stopped.promise,
+        ]);
+      } finally {
+        stopped = undefined;
+        interruptAccepted = false;
+      }
     },
     async pick(pick) {
       await session.setModel(pick.model);
       await session.applyFlagSettings({ effortLevel: pick.effort, fastMode: pick.fast });
     },
     close() {
+      stopped?.reject(new Error("The epoch closed during stop"));
       inbox.end();
       session.close();
     },
   };
 }
 
-async function* events(session: Query): AsyncGenerator<EngineEvent> {
-  let id: string | null = null;
-  for await (const sdk of session) {
-    if (sdk.type === "system" && sdk.subtype === "init" && sdk.session_id !== id) {
-      id = sdk.session_id;
-      yield { kind: "session", id };
-    }
-    yield* translate(sdk);
-  }
-}
-
-function* translate(sdk: SDKMessage): Generator<EngineEvent> {
+function* translate(sdk: SDKMessage, through: number): Generator<EngineEvent> {
   if ("parent_tool_use_id" in sdk && sdk.parent_tool_use_id !== null) {
     return;
   }
@@ -276,6 +322,7 @@ function* translate(sdk: SDKMessage): Generator<EngineEvent> {
           cacheWrite: sdk.usage.cache_creation_input_tokens,
           output: sdk.usage.output_tokens,
         },
+        through,
         fast: sdk.fast_mode_state ? { state: sdk.fast_mode_state, blocked: sdk.fast_mode_disabled_reason ?? null } : null,
       };
       return;

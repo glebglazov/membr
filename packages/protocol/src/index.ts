@@ -5,7 +5,7 @@ export type Pick = { model: string; effort: "low" | "medium" | "high" | "xhigh" 
 export type Part = { l: number; i: number };
 export type Entry = {
   i: number;
-  kind: "user" | "unii" | "tool" | "echo" | "work";
+  kind: "user" | "unii" | "tool" | "echo" | "work" | "note";
   text: string;
   date: string;
   from: { machine: string; seq: number };
@@ -35,7 +35,7 @@ export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }
   | { type: "entry"; entry: Entry }
-  | { type: "delta"; text: string; agent: string | null }
+  | { type: "live"; text: string; agent: string | null }
   | { type: "view"; parts: Part[] }
   | { type: "approval"; id: string; tool: string; input: Record<string, unknown> }
   | { type: "state"; state: State }
@@ -98,7 +98,7 @@ export function parseEntry(value: unknown): Entry {
   const date = string(v.date);
   if (!Number.isFinite(Date.parse(date))) throw new Error("Expected a date");
   return {
-    i: integer(v.i), kind: oneOf(v.kind, ["user", "unii", "tool", "echo", "work"]), text: string(v.text), date,
+    i: integer(v.i), kind: oneOf(v.kind, ["user", "unii", "tool", "echo", "work", "note"]), text: string(v.text), date,
     from: { machine: id(from.machine), seq: integer(from.seq) },
     ...(v.images === undefined ? {} : { images: list(v.images, string) }),
   };
@@ -140,7 +140,7 @@ export function parseEvent(value: unknown): Event {
     case "ready": return { type: "ready", version: version(v.version) };
     case "refused": return { type: "refused", reason: string(v.reason) };
     case "entry": return { type: "entry", entry: parseEntry(v.entry) };
-    case "delta": return { type: "delta", text: string(v.text), agent: nullable(v.agent, string) };
+    case "live": return { type: "live", text: string(v.text), agent: nullable(v.agent, string) };
     case "view": return { type: "view", parts: list(v.parts, part) };
     case "approval": return { type: "approval", id: id(v.id), tool: id(v.tool), input: object(v.input) };
     case "answer":
