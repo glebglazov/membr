@@ -77,6 +77,7 @@ export class View {
     this.sync();
   }
 
+  get summaries(): Line[] { return this.lines.map((part) => ({ ...part })); }
   get parts(): Part[] { return this.lines.map(({ l, i }) => ({ l, i })); }
   get pick(): Pick { return this.log.pick ?? this.savedPick ?? this.initialPick; }
   get goal(): string | null { return this.log.goal.value; }

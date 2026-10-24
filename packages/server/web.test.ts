@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { serveHub } from "./src/hub.ts";
-import { FakeEngine } from "./test/engine.ts";
+import { END, FakeEngine } from "./test/engine.ts";
+import { seedMemory } from "./test/memory.ts";
 import { TestClient } from "./test/client.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
@@ -104,4 +105,55 @@ test("a reconnect receives the current main text before the next delta", async (
   clients.push(third);
   await third.wait("ready");
   expect(third.events.filter((event) => event.type === "live")).toEqual([]);
+});
+
+test("the view sends summary text at connect and after a new message", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-web-memory-"));
+  dirs.push(dir);
+  await seedMemory(dir, 8);
+  const hub = serveHub({ dir, port: 0, engine: new FakeEngine((epoch) => epoch.emit(END)) });
+  hubs.push(hub);
+  const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
+  clients.push(client);
+  await client.wait("ready");
+  const initial = await client.wait("view");
+  expect(initial.parts).toEqual([{ l: 3, i: 0 }]);
+  expect(initial.lines).toEqual(JSON.parse(fs.readFileSync(path.join(dir, "view.json"), "utf8")).lines);
+  expect(initial.lines?.[0]?.text).toContain("A compacted message.");
+  const mark = client.events.length;
+  client.act({ type: "act", act: "say", id: "new-memory", text: "A new memory" });
+  const next = await client.wait("view", mark, (event) => event.parts.length === 2);
+  expect(next.lines).toEqual([{ l: 0, i: 8, text: "user: A new memory" }]);
+});
+
+test("the current turn cutoff reaches every client and survives restart", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-web-turn-"));
+  dirs.push(dir);
+  await seedMemory(dir, 8);
+  const text = "The final answer remains readable. ".repeat(80);
+  const hub = serveHub({ dir, port: 0, engine: new FakeEngine((epoch) => epoch.emit({ kind: "text", text }, END)) });
+  hubs.push(hub);
+  const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
+  clients.push(client);
+  await client.wait("ready");
+  expect((await client.wait("view")).turn).toBe(8);
+  const mark = client.events.length;
+  client.act({ type: "act", act: "say", id: "long-answer", text: "Give a complete answer" });
+  const final = await client.wait("view", mark, (event) => event.parts.length === 3);
+  expect(final.turn).toBe(8);
+  expect(final.lines).toEqual([{ l: 0, i: 9, text: "(not summarized yet: zoom it)" }]);
+  expect((await client.wait("entry", mark, (event) => event.entry.kind === "unii")).entry.text).toBe(text);
+  await client.wait("state", mark, (event) => !event.state.busy);
+  const second = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
+  clients.push(second);
+  await second.wait("ready");
+  expect((await second.wait("view")).turn).toBe(8);
+  await hub.close();
+  hubs.splice(hubs.indexOf(hub), 1);
+  const restarted = serveHub({ dir, port: 0, engine: new FakeEngine() });
+  hubs.push(restarted);
+  const third = await TestClient.connect(new URL("/ws", restarted.server.url).href.replace("http:", "ws:"));
+  clients.push(third);
+  await third.wait("ready");
+  expect((await third.wait("view")).turn).toBe(8);
 });

@@ -58,6 +58,8 @@ export class Chat {
   get live() { return this.streaming; }
 
   get parts() { return this.view.parts; }
+  get lines() { return this.view.summaries; }
+  get latestTurn() { return this.log.latestTurn; }
 
   get asks() { return this.approvals.requests; }
 
@@ -161,7 +163,7 @@ export class Chat {
       previous.epoch.close();
       this.session = this.open(wait.id);
       void this.read(this.session);
-      this.emit({ type: "view", parts: this.view.parts });
+      this.emit({ type: "view", parts: this.view.parts, lines: this.view.summaries, turn: this.log.latestTurn });
       this.turn = { phase: "running", id: wait.id };
       for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(this.inputText(input.text), i === 0 ? "now" : "next", input.from);
       this.change();
@@ -194,7 +196,7 @@ export class Chat {
   private record(entry: Entry): void {
     this.view.sync();
     this.emit({ type: "entry", entry });
-    this.emit({ type: "view", parts: this.view.parts });
+    this.emit({ type: "view", parts: this.view.parts, lines: this.view.summaries.filter((part) => part.l === 0 && part.i === entry.i), turn: this.log.latestTurn });
   }
 
   private async read(session: Session): Promise<void> {

@@ -118,6 +118,11 @@ export class Log {
   }
 
   get count(): number { return this.locations.length; }
+  get latestTurn(): number {
+    let latest: number | null = null;
+    for (const id of this.started) latest = latest === null ? id : Math.max(latest, id);
+    return latest ?? this.count;
+  }
   get allows(): readonly AllowRule[] { return this.allowed; }
   get pick(): Pick | null { return this.savedPick?.value ?? null; }
   get goal(): SavedGoal { return this.savedGoal; }

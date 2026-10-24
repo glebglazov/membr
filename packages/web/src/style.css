@@ -27,3 +27,11 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--mid); ou
 .error, .pending { width: min(740px, 100%); margin: 0 auto 10px; overflow-wrap: anywhere; }
 .error { color: var(--red); }
 @media (max-width: 440px) { header { padding: 10px 16px; } .message { padding: 12px 14px; } form { gap: 5px; } button { padding: 9px; } }
+nav { display: flex; gap: 12px; }
+nav a { color: var(--mid); text-decoration: none; }
+nav a[aria-current=page] { color: var(--ink); text-decoration: underline; }
+.summary { display: block; width: 100%; text-align: left; border: 1px solid var(--frame); }
+.summary .label, .summary .text { display: block; }
+.memory-open { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--frame); }
+.close-block { padding: 4px 9px; font-size: 13px; color: var(--mid); }
+@media (max-width: 440px) { header { flex-wrap: wrap; gap: 8px; } .memory-open { padding-left: 8px; } }
