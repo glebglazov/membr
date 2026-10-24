@@ -40,3 +40,20 @@ test("every injected SDK message is synthetic and prefixed while typed user text
     { synthetic: true, text: "[membr]\ncompaction input" },
   ]);
 });
+
+test("the Engine registers zoom and date and sends their text, errors and images through MCP", async () => {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-memory-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+  const wire = JSON.parse(stdout);
+  expect(wire.registered).toEqual([
+    { name: "zoom", description: "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on." },
+    { name: "date", description: "The date and time of message id." },
+  ]);
+  expect(wire.allowed).toEqual(["mcp__memory__zoom", "mcp__memory__date"]);
+  expect(wire.answers).toEqual([
+    { content: [{ type: "text", text: "3,1,0" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], isError: false },
+    { content: [{ type: "text", text: "No line 99+1. Roots: 0+4." }], isError: true },
+    { content: [{ type: "text", text: "date 3" }] },
+  ]);
+});

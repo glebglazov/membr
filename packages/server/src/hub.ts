@@ -4,6 +4,7 @@ import { Log, identity } from "./log.ts";
 import { Chat } from "./chat.ts";
 import { claude, type Engine, type EpochOptions } from "./engine.ts";
 import { Tree } from "./tree.ts";
+import { Memory } from "./memory.ts";
 
 type Connection = { phase: "hello"; tokens: string[] } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -28,6 +29,7 @@ function credentials(request: Request): string[] {
 export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions> }) {
   const log = new Log(options.dir);
   let tree: Tree | undefined;
+  let memory: Memory;
   const token = identity(options.dir, "token");
   const sockets = new Set<Socket>();
   const send = (socket: Socket, event: Event) => socket.send(JSON.stringify(event));
@@ -40,18 +42,14 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
       send(socket, { type: "error", id: request.id, reason: "Agent logs are not available yet" });
       return;
     }
-    if (request.read === "roots") {
-      send(socket, { type: "read", id: request.id, entries: [], parts: tree!.roots() });
+    if (request.read === "roots" || request.read === "root") {
+      const lines = memory.roots();
+      send(socket, { type: "read", id: request.id, entries: [], parts: lines.map(({ l, i }) => ({ l, i })), lines });
       return;
     }
-    const start = request.part.i * 2 ** request.part.l;
-    const end = Math.min(log.count, start + 2 ** request.part.l);
-    const entries = [];
-    for (let i = start; i < end; i++) {
-      const entry = log.read(i);
-      if (entry) entries.push(entry);
-    }
-    send(socket, { type: "read", id: request.id, entries, parts: [] });
+    const opened = memory.browse(request.part);
+    const lines = opened.kind === "message" ? [] : opened.lines;
+    send(socket, { type: "read", id: request.id, entries: opened.kind === "message" ? [opened.entry] : [], parts: lines.map(({ l, i }) => ({ l, i })), lines, ...(opened.kind === "missing" ? { error: opened.reason } : {}) });
   }
   const server = Bun.serve<Connection>({
     hostname: "127.0.0.1",
@@ -103,7 +101,8 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
   let chat: Chat | undefined;
   try {
     tree = new Tree(options.dir, log, options.engine ?? claude);
-    chat = new Chat(log, tree, options.dir, (event) => {
+    memory = new Memory(log, tree, options.dir);
+    chat = new Chat(log, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
     }, options.engine, options.epoch);

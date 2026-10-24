@@ -6,7 +6,9 @@
 // and each later message goes in at its end, so every turn reads the same
 // growing prefix from the prompt cache. A compaction is a separate one-turn
 // call on Haiku, with no tools and none of the user's settings.
-import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
+import type { MemoryTools } from "./memory.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -22,6 +24,7 @@ export type EpochOptions = {
   append: string;
   cwd: string;
   ask?: Ask;
+  memory?: MemoryTools;
 };
 
 // `now` interrupts the running turn; `next` reaches it between tool calls
@@ -172,6 +175,14 @@ function message(text: string, priority: Priority, from: From): SDKUserMessage &
 
 function open(view: string, options: EpochOptions): Epoch {
   const inbox = new Inbox();
+  const memory = options.memory;
+  const mcpServers = memory ? { memory: createSdkMcpServer({ name: "memory", version: "1", tools: [
+    tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
+      const answer = memory.zoom(id, n, at);
+      return { content: [{ type: "text", text: answer.text }, ...answer.images.map((image) => ({ type: "image" as const, ...image }))], isError: answer.error };
+    }, { annotations: { readOnlyHint: true } }),
+    tool("date", "The date and time of message id.", { id: z.number().int() }, async ({ id }) => ({ content: [{ type: "text", text: memory.date(id) }] }), { annotations: { readOnlyHint: true } }),
+  ] }) } : undefined;
   const session = query({
     prompt: inbox,
     options: {
@@ -184,6 +195,8 @@ function open(view: string, options: EpochOptions): Epoch {
       settings: { autoCompactEnabled: false, fastMode: options.pick.fast },
       permissionMode: "auto",
       disallowedTools: ["Agent"],
+      mcpServers,
+      allowedTools: memory ? ["mcp__memory__zoom", "mcp__memory__date"] : [],
       includePartialMessages: true,
       persistSession: true,
       canUseTool: async (tool, input, { signal }) =>

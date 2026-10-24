@@ -77,10 +77,14 @@ async function coverage(hub: Awaited<ReturnType<typeof serve>>, expected: string
   const roots = (await hub.client.wait("read", 0, (event) => event.id === id)).parts;
   const texts: string[] = [];
   const indexes: number[] = [];
-  for (const part of roots) {
+  const pending = [...roots];
+  while (pending.length) {
+    const part = pending.shift()!;
     const zoom = crypto.randomUUID();
     hub.client.read({ type: "read", read: "zoom", id: zoom, part });
-    const entries = (await hub.client.wait("read", 0, (event) => event.id === zoom)).entries;
+    const result = await hub.client.wait("read", 0, (event) => event.id === zoom);
+    pending.unshift(...result.parts);
+    const entries = result.entries;
     indexes.push(...entries.map((entry) => entry.i));
     texts.push(...entries.map((entry) => entry.text));
   }

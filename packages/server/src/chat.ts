@@ -7,6 +7,7 @@ import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
+import type { Memory } from "./memory.ts";
 
 type SummaryWait = { phase: "summaries"; id: number; pending: string[]; halt: AbortController };
 type Turn = SummaryWait | { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closed" };
@@ -25,9 +26,9 @@ export class Chat {
   private options: EpochOptions;
   private picking = Promise.resolve();
 
-  constructor(private readonly log: Log, tree: Tree, dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}) {
+  constructor(private readonly log: Log, tree: Tree, memory: Memory, dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}) {
     this.approvals = new Approvals(log, emit);
-    this.options = { pick: PICK, append: PROMPT, cwd: process.cwd(), ...options, ask: (tool, input, signal) => {
+    this.options = { pick: PICK, append: PROMPT, cwd: process.cwd(), ...options, memory, ask: (tool, input, signal) => {
       if (this.turn.phase === "closed" || this.turn.phase === "failed" || this.turn.phase === "stopping") return Promise.resolve(false);
       return this.approvals.ask(tool, input, signal);
     } };

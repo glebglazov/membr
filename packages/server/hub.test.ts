@@ -73,7 +73,7 @@ test("two clients see one durable entry and simultaneous resends get its first a
   expect(await a.wait("answer", mark)).toEqual(answer);
   expect(records(server.dir)).toHaveLength(1);
   a.read({ type: "read", id: "roots", read: "roots" });
-  expect(await a.wait("read")).toEqual({ type: "read", id: "roots", entries: [], parts: [{ l: 0, i: 0 }] });
+  expect(await a.wait("read")).toEqual({ type: "read", id: "roots", entries: [], parts: [{ l: 0, i: 0 }], lines: [{ l: 0, i: 0, text: "user: " + say.text }] });
   a.read({ type: "read", id: "zoom", read: "zoom", part: { l: 0, i: 0 } });
   expect((await a.wait("read", 0, (event) => event.id === "zoom")).entries).toEqual([first.entry]);
   const index = fs.readFileSync(path.join(server.dir, "main.index"));
@@ -223,5 +223,13 @@ test("recovery uses message indexes when a clock change reverses daily file orde
   const recovered = await connect(after);
   expect(recovered.events.filter((event) => event.type === "entry").map((event) => event.entry.text)).toEqual(["first-day", "second-day"]);
   recovered.read({ type: "read", id: "both", read: "zoom", part: { l: 1, i: 0 } });
-  expect((await recovered.wait("read")).entries.map((entry) => entry.text)).toEqual(["first-day", "second-day"]);
+  const children = await recovered.wait("read");
+  expect(children.parts).toEqual([{ l: 0, i: 0 }, { l: 0, i: 1 }]);
+  const texts: string[] = [];
+  for (const part of children.parts) {
+    const id = `leaf-${part.i}`;
+    recovered.read({ type: "read", id, read: "zoom", part });
+    texts.push(...(await recovered.wait("read", 0, (event) => event.id === id)).entries.map((entry) => entry.text));
+  }
+  expect(texts).toEqual(["first-day", "second-day"]);
 });

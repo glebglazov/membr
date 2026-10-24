@@ -8,6 +8,8 @@ let permission: unknown;
 let signalPassed = false;
 
 mock.module("@anthropic-ai/claude-agent-sdk", () => ({
+  createSdkMcpServer() { throw new Error("No MCP server was scripted"); },
+  tool() { throw new Error("No MCP tool was scripted"); },
   query({ prompt, options }: QueryInput) {
     const call: { permissionMode?: string; messages: WireMessage[] } = { permissionMode: options.permissionMode, messages: [] };
     calls.push(call);
