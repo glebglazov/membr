@@ -42,7 +42,9 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
   }
   function read(socket: Socket, request: Read) {
     if (request.read === "agent") {
-      send(socket, { type: "error", id: request.id, reason: "Agent logs are not available yet" });
+      const agent = chat!.agents.read(request.name);
+      if (agent) send(socket, { type: "read", id: request.id, entries: agent.entries, live: agent.live, parts: [], lines: [] });
+      else send(socket, { type: "error", id: request.id, reason: "No agent " + request.name + "." });
       return;
     }
     if (request.read === "roots" || request.read === "root") {

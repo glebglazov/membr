@@ -75,3 +75,21 @@ test("the Engine registers zoom and date and sends their text, errors and images
     { content: [{ type: "text", text: "date 3" }] },
   ]);
 });
+
+test("main MCP registers spawn and tell while child input stays synthetic", async () => {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-agents-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+  const wire = JSON.parse(stdout);
+  expect(wire.calls[0].tools.slice(2)).toEqual([
+    { name: "spawn", description: "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task." },
+    { name: "tell", description: "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\"." },
+  ]);
+  expect(wire.calls[0].allowed).toEqual(["mcp__memory__zoom", "mcp__memory__date", "mcp__memory__spawn", "mcp__memory__tell"]);
+  expect(wire.calls[1].tools.map((tool: { name: string }) => tool.name)).toEqual(["zoom", "date"]);
+  expect(wire.delegated).toEqual([{ tasks: ["Task"], effort: "high" }, { name: "Agent1", message: "More" }]);
+  expect(wire.answers).toEqual([{ content: [{ type: "text", text: "Started Agent1." }] }, { content: [{ type: "text", text: "Sent." }] }]);
+  expect(wire.calls[1].messages.map((message: { isSynthetic: boolean; message: { content: string } }) => [message.isSynthetic, message.message.content])).toEqual([
+    [true, "[membr]\nview and saved agent chat"], [true, "[membr]\nAgent task"], [true, "[membr]\nAgent correction"],
+  ]);
+});

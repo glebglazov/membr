@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Entry, Part, MemoryLine } from "@membr/protocol";
 import type { Log } from "./log.ts";
+import type { Agents } from "./agents.ts";
 import type { Tree } from "./tree.ts";
 
 export type ToolAnswer = { text: string; error: boolean; images: Array<{ data: string; mimeType: string }> };
@@ -33,6 +34,7 @@ function page(text: string, at: number): string {
 }
 
 export class Memory implements MemoryTools {
+  agents?: Agents;
   constructor(private readonly log: Log, private readonly tree: Tree, private readonly dir: string) {}
 
   roots(): MemoryLine[] {
@@ -48,9 +50,13 @@ export class Memory implements MemoryTools {
   browse(part: Part): Opened { return this.open(part.i * 2 ** part.l, 2 ** part.l); }
 
   zoom(id: number | string, n = 1, at = 0): ToolAnswer {
+    if (!Number.isSafeInteger(at) || at < 0) return { text: "Invalid character offset " + at + ".", error: true, images: [] };
+    if (typeof id === "string" && /^[A-Za-z]/.test(id)) {
+      const agent = this.agents?.read(id);
+      return { text: agent ? page(agent.entries.map((entry) => `${entry.i}|${entry.kind}: ${entry.text}`).join("\n\n"), at) : "No agent " + id + ".", error: !agent, images: [] };
+    }
     const opened = this.open(typeof id === "string" && id.trim() === "" ? NaN : Number(id), n);
     if (opened.kind === "missing") return { text: opened.reason, error: true, images: [] };
-    if (!Number.isSafeInteger(at) || at < 0) return { text: "Invalid character offset " + at + ".", error: true, images: [] };
     if (opened.kind === "lines") return { text: opened.lines.map(line).join("\n"), error: false, images: [] };
     const entry = opened.entry;
     const names = at === 0 ? entry.images ?? [] : [];

@@ -37,6 +37,7 @@ export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }
   | { type: "entry"; entry: Entry }
+  | { type: "agent-entry"; name: string; entry: Entry }
   | { type: "live"; text: string; agent: string | null }
   | { type: "view"; parts: Part[] }
   | { type: "ask"; id: string; tool: string; input: Record<string, unknown> }
@@ -44,7 +45,7 @@ export type Event =
   | { type: "approval"; id: string; tool: string; input: Record<string, unknown> }
   | { type: "state"; state: State }
   | Answer
-  | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; error?: string }
+  | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; live?: string; error?: string }
   | { type: "error"; id: string | null; reason: string };
 export type ClientMessage = Hello | Act | Read;
 
@@ -145,6 +146,7 @@ export function parseEvent(value: unknown): Event {
     case "ready": return { type: "ready", version: version(v.version) };
     case "refused": return { type: "refused", reason: string(v.reason) };
     case "entry": return { type: "entry", entry: parseEntry(v.entry) };
+    case "agent-entry": return { type: "agent-entry", name: id(v.name), entry: parseEntry(v.entry) };
     case "live": return { type: "live", text: string(v.text), agent: nullable(v.agent, string) };
     case "view": return { type: "view", parts: list(v.parts, part) };
     case "ask": return { type: "ask", id: id(v.id), tool: id(v.tool), input: object(v.input) };
@@ -154,7 +156,7 @@ export function parseEvent(value: unknown): Event {
       return boolean(v.ok)
         ? { type: "answer", id: id(v.id), ok: true, entry: nullable(v.entry, integer) }
         : { type: "answer", id: id(v.id), ok: false, reason: string(v.reason) };
-    case "read": return { type: "read", id: id(v.id), entries: list(v.entries, parseEntry), parts: list(v.parts, part), lines: list(v.lines, (value) => { const v = object(value); return { ...part(v), text: string(v.text) }; }), ...(v.error === undefined ? {} : { error: string(v.error) }) };
+    case "read": return { type: "read", id: id(v.id), entries: list(v.entries, parseEntry), parts: list(v.parts, part), lines: list(v.lines, (value) => { const v = object(value); return { ...part(v), text: string(v.text) }; }), ...(v.live === undefined ? {} : { live: string(v.live) }), ...(v.error === undefined ? {} : { error: string(v.error) }) };
     case "error": return { type: "error", id: nullable(v.id, id), reason: string(v.reason) };
     case "state": {
       const s = object(v.state);

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { type Act, type Answer, type Entry, type Event, type Pick, type State } from "@membr/protocol";
 import { claude, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
+import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
@@ -22,6 +23,7 @@ const GOAL_NO = "The goal isn't satisfied yet: keep working.";
 
 export class Chat {
   private readonly approvals: Approvals;
+  readonly agents: Agents;
   private readonly view: View;
   private turn: Turn = { phase: "idle" };
   private session: Session;
@@ -41,6 +43,12 @@ export class Chat {
     for (const turn of log.interrupted) log.finish(turn, "The server restarted before the turn ended.");
     this.view = new View(dir, log, tree, this.options.pick);
     this.options.pick = this.view.pick;
+    this.agents = new Agents(dir, engine, () => this.options, () => this.view.text(), this.approvals.ask, emit, () => this.change(), (text, stopped) => this.report(text, stopped));
+    memory.agents = this.agents;
+    this.options.agents = {
+      spawn: (tasks, effort) => { this.canDelegate(); return this.agents.spawn(tasks, effort); },
+      tell: (name, message) => { this.canDelegate(); return this.agents.tell(name, message); },
+    };
     tree.sync();
     this.session = this.open();
     void this.read(this.session);
@@ -51,15 +59,19 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: [], usage: this.usage };
+    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, usage: this.usage };
   }
 
   act(act: Act): Answer {
     const refusal = this.turn.phase === "closed" || this.turn.phase === "closing" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
     const id = this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" ? this.turn.id : this.log.count;
     if (act.act === "answer") return this.approvals.answer(act, id, refusal);
-    const result = this.log.apply(act, id, refusal);
+    const result = this.log.apply(act, id, refusal ?? (act.act === "stop" && act.agent !== null && !this.agents.has(act.agent) ? "No agent " + act.agent + "." : undefined));
     if (!result.fresh || !result.answer.ok) return result.answer;
+    if (act.act === "stop") {
+      this.agents.stop(act.agent);
+      if (act.agent !== null) return result.answer;
+    }
     if ((act.act === "say" || act.act === "goal" || act.act === "stop") && this.turn.phase === "checking") {
       this.turn.halt.abort();
       this.turn = { phase: "idle" };
@@ -108,6 +120,7 @@ export class Chat {
     if (this.turn.phase === "summaries") this.turn.halt.abort();
     if (this.turn.phase === "checking") this.turn.halt.abort();
     this.turn = { phase: "closing" };
+    this.agents.close();
     this.approvals.cancel();
     this.session.epoch.close();
     this.afterQueue = this.afterQueue.then(() => { this.turn = { phase: "closed" }; });
@@ -132,9 +145,9 @@ export class Chat {
       return;
     }
     const priority = this.turn.phase === "running" ? "next" : "now";
-    this.turn = { phase: "running", id };
+    this.turn = { phase: "running", id: this.turn.phase === "running" ? this.turn.id : id };
     this.change();
-    this.sent = this.session.epoch.send(input.text, priority, input.from);
+    this.sent = this.session.epoch.send(this.inputText(input.text), priority, input.from);
   }
 
   private async rotate(wait: SummaryWait): Promise<void> {
@@ -147,11 +160,32 @@ export class Chat {
       void this.read(this.session);
       this.emit({ type: "view", parts: this.view.parts });
       this.turn = { phase: "running", id: wait.id };
-      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(input.text, i === 0 ? "now" : "next", input.from);
+      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(this.inputText(input.text), i === 0 ? "now" : "next", input.from);
       this.change();
     } catch (error) {
       if (!wait.halt.signal.aborted) this.fail(error);
     }
+  }
+
+  private canDelegate(): void {
+    if (this.turn.phase === "stopping" || this.turn.phase === "closing" || this.turn.phase === "closed" || this.turn.phase === "failed") throw new Error("The chat cannot start agent work now");
+  }
+
+  private inputText(text: string): string {
+    const names = this.agents.active;
+    return names.length ? text + "\n\nAgents at work now: " + names.join(", ") + "." : text;
+  }
+
+  private report(text: string, stopped: boolean): void {
+    if (this.turn.phase === "closing" || this.turn.phase === "closed") return;
+    try {
+      if (!stopped && this.turn.phase === "checking") { this.turn.halt.abort(); this.turn = { phase: "idle" }; }
+      const deliver = !stopped && (this.turn.phase === "idle" || this.turn.phase === "running" || this.turn.phase === "summaries");
+      const id = this.turn.phase === "running" || this.turn.phase === "summaries" ? this.turn.id : this.log.count;
+      const entry = this.log.work(text, deliver ? id : null);
+      this.record(entry);
+      if (deliver) this.start({ text, from: "membr" }, id);
+    } catch (error) { this.fail(error); }
   }
 
   private record(entry: Entry): void {
@@ -247,6 +281,7 @@ export class Chat {
     if (turn.phase === "summaries") turn.halt.abort();
     if (turn.phase === "checking") turn.halt.abort();
     this.turn = { phase: "failed", reason };
+    this.agents.close();
     this.approvals.cancel();
     this.session.epoch.close();
     try {
