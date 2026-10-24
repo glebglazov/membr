@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { type Act, type Answer, type Event, type Pick, type State } from "@membr/protocol";
 import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
+import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 
 type Turn = { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closed" };
@@ -12,6 +13,7 @@ const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
 const PROMPT = fs.readFileSync(new URL("./prompt.txt", import.meta.url), "utf8");
 
 export class Chat {
+  private readonly approvals: Approvals;
   private turn: Turn = { phase: "idle" };
   private session: Session;
   private usage: State["usage"] = null;
@@ -20,12 +22,18 @@ export class Chat {
   private picking = Promise.resolve();
 
   constructor(private readonly log: Log, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}) {
-    this.options = { pick: PICK, append: PROMPT, cwd: process.cwd(), ...options };
+    this.approvals = new Approvals(log, emit);
+    this.options = { pick: PICK, append: PROMPT, cwd: process.cwd(), ...options, ask: (tool, input, signal) => {
+      if (this.turn.phase === "closed" || this.turn.phase === "failed" || this.turn.phase === "stopping") return Promise.resolve(false);
+      return this.approvals.ask(tool, input, signal);
+    } };
     if (log.pick) this.options.pick = log.pick;
     for (const turn of log.interrupted) log.finish(turn, "The server restarted before the turn ended.");
     this.session = this.open();
     void this.read(this.session);
   }
+
+  get asks() { return this.approvals.requests; }
 
   get state(): State {
     return { busy: this.turn.phase === "running" || this.turn.phase === "stopping", wait: this.turn.phase === "stopping" ? "Stopping" : "", goal: null, pick: this.options.pick, agents: [], usage: this.usage };
@@ -34,6 +42,7 @@ export class Chat {
   act(act: Act): Answer {
     const refusal = this.turn.phase === "closed" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
     const id = this.turn.phase === "running" || this.turn.phase === "stopping" ? this.turn.id : this.log.count;
+    if (act.act === "answer") return this.approvals.answer(act, id, refusal);
     const result = this.log.apply(act, id, refusal);
     if (!result.fresh || !result.answer.ok) return result.answer;
     if (result.entry) this.emit({ type: "entry", entry: result.entry });
@@ -44,6 +53,7 @@ export class Chat {
       try { this.sent = this.session.epoch.send(act.text, priority, "user"); } catch (error) { this.fail(error); }
     } else if (act.act === "stop" && this.turn.phase === "running") {
       this.turn = { phase: "stopping", id };
+      this.approvals.cancel();
       this.change();
       void this.stop(this.session, id);
     } else if (act.act === "pick") {
@@ -62,6 +72,7 @@ export class Chat {
 
   close(): void {
     this.turn = { phase: "closed" };
+    this.approvals.cancel();
     this.session.epoch.close();
   }
 
@@ -116,6 +127,7 @@ export class Chat {
     const reason = error instanceof Error ? error.message : "The Engine failed";
     const turn = this.turn;
     this.turn = { phase: "failed", reason };
+    this.approvals.cancel();
     this.session.epoch.close();
     try {
       if (turn.phase === "running" || turn.phase === "stopping") {

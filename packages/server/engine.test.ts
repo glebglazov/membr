@@ -22,3 +22,21 @@ test("only the Engine imports the Agent SDK", () => {
   }
   expect(importers).toEqual(["packages/server/src/engine.ts"]);
 });
+
+test("every injected SDK message is synthetic and prefixed while typed user text stays plain", async () => {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+  const wire = JSON.parse(stdout);
+  expect(wire.calls[0].permissionMode).toBe("auto");
+  expect(wire.permission).toEqual({ behavior: "allow", updatedInput: { command: "echo hello" } });
+  expect(wire.signalPassed).toBe(true);
+  const messages = wire.calls.flatMap((call: { messages: unknown[] }) => call.messages);
+  expect(messages.map((message: { isSynthetic: boolean; message: { content: string } }) => ({ synthetic: message.isSynthetic, text: message.message.content }))).toEqual([
+    { synthetic: true, text: "[membr]\nchat view" },
+    { synthetic: true, text: "[membr]\n[Agent] report" },
+    { synthetic: true, text: "[membr]\ngoal check" },
+    { synthetic: false, text: "The user typed this" },
+    { synthetic: true, text: "[membr]\ncompaction input" },
+  ]);
+});

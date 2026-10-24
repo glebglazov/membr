@@ -80,6 +80,7 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
               if (entry) send(socket, { type: "entry", entry });
             }
             sockets.add(socket);
+            for (const ask of chat.asks) send(socket, ask);
             send(socket, { type: "state", state: chat.state });
             send(socket, { type: "ready", version: VERSION });
             return;

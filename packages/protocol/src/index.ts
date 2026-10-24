@@ -37,6 +37,8 @@ export type Event =
   | { type: "entry"; entry: Entry }
   | { type: "live"; text: string; agent: string | null }
   | { type: "view"; parts: Part[] }
+  | { type: "ask"; id: string; tool: string; input: Record<string, unknown> }
+  | { type: "ask-closed"; id: string }
   | { type: "approval"; id: string; tool: string; input: Record<string, unknown> }
   | { type: "state"; state: State }
   | Answer
@@ -142,6 +144,8 @@ export function parseEvent(value: unknown): Event {
     case "entry": return { type: "entry", entry: parseEntry(v.entry) };
     case "live": return { type: "live", text: string(v.text), agent: nullable(v.agent, string) };
     case "view": return { type: "view", parts: list(v.parts, part) };
+    case "ask": return { type: "ask", id: id(v.id), tool: id(v.tool), input: object(v.input) };
+    case "ask-closed": return { type: "ask-closed", id: id(v.id) };
     case "approval": return { type: "approval", id: id(v.id), tool: id(v.tool), input: object(v.input) };
     case "answer":
       return boolean(v.ok)

@@ -9,7 +9,8 @@ const SLOT = 16;
 const DAY = 86_400_000;
 type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
-type Record = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick };
+export type AllowRule = { tool: string; input: Record<string, unknown> };
+type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; allow?: AllowRule };
 type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
@@ -46,6 +47,7 @@ export class Log {
   private readonly finished = new Set<number>();
   private readonly events = new Set<string>();
   private failure: unknown;
+  private readonly allowed: AllowRule[] = [];
   private savedPick: SavedPick | null = null;
 
   constructor(private readonly dir: string) {
@@ -66,6 +68,12 @@ export class Log {
             const ans = parseEvent(raw.ans);
             if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
             this.answers.set(raw.act, ans);
+            if ("allow" in raw) {
+              const allow = raw.allow;
+              if (!ans.ok || allow === null || typeof allow !== "object" || !("tool" in allow) || !("input" in allow)) throw new Error(`Invalid allow rule in ${file}`);
+              const parsed = parseEvent({ type: "ask", id: raw.act, tool: allow.tool, input: allow.input });
+              if (parsed.type === "ask") this.allowed.push({ tool: parsed.tool, input: parsed.input });
+            }
             if ("pick" in raw) {
               const pick = raw.pick;
               if (!ans.ok || pick === null || typeof pick !== "object" || !("revision" in pick) || typeof pick.revision !== "number" || !Number.isSafeInteger(pick.revision) || pick.revision < 1 || !("value" in pick)) throw new Error(`Invalid pick in ${file}`);
@@ -102,6 +110,7 @@ export class Log {
   }
 
   get count(): number { return this.locations.length; }
+  get allows(): readonly AllowRule[] { return this.allowed; }
   get pick(): Pick | null { return this.savedPick?.value ?? null; }
 
   read(i: number): Entry | null {
@@ -117,7 +126,7 @@ export class Log {
 
   get interrupted(): number[] { return [...this.started].filter((id) => !this.finished.has(id)); }
 
-  apply(act: Act, turn: number, refusal?: string): { answer: Answer; entry: Entry | null; fresh: boolean } {
+  apply(act: Act, turn: number, refusal?: string, approval?: AllowRule): { answer: Answer; entry: Entry | null; fresh: boolean } {
     if (this.failure) throw this.failure;
     const previous = this.answers.get(act.id);
     if (previous) return { answer: previous, entry: null, fresh: false };
@@ -125,10 +134,12 @@ export class Log {
       ? this.entry("user", act.text, act.images)
       : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.") : null;
     const pick = !refusal && act.act === "pick" ? { revision: (this.savedPick?.revision ?? 0) + 1, value: act.pick } : undefined;
-    const answer: Answer = entry || pick
+    const approved = !refusal && act.act === "answer" && approval !== undefined;
+    const allow = approved && act.act === "answer" && act.choice === "always" ? approval : undefined;
+    const answer: Answer = entry || pick || approved
       ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
       : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
-    this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
+    this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(allow ? { allow } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
     return { answer, entry, fresh: true };
   }
 
@@ -160,7 +171,7 @@ export class Log {
     return { i: this.count, kind, text, date: new Date().toISOString(), from: { machine: this.machine, seq: this.seq }, ...(images === undefined ? {} : { images }) };
   }
 
-  private write(record: Record): void {
+  private write(record: LogRecord): void {
     if (this.failure) throw this.failure;
     const date = record.date ?? new Date().toISOString();
     const entry = record.i === undefined ? null : parseEntry(record);
@@ -179,6 +190,7 @@ export class Log {
       if ("act" in record) this.answers.set(record.act, record.ans);
       else this.events.add(record.event);
       if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
+      if (record.allow) this.allowed.push(record.allow);
       if (record.pick) this.savedPick = record.pick;
       if (entry) {
         const index = fs.openSync(path.join(this.dir, "main.index"), "r+");

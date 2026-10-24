@@ -14,7 +14,7 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type Pick = { model: string; effort: Effort; fast: boolean };
 
 // asks the user about a tool call that auto mode cannot decide: true allows it
-export type Ask = (tool: string, input: Record<string, unknown>) => Promise<boolean>;
+export type Ask = (tool: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
 
 export type EpochOptions = {
   pick: Pick;
@@ -163,7 +163,7 @@ function message(text: string, priority: Priority, from: From): SDKUserMessage &
   return {
     type: "user",
     uuid: crypto.randomUUID(),
-    message: { role: "user", content: text },
+    message: { role: "user", content: from === "membr" ? `[membr]\n${text}` : text },
     parent_tool_use_id: null,
     priority,
     isSynthetic: from === "membr",
@@ -186,8 +186,8 @@ function open(view: string, options: EpochOptions): Epoch {
       disallowedTools: ["Agent"],
       includePartialMessages: true,
       persistSession: true,
-      canUseTool: async (tool, input) =>
-        (await options.ask?.(tool, input))
+      canUseTool: async (tool, input, { signal }) =>
+        (await options.ask?.(tool, input, signal))
           ? { behavior: "allow", updatedInput: input }
           : { behavior: "deny", message: "The user did not allow this tool call." },
     },
@@ -340,8 +340,11 @@ function textOf(content: unknown): string {
 }
 
 async function compact(prompt: string): Promise<string | null> {
+  const inbox = new Inbox();
+  inbox.push(message(prompt, "next", "membr"));
+  inbox.end();
   const session = query({
-    prompt,
+    prompt: inbox,
     options: {
       env: env(),
       model: "haiku",
