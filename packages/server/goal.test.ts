@@ -72,12 +72,26 @@ test("halt during a turn logs one note and prevents a further turn", async () =>
   await act(hub.client, "goal", "goal", "Keep working");
   await act(hub.client, "start", "say", "Begin");
   await act(hub.client, "halt", "goal", null);
+  await act(hub.client, "halt-again", "goal", null);
   const mark = hub.client.events.length;
   hub.engine.epochs[0].emit(END);
   await hub.client.wait("state", mark, (event) => !event.state.busy && event.state.goal === null);
   expect(hub.engine.checks).toHaveLength(0);
   expect(hub.engine.epochs[0].messages).toHaveLength(1);
   expect(entries(hub.client).filter((entry) => entry.kind === "note").map((entry) => entry.text)).toEqual(["Goal halted by the user."]);
+});
+
+test("halt without a goal adds no note, including after restart", async () => {
+  const before = await serve();
+  await act(before.client, "halt", "goal", null);
+  await act(before.client, "halt-again", "goal", null);
+  expect(entries(before.client)).toEqual([]);
+  await before.close();
+  const after = await serve(new FakeEngine(), before.dir);
+  await act(after.client, "halt-after-restart", "goal", null);
+  expect(entries(after.client)).toEqual([]);
+  expect(after.engine.epochs[0].messages).toEqual([]);
+  expect((await after.client.wait("state")).state.goal).toBe(null);
 });
 
 test("stop during a goal turn does not start a goal check", async () => {

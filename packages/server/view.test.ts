@@ -145,14 +145,22 @@ test("restart keeps placeholders, pick and goal in the saved view", async () => 
   before.client.act({ type: "act", act: "pick", id: "pick", pick });
   await before.client.wait("answer", 0, (event) => event.id === "pick");
   expect(saved(before.dir).pick).toEqual(pick);
-  expect(saved(before.dir).goal).toBe(null);
+  before.client.act({ type: "act", act: "goal", id: "goal", text: "Keep the saved view" });
+  await before.client.wait("answer", 0, (event) => event.id === "goal");
+  expect(saved(before.dir).goal).toBe("Keep the saved view");
+  held.resolve("The tree summary is complete.");
+  const treeDir = path.join(before.dir, "tree");
+  for (let attempt = 0; attempt < 100 && fs.readdirSync(treeDir).length === 0; attempt++) await Bun.sleep(10);
+  const summaries = fs.readdirSync(treeDir).map((file) => fs.readFileSync(path.join(treeDir, file), "utf8"));
+  expect(summaries.join("\n")).toContain("The tree summary is complete.");
+  expect(saved(before.dir).lines[0].text).toBe("(not summarized yet: zoom it)");
   const bytes = fs.readFileSync(path.join(before.dir, "view.json"));
-  before.close();
+  await before.close();
   const after = await serve(new FakeEngine(), before.dir);
   expect(fs.readFileSync(path.join(before.dir, "view.json"))).toEqual(bytes);
   expect(after.engine.epochs[0].view).toContain("0+1|(not summarized yet: zoom it)");
   expect(after.engine.epochs[0].options.pick).toEqual(pick);
-  held.resolve("old summary");
+  expect((await after.client.wait("state")).state.goal).toBe("Keep the saved view");
 });
 
 async function waitingBatch() {

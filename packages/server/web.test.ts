@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { parseEntry, type MemoryLine } from "@membr/protocol";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,20 +70,60 @@ test("loopback opens the page and socket without a token", async () => {
   expect((await fetch(hub.url, { headers: { Cookie: "token=wrong" } })).status).toBe(401);
 });
 
-test("the export JSON matches the saved chat and memory", async () => {
+test("an empty export has no messages or summaries", async () => {
   const hub = start();
+  const value = await (await fetch(new URL("/export", hub.server.url))).json();
+  expect(value).toMatchObject({ messages: [], lines: [], goal: null, pick: { model: "sonnet", effort: "high", fast: false } });
+});
+
+test("the export JSON matches every saved message and summary before and after restart", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-export-"));
+  dirs.push(dir);
+  await seedMemory(dir, 8);
+  const compact = Promise.withResolvers<string>();
+  const engine = new FakeEngine((epoch) => epoch.emit(
+    { kind: "text", text: "A long reply. ".repeat(100) },
+    { kind: "tool", id: "export-tool", name: "Read", input: { file_path: "/example" } },
+    { kind: "echo", id: "export-tool", text: "Saved tool result.", error: false }, END,
+  ));
+  engine.compact = () => compact.promise;
+  const hub = serveHub({ dir, port: 0, engine });
+  hubs.push(hub);
   const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
   clients.push(client);
   await client.wait("ready");
-  client.act({ type: "act", act: "say", id: "export-message", text: "Keep this in the export." });
-  const saved = await client.wait("entry", 0, (event) => event.entry.text === "Keep this in the export.");
+  const mark = client.events.length;
+  client.act({ type: "act", act: "say", id: "export-message", text: "Keep all of this in the export. ".repeat(100) });
+  await client.wait("state", mark, (event) => !event.state.busy);
+  const records = (folder: string) => fs.readdirSync(path.join(dir, folder)).filter((name) => name.endsWith(".jsonl")).sort()
+    .flatMap((name) => fs.readFileSync(path.join(dir, folder, name), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)));
+  const messages = records("main").filter((record) => "i" in record).map(parseEntry);
+  expect(messages).toHaveLength(12);
+  const savedLines = () => records("tree").map(({ l, i, text }): MemoryLine => ({ l, i, text })).sort((a, b) => a.l - b.l || a.i - b.i);
+  const pending = await (await fetch(new URL("/export", hub.server.url))).json();
+  expect(pending.messages).toEqual(messages);
+  expect(pending.lines).toEqual(savedLines());
+  expect(pending.view).toContain("(not summarized yet: zoom it)");
+  compact.resolve("A completed export summary.");
+  const deadline = Date.now() + 3000;
+  while (savedLines().length !== 22) {
+    if (Date.now() > deadline) throw new Error("The export summaries did not finish.");
+    await Bun.sleep(5);
+  }
   const response = await fetch(new URL("/export", hub.server.url));
   expect(response.headers.get("content-disposition")).toContain("membr-memory.json");
   const value = await response.json();
-  expect(value.messages).toContainEqual(saved.entry);
-  expect(value.lines).toContainEqual(expect.objectContaining({ text: "user: Keep this in the export." }));
-  expect(value).toMatchObject({ goal: null, pick: { model: "sonnet", effort: "high", fast: false } });
-  expect(value.view).toContain("<chat>");
+  expect(value.messages).toEqual(messages);
+  expect(value.lines).toEqual(savedLines());
+  expect(value.lines.some((line: MemoryLine) => line.l === 3)).toBe(true);
+  expect(value.lines.some((line: MemoryLine) => line.text.includes("not summarized yet"))).toBe(false);
+  expect(value).toMatchObject({ goal: null, pick: { model: "sonnet", effort: "low", fast: false } });
+  expect(value.view).toBe(pending.view);
+  await hub.close();
+  hubs.splice(hubs.indexOf(hub), 1);
+  const restarted = serveHub({ dir, port: 0, engine: new FakeEngine() });
+  hubs.push(restarted);
+  expect(await (await fetch(new URL("/export", restarted.server.url))).json()).toEqual(value);
 });
 
 test("a non-loopback request needs a token and the sign-in link sets a reusable cookie", async () => {

@@ -228,32 +228,36 @@ for (const [source, fixture, expected] of [
   ["claude.ai", "claude-ai", ["user: Claude website question\n[file notes.txt]", "assistant: Claude website answer", 'tool: search {"query":"membr"}', "echo: Found membr"]],
   ["chatgpt", "chatgpt", ["user: ChatGPT website question\n[image]", "tool: browser Search membr", "echo: Search result", "assistant: ChatGPT website answer"]],
 ] as const) {
-  test(`S1 imports the ${source} conversations fixture with dates and durable identity`, async () => {
-    const file = path.join(import.meta.dir, "test", "fixtures", fixture + ".json");
-    const input: ImportInput = { source, path: "conversations.json", files: [{ name: "conversations.json", text: fs.readFileSync(file, "utf8") }] };
-    const first = await serve(new Compactor());
-    expect(await plan(first.client, input)).toEqual({ sessions: 1, messages: 4, compactions: 0 });
-    expect(entries(first.client)).toEqual([]);
-    await act(first.client, { type: "act", act: "import", id: "website", ...input });
-    await complete(first.client, "website");
-    const saved = entries(first.client);
-    expect(saved[0].kind).toBe("note");
-    expect(saved.slice(1).map((entry) => entry.text)).toEqual([...expected]);
-    expect(saved.slice(1).map((entry) => entry.date)).toEqual(source === "claude.ai" ? ["2026-10-01T12:00:01.000Z", ...Array(3).fill("2026-10-01T12:00:02.000Z")] : [...Array(3).fill("2026-10-01T12:00:01.000Z"), "2026-10-01T12:00:02.000Z"]);
-    await first.hub.close();
-    const next = await serve(new Compactor(), first.dir);
-    expect(await plan(next.client, { source, path: file })).toEqual({ sessions: 0, messages: 0, compactions: 0 });
-    const chats = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (source === "claude.ai") chats[0].chat_messages.push({ uuid: "new-same-time", sender: "assistant", created_at: "2026-10-01T12:00:02Z", text: "New website answer" });
-    else {
-      chats[0].mapping.new = { parent: "a", message: { id: "new-same-time", author: { role: "assistant" }, recipient: "all", create_time: 1790856002, content: { content_type: "text", parts: ["New website answer"] } } };
-      chats[0].current_node = "new";
-    }
-    const updated: ImportInput = { source, path: "renamed.json", files: [{ name: "renamed.json", text: JSON.stringify(chats) }] };
-    expect((await plan(next.client, updated)).messages).toBe(1);
-    await act(next.client, { type: "act", act: "import", id: "website-new", ...updated });
-    expect(entries(next.client).slice(5).map((entry) => entry.text)).toEqual(["assistant: New website answer"]);
-  });
+  for (const format of ["payload", "json", "zip", ...(source === "chatgpt" ? ["zip64"] : [])]) {
+    test(`S1 imports the ${source} ${format} conversations fixture with dates and durable identity`, async () => {
+      const file = path.join(import.meta.dir, "test", "fixtures", fixture + ".json");
+      const input: ImportInput = format === "payload"
+        ? { source, path: "conversations.json", files: [{ name: "conversations.json", text: fs.readFileSync(file, "utf8") }] }
+        : { source, path: path.join(import.meta.dir, "test", "fixtures", fixture + (format === "zip64" ? "-zip64.zip" : "." + format)) };
+      const first = await serve(new Compactor());
+      expect(await plan(first.client, input)).toEqual({ sessions: 1, messages: 4, compactions: 0 });
+      expect(entries(first.client)).toEqual([]);
+      await act(first.client, { type: "act", act: "import", id: "website", ...input });
+      await complete(first.client, "website");
+      const saved = entries(first.client);
+      expect(saved[0].kind).toBe("note");
+      expect(saved.slice(1).map((entry) => entry.text)).toEqual([...expected]);
+      expect(saved.slice(1).map((entry) => entry.date)).toEqual(source === "claude.ai" ? ["2026-10-01T12:00:01.000Z", ...Array(3).fill("2026-10-01T12:00:02.000Z")] : [...Array(3).fill("2026-10-01T12:00:01.000Z"), "2026-10-01T12:00:02.000Z"]);
+      await first.hub.close();
+      const next = await serve(new Compactor(), first.dir);
+      expect(await plan(next.client, { source, path: file })).toEqual({ sessions: 0, messages: 0, compactions: 0 });
+      const chats = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (source === "claude.ai") chats[0].chat_messages.push({ uuid: "new-same-time", sender: "assistant", created_at: "2026-10-01T12:00:02Z", text: "New website answer" });
+      else {
+        chats[0].mapping.new = { parent: "a", message: { id: "new-same-time", author: { role: "assistant" }, recipient: "all", create_time: 1790856002, content: { content_type: "text", parts: ["New website answer"] } } };
+        chats[0].current_node = "new";
+      }
+      const updated: ImportInput = { source, path: "renamed.json", files: [{ name: "renamed.json", text: JSON.stringify(chats) }] };
+      expect((await plan(next.client, updated)).messages).toBe(1);
+      await act(next.client, { type: "act", act: "import", id: "website-new", ...updated });
+      expect(entries(next.client).slice(5).map((entry) => entry.text)).toEqual(["assistant: New website answer"]);
+    });
+  }
 }
 
 test("S1 rejects invalid website exports and cyclic ChatGPT trees before writing", async () => {

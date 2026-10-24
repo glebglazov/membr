@@ -36,7 +36,7 @@ export class Chat {
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
 
-  constructor(private readonly log: Log, tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
+  constructor(private readonly log: Log, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
     this.approvals = new Approvals(log, emit);
     this.options = { pick: PICK, cwd: process.cwd(), ...options, append: (options.append ?? PROMPT) + (config.rulesText ? "\n\n" + config.rulesText : ""), memory, ask: (tool, input, signal) => {
       if (this.closed || this.turn.phase === "failed" || this.turn.phase === "stopping") return Promise.resolve(false);
@@ -62,7 +62,7 @@ export class Chat {
   get activeEpoch() { return this.session.id; }
 
   export() {
-    return { messages: this.log.entries, lines: this.view.summaries, view: this.view.text(), goal: this.view.goal, pick: this.view.pick };
+    return { messages: this.log.entries, lines: this.tree.dump(), view: this.view.text(), goal: this.view.goal, pick: this.view.pick };
   }
 
   viewEvent(lines = this.view.summaries): Extract<Event, { type: "view" }> {

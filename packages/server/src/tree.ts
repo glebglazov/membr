@@ -103,6 +103,18 @@ export class Tree {
 
   roots(): Part[] { return this.cover(this.log.count); }
 
+  dump(): MemoryLine[] {
+    const lines: MemoryLine[] = [];
+    for (let l = 0; 2 ** l <= this.log.count; l++) {
+      for (let i = 0; (i + 1) * 2 ** l <= this.log.count; i++) {
+        const part = { l, i };
+        const text = this.read(part);
+        if (text !== null) lines.push({ ...part, text });
+      }
+    }
+    return lines;
+  }
+
   private cover(count: number): Part[] {
     const parts: Part[] = [];
     const down = (part: Part): void => {

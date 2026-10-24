@@ -7,6 +7,7 @@ import os from "node:os";
 import type { Act, Answer, Entry, Event, ImportEstimate, ImportFile, ImportInput, ImportSource, ImportStatus } from "@membr/protocol";
 import type { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
+import { readExport } from "../../web/src/export.ts";
 
 type Message = { id: string; text: string; date: string };
 type Session = { id: string; name: string; messages: Message[] };
@@ -147,9 +148,9 @@ function exported(file: ImportFile, source: "claude.ai" | "chatgpt"): Session[] 
 async function files(input: ImportInput): Promise<ImportFile[]> {
   if (input.source === "claude.ai" || input.source === "chatgpt") {
     if (input.files) return input.files;
-    if (!input.path) throw new Error("Choose a conversations JSON file.");
+    if (!input.path) throw new Error("Choose a conversations JSON or ZIP file.");
     const name = input.path.startsWith("~/") ? path.join(os.homedir(), input.path.slice(2)) : path.resolve(input.path);
-    return [{ name, text: await fs.readFile(name, "utf8") }];
+    return [{ name, text: await readExport(Bun.file(name)) }];
   }
   const accepted = (name: string) => name.endsWith(".jsonl") && !name.split(/[\\/]/).includes("subagents");
   if (input.files) return input.files.filter((file) => accepted(file.name));

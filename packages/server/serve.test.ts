@@ -10,6 +10,7 @@ const dirs: string[] = [];
 
 function directory() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-"));
+  fs.writeFileSync(path.join(dir, "fake-claude"), '#!/bin/sh\nprintf "called\\n" >> "$MEMBR_DIR/cli-calls"\nexit 1\n', { mode: 0o755 });
   dirs.push(dir);
   return dir;
 }
@@ -24,7 +25,7 @@ afterEach(async () => {
 
 function serve(dir: string, command = ["bun", MAIN]) {
   const proc = Bun.spawn([...command, "serve", "--port", "0"], {
-    env: { ...process.env, MEMBR_DIR: dir },
+    env: { ...process.env, MEMBR_DIR: dir, MEMBR_CLAUDE_CLI: path.join(dir, "fake-claude") },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -121,6 +122,8 @@ test("the built binary refuses a live holder and takes over after a crash", asyn
   const command = [path.join(root, "dist/membr")];
   const first = serve(dir, command);
   const url = await listening(first);
+  for (let attempt = 0; attempt < 100 && !fs.existsSync(path.join(dir, "cli-calls")); attempt++) await Bun.sleep(10);
+  expect(fs.readFileSync(path.join(dir, "cli-calls"), "utf8")).toBe("called\n");
   const second = serve(dir, command);
   expect(await Promise.race([second.exited, Bun.sleep(3000).then(() => "still running")])).toBe(1);
   const error = await new Response(second.stderr).text();
