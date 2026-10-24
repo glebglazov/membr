@@ -131,7 +131,7 @@ test("stop logs one note and fences new input until interrupt completes", async 
   expect(epoch.messages[1].text).toBe("New work");
 });
 
-test("restart opens a new epoch with the whole durable log and one cut note", async () => {
+test("restart opens a new epoch with the saved view and one cut note", async () => {
   const before = serve();
   const a = await connect(before);
   a.act({ type: "act", act: "say", id: "cut", text: "Keep every word\nincluding this line" });
@@ -143,7 +143,7 @@ test("restart opens a new epoch with the whole durable log and one cut note", as
   const b = await connect(after);
   const entries = b.events.filter((event) => event.type === "entry").map((event) => event.entry);
   expect(entries.map((entry) => entry.kind)).toEqual(["user", "unii", "note"]);
-  for (const entry of entries) expect(after.engine.epochs[0].view).toContain(JSON.stringify(entry));
+  for (const entry of entries) expect(after.engine.epochs[0].view).toContain(`${entry.i}+1|${entry.kind}: ${entry.text.replace(/\s*\n\s*/g, " ")}`);
   b.act({ type: "act", act: "say", id: "cut", text: "Do not send again" });
   expect(await b.wait("answer")).toEqual(answer);
   expect(after.engine.epochs[0].messages).toHaveLength(0);

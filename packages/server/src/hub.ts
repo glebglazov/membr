@@ -83,6 +83,7 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
             }
             sockets.add(socket);
             for (const ask of chat!.asks) send(socket, ask);
+            send(socket, { type: "view", parts: chat!.parts });
             send(socket, { type: "state", state: chat!.state });
             send(socket, { type: "ready", version: VERSION });
             return;
@@ -101,11 +102,11 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
   });
   let chat: Chat | undefined;
   try {
-    chat = new Chat(log, (event) => {
+    tree = new Tree(options.dir, log, options.engine ?? claude);
+    chat = new Chat(log, tree, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
     }, options.engine, options.epoch);
-    tree = new Tree(options.dir, log, options.engine ?? claude);
   } catch (error) {
     chat?.close();
     tree?.close();

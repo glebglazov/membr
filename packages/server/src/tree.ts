@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Part } from "@membr/protocol";
 import type { Engine } from "./engine.ts";
 import type { Log } from "./log.ts";
+import { merge, render, type Line } from "./view.ts";
 
 const NODE = 512;
 const JOBS = 4;
@@ -49,6 +50,9 @@ export class Tree {
   private readonly ready = new Map<number, Part>();
   private readonly busy = new Set<number>();
   private readonly delays = new Map<ReturnType<typeof setTimeout>, () => void>();
+  private readonly waiting = new Set<() => void>();
+  private seen: Line[] = [];
+  private failure: unknown;
   private count = 0;
   private scheduled = false;
   private stopped = false;
@@ -97,13 +101,37 @@ export class Tree {
 
   close(): void {
     this.stopped = true;
+    this.waiting.forEach((check) => check());
     for (const [timer, resolve] of this.delays) { clearTimeout(timer); resolve(); }
     this.delays.clear();
   }
 
   private fail(error: unknown): void {
+    this.failure = error;
     this.close();
     console.error("compactor: " + (error instanceof Error ? error.message : String(error)));
+  }
+
+  settle(upto: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        const reason = signal.aborted ? signal.reason : this.failure ?? (this.stopped ? new Error("The compactor is closed") : null);
+        let ready = true;
+        for (let i = 0; i < upto;) {
+          const l = Math.floor(Math.log2(upto - i));
+          if (!this.locations.has(key({ l, i: i / 2 ** l }))) { ready = false; break; }
+          i += 2 ** l;
+        }
+        if (reason || ready) {
+          this.waiting.delete(check);
+          signal.removeEventListener("abort", check);
+          if (reason) reject(reason); else resolve();
+        }
+      };
+      this.waiting.add(check);
+      signal.addEventListener("abort", check);
+      check();
+    });
   }
 
   private file(day: number): string {
@@ -155,7 +183,7 @@ export class Tree {
     this.locations.set(key(part), location);
   }
 
-  private read(part: Part): string | null {
+  read(part: Part): string | null {
     const location = this.locations.get(key(part));
     if (!location) return null;
     const fd = fs.openSync(this.file(location.day), "r");
@@ -196,6 +224,7 @@ export class Tree {
     try { this.place(index, part, { day, at, length: bytes.length - 1 }); fs.fsyncSync(index); } finally { fs.closeSync(index); }
     this.ready.delete(key(part));
     this.parent(part);
+    this.waiting.forEach((check) => check());
   }
 
   private pump(): void {
@@ -220,21 +249,20 @@ export class Tree {
 
   private prompt(part: Part, source: string, first: number): string {
     const upto = Math.min(context(part), first);
-    const lines: string[] = [];
-    let size = 0;
-    for (const node of this.cover(upto)) {
-      if (end(node) > upto) break;
-      const text = this.read(node);
+    for (let i = this.seen.length ? end(this.seen[this.seen.length - 1]) : 0; i < upto; i++) {
+      const text = this.read({ l: 0, i });
       if (text === null) break;
-      const line = `${node.i * 2 ** node.l}+${2 ** node.l}|${flat(text)}\n`;
-      if (size + Buffer.byteLength(line) > SEEN - 15) break;
-      lines.push(line);
-      size += Buffer.byteLength(line);
+      this.seen.push({ l: 0, i, text });
     }
+    if (Buffer.byteLength(render(this.seen)) > SEEN) {
+      const merged = merge(this.seen, SEEN / 2, (node) => this.read(node));
+      if (Buffer.byteLength(render(merged)) <= SEEN / 2) this.seen = merged;
+    }
+    const visible = this.seen.filter((node) => end(node) <= upto);
     const a = part.i * 2 ** part.l;
     const n = 2 ** part.l / 2;
     const task = (part.l === 0 ? LEAF : MERGE).replace("{a}", `${a}+${n}`).replace("{b}", `${a + n}+${n}`).replace("{id}", String(a)).replace("{end}", String(end(part) - 1));
-    return "<chat>\n" + lines.join("") + "</chat>\n" + task + source + "\n</input>";
+    return render(visible) + task + source + "\n</input>";
   }
 
   private async build(part: Part, source: string, prompt: string): Promise<void> {
