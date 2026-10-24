@@ -8,7 +8,8 @@
     "test": "bun test",
     "test:web": "bun packages/web/test/browser.e2e.ts && bun packages/web/test/import.e2e.ts",
     "serve": "bun packages/server/src/main.ts serve",
-    "build:web": "bun build packages/web/src/main.ts --target browser --outdir packages/web/dist"
+    "build:web": "rm -rf packages/web/dist && bun build packages/web/src/index.html --target browser --minify --outdir packages/web/dist",
+    "build": "bun run build:web && bun scripts/build.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

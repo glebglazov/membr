@@ -12,6 +12,10 @@ import type { AgentTools } from "./agents.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
 
+declare const MEMBR_STANDALONE: boolean | undefined;
+
+const CLI_PATH = process.env.MEMBR_CLAUDE_CLI ?? (typeof MEMBR_STANDALONE === "undefined" ? undefined : "claude");
+
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 // the user's choice of model, effort and fast mode
@@ -203,6 +207,7 @@ function open(view: string, options: EpochOptions): Epoch {
   const session = query({
     prompt: inbox,
     options: {
+      pathToClaudeCodeExecutable: CLI_PATH,
       cwd: options.cwd,
       env: env(),
       model: options.pick.model,
@@ -376,6 +381,7 @@ async function compact(prompt: string): Promise<string | null> {
   const session = query({
     prompt: inbox,
     options: {
+      pathToClaudeCodeExecutable: CLI_PATH,
       env: env(),
       model: "haiku",
       systemPrompt: COMPACTION,
@@ -408,6 +414,7 @@ async function checkGoal(goal: string, chat: string, signal: AbortSignal): Promi
   const session = query({
     prompt: inbox,
     options: {
+      pathToClaudeCodeExecutable: CLI_PATH,
       abortController: abort,
       env: env(),
       model: "haiku",
@@ -435,7 +442,7 @@ async function checkGoal(goal: string, chat: string, signal: AbortSignal): Promi
 // without a model call
 async function account(): Promise<Account> {
   const inbox = new Inbox();
-  const session = query({ prompt: inbox, options: { env: env(), tools: [], settingSources: [], persistSession: false } });
+  const session = query({ prompt: inbox, options: { pathToClaudeCodeExecutable: CLI_PATH, env: env(), tools: [], settingSources: [], persistSession: false } });
   try {
     const info = await session.accountInfo();
     const usage = await session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });

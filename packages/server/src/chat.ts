@@ -1,6 +1,6 @@
 // Prompt and after hook adapted from UniiChat at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
-import fs from "node:fs";
+import prompt from "./prompt.txt" with { type: "text" };
 import { type Act, type Answer, type Entry, type Event, type Pick, type State, type Usage } from "@membr/protocol";
 import { claude, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
 import { Agents } from "./agents.ts";
@@ -19,7 +19,7 @@ type Turn = SummaryWait | GoalCheck | { phase: "idle" } | { phase: "running" | "
 type Session = { id: string; epoch: Epoch };
 const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
 const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
-const PROMPT = fs.readFileSync(new URL("./prompt.txt", import.meta.url), "utf8");
+const PROMPT = prompt;
 const GOAL_NO = "The goal isn't satisfied yet: keep working.";
 
 export class Chat {

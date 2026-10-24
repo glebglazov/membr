@@ -25,6 +25,22 @@ It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
 One server at a time can use a data directory. A second server on the same
 directory exits with status 1 and names the process that holds the lock.
 
+## Install the standalone binary
+
+Install Bun and run `bun install`, then build the binary:
+
+```sh
+bun run build
+```
+
+The build writes one executable to `dist/membr`. Copy that file to a directory
+on your `PATH`, then run `membr serve`. The binary contains the web view and
+needs no other project files. It stores data in `~/.membr`, or in the directory
+that `MEMBR_DIR` names.
+
+Install Claude Code and sign in on the host. The binary runs `claude` from your
+`PATH`. Set `MEMBR_CLAUDE_CLI` if the executable has a different path.
+
 ## Run the tests
 
 ```sh
