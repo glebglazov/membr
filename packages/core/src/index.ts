@@ -1,11 +1,13 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
-import type { Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
+import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
 export type AgentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
 export type Model = {
+  importPlan: { id: string; input: ImportInput; estimate: ImportEstimate | null } | null;
+  imports: ImportStatus[];
   agent: string | null;
   agents: ReadonlyMap<string, AgentLog>;
   attachments: Attachment[];
@@ -29,6 +31,9 @@ export type Model = {
   approvals: ReadonlyMap<string, Extract<Event, { type: "ask" }>>;
 };
 export type Input =
+  | { type: "import-plan"; id: string; input: ImportInput }
+  | { type: "import-start"; id: string }
+  | { type: "import-go"; id: string; run: string; paused: boolean }
   | { type: "send"; id: string; text: string }
   | { type: "tab"; name: string | null }
   | { type: "attach"; images: Attachment[] }
@@ -55,6 +60,7 @@ function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
 
 export function createModel(): Model {
   return {
+    importPlan: null, imports: [],
     agent: null, agents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
     roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(),
@@ -84,6 +90,12 @@ function requestRoots(model: Model): Model {
 
 export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
+    case "imports": return { ...model, imports: event.imports };
+    case "import-estimate": {
+      if (!model.importPlan || model.importPlan.id !== event.id) return model;
+      const reads = new Map(model.reads); reads.delete(event.id);
+      return { ...model, reads, importPlan: { ...model.importPlan, estimate: event.estimate } };
+    }
     case "connecting": {
       const next: Model = { ...model, connection: "connecting", live: "", approvals: new Map(), agents: new Map([...model.agents].map(([name, log]) => [name, { ...log, live: "" }])) };
       return model.agent === null ? next : requestAgent(next, model.agent);
@@ -152,7 +164,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       pending.delete(event.id);
       const uploads = new Map(model.uploads);
       uploads.delete(event.id);
-      return { ...model, pending, uploads, error: event.ok ? model.error : event.reason };
+      return { ...model, pending, uploads, importPlan: event.ok && model.pending.get(event.id)?.act === "import" ? null : model.importPlan, error: event.ok ? model.error : event.reason };
     }
     case "error": {
       const request = event.id === null ? undefined : model.reads.get(event.id);
@@ -168,11 +180,20 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
 function readFailure(model: Model, request: Read, reason: string): Model {
   const open = new Set(model.open);
   if (request.read === "zoom") open.delete(partKey(request.part));
-  return { ...model, open, error: reason };
+  return { ...model, open, importPlan: request.read === "import" ? null : model.importPlan, error: reason };
 }
 
 export function act(model: Model, input: Input): { model: Model; acts: Act[]; reads: Read[]; uploads: Upload[] } {
   const output = (next: Model, acts: Act[] = [], reads: Read[] = [], uploads: Upload[] = []) => ({ model: next, acts: next.connection === "ready" ? acts : [], reads: next.connection === "ready" ? reads : [], uploads: next.connection === "ready" ? uploads : [] });
+  if (input.type === "import-plan") {
+    const reads = new Map([...model.reads].filter(([, request]) => request.read !== "import"));
+    const request: Read = { type: "read", read: "import", id: input.id, ...input.input };
+    reads.set(request.id, request);
+    return output({ ...model, reads, importPlan: { id: input.id, input: input.input, estimate: null }, error: null }, [], [request]);
+  }
+  if (input.type === "import-start") return model.importPlan?.estimate
+    ? post(model, [{ type: "act", act: "import", id: input.id, ...model.importPlan.input }]) : output(model);
+  if (input.type === "import-go") return post(model, [{ type: "act", act: "go", id: input.id, import: input.run, paused: input.paused }]);
   if (input.type === "flush") return output(model, [...model.pending.values()].filter((request) => !model.uploads.has(request.id)), [...model.reads.values()], [...model.uploads.values()]);
   if (input.type === "tab") {
     if (input.name !== null && !model.agents.has(input.name)) return output(model);

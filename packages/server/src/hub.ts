@@ -4,6 +4,7 @@ import { Log, identity } from "./log.ts";
 import { Chat } from "./chat.ts";
 import { claude, type Engine, type EpochOptions } from "./engine.ts";
 import { Tree } from "./tree.ts";
+import { Imports } from "./import.ts";
 import { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { readConfig } from "./config.ts";
@@ -39,6 +40,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   const log = new Log(options.dir);
   let tree: Tree | undefined;
   let memory: Memory;
+  let imports: Imports | undefined;
   const token = identity(options.dir, "token");
   const sockets = new Set<Socket>();
   const send = (socket: Socket, event: Event) => socket.send(JSON.stringify(event));
@@ -46,7 +48,14 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     send(socket, { type: "refused", reason });
     socket.close(1008, reason.slice(0, 120));
   }
-  function read(socket: Socket, request: Read) {
+  async function read(socket: Socket, request: Read) {
+    if (request.read === "import") {
+      try {
+        const plan = await imports!.plan(request);
+        send(socket, { type: "import-estimate", id: request.id, estimate: plan.estimate });
+      } catch (error) { send(socket, { type: "error", id: request.id, reason: error instanceof Error ? error.message : "The import estimate failed." }); }
+      return;
+    }
     if (request.read === "agent") {
       const agent = chat!.agents.read(request.name);
       if (agent) send(socket, { type: "read", id: request.id, entries: agent.entries, live: agent.live, parts: [], lines: [] });
@@ -123,7 +132,8 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
       return web(request);
     },
     websocket: {
-      message(socket, data) {
+      maxPayloadLength: 36 * 2 ** 20,
+      async message(socket, data) {
         try {
           const message = parseClientMessage(JSON.parse(typeof data === "string" ? data : data.toString()));
           if (socket.data.phase === "hello") {
@@ -141,12 +151,13 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
             send(socket, { type: "view", parts: chat!.parts, lines: chat!.lines, turn: chat!.latestTurn });
             send(socket, { type: "state", state: chat!.state });
             if (chat!.live) send(socket, { type: "live", text: chat!.live, agent: null });
+            send(socket, { type: "imports", imports: imports!.status });
             send(socket, { type: "ready", version: VERSION });
             return;
           }
           if (message.type === "hello") return refuse(socket, "Hello was already received");
-          if (message.type === "read") return read(socket, message);
-          send(socket, chat!.act(message));
+          if (message.type === "read") return await read(socket, message);
+          send(socket, message.act === "import" || message.act === "go" ? await imports!.act(message) : chat!.act(message));
         } catch (error) {
           const reason = error instanceof Error ? error.message : "Request failed";
           if (socket.data.phase === "hello") refuse(socket, reason);
@@ -164,6 +175,8 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
     }, options.engine, options.epoch, config);
+    imports = new Imports(log, tree, (event) => { for (const client of sockets) send(client, event); }, (entries) => chat!.imported(entries));
+    tree.onChange = () => imports?.changed();
   } catch (error) {
     chat?.close();
     tree?.close();
@@ -173,8 +186,9 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   let shutdown: Promise<void> | null = null;
   return { server, token, close(): Promise<void> {
     if (shutdown) return shutdown;
+    const importing = imports?.close() ?? Promise.resolve();
     server.stop(true);
-    const done = chat?.close() ?? Promise.resolve();
+    const done = Promise.all([chat?.close(), importing]).then(() => {});
     if (!config.afterCommand) {
       tree?.close();
       shutdown = done;

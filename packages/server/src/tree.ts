@@ -52,6 +52,8 @@ export class Tree {
   private readonly delays = new Map<ReturnType<typeof setTimeout>, () => void>();
   private readonly waiting = new Set<() => void>();
   private seen: Line[] = [];
+  private readonly importCounts: number[] = [0];
+  onChange: () => void = () => {};
   private failure: unknown;
   private count = 0;
   private scheduled = false;
@@ -72,12 +74,35 @@ export class Tree {
       try {
         while (this.count < this.log.count) {
           const part = { l: 0, i: this.count++ };
+          const imported = this.log.importAt(part.i) !== undefined;
+          this.importCounts.push(this.importCounts[part.i] + Number(imported));
           if (!this.locations.has(key(part))) this.ready.set(key(part), part);
           else this.parent(part);
         }
         this.pump();
+        this.waiting.forEach((check) => check());
+        this.onChange();
       } catch (error) { this.fail(error); }
     });
+  }
+
+  pendingImport(run: string): boolean {
+    for (let i = 0; i < this.log.count; i++) {
+      if (this.log.importAt(i)?.run !== run) continue;
+      for (let l = 0; (i + 1) % 2 ** l === 0; l++) {
+        if (!this.locations.has(key({ l, i: (i + 1) / 2 ** l - 1 }))) return true;
+      }
+    }
+    return false;
+  }
+
+  private run(part: Part): string | undefined {
+    return this.log.importAt(end(part) - 1)?.run;
+  }
+
+  private held(part: Part): boolean {
+    const run = this.run(part);
+    return run !== undefined && this.log.importRuns.get(run)?.paused === true;
   }
 
   roots(): Part[] { return this.cover(this.log.count); }
@@ -116,10 +141,18 @@ export class Tree {
     return new Promise((resolve, reject) => {
       const check = () => {
         const reason = signal.aborted ? signal.reason : this.failure ?? (this.stopped ? new Error("The compactor is closed") : null);
-        let ready = true;
-        for (let i = 0; i < upto;) {
+        const built = (part: Part): boolean => {
+          if (this.locations.has(key(part))) return true;
+          const a = part.i * 2 ** part.l, b = end(part);
+          const imports = (this.importCounts[b] ?? 0) - (this.importCounts[a] ?? 0);
+          if (imports === b - a) return true;
+          if (!imports || part.l === 0) return false;
+          return built({ l: part.l - 1, i: part.i * 2 }) && built({ l: part.l - 1, i: part.i * 2 + 1 });
+        };
+        let ready = this.count >= upto;
+        for (let i = 0; ready && i < upto;) {
           const l = Math.floor(Math.log2(upto - i));
-          if (!this.locations.has(key({ l, i: i / 2 ** l }))) { ready = false; break; }
+          ready = built({ l, i: i / 2 ** l });
           i += 2 ** l;
         }
         if (reason || ready) {
@@ -225,19 +258,28 @@ export class Tree {
     this.ready.delete(key(part));
     this.parent(part);
     this.waiting.forEach((check) => check());
+    this.onChange();
   }
 
   private pump(): void {
     while (!this.stopped && this.busy.size < JOBS) {
-      const leaves = [...this.ready.values()].filter((part) => part.l === 0).sort((a, b) => a.i - b.i);
-      const limit = leaves[JOBS - 1]?.i ?? this.count;
-      const part = [...this.ready.values()].filter((part) => !this.busy.has(key(part)) && context(part) <= limit)
-        .sort((a, b) => context(a) - context(b) || b.l - a.l)[0];
+      const candidates = [...this.ready.values()];
+      const importsBusy = [...this.busy].filter((id) => { const part = this.ready.get(id); return part && this.run(part) !== undefined; }).length;
+      const choose = (imported: boolean) => {
+        if (imported && importsBusy >= JOBS - 1) return undefined;
+        const lane = candidates.filter((part) => (this.run(part) !== undefined) === imported && !this.held(part));
+        const leaves = lane.filter((part) => part.l === 0).sort((a, b) => a.i - b.i);
+        const limit = leaves[JOBS - 1]?.i ?? this.count;
+        return lane.filter((part) => !this.busy.has(key(part)) && context(part) <= limit)
+          .sort((a, b) => context(a) - context(b) || b.l - a.l)[0];
+      };
+      const part = choose(false) ?? choose(true);
       if (!part) return;
       const source = this.source(part);
       if (Buffer.byteLength(source) <= NODE) this.store(part, source);
       else {
-        const prompt = this.prompt(part, source, leaves[0]?.i ?? this.count);
+        const first = candidates.filter((node) => node.l === 0 && (this.run(node) !== undefined) === (this.run(part) !== undefined)).reduce((first, node) => Math.min(first, node.i), this.count);
+        const prompt = this.prompt(part, source, first);
         this.busy.add(key(part));
         void this.build(part, source, prompt).catch((error) => this.fail(error)).finally(() => {
           this.busy.delete(key(part));
@@ -271,6 +313,7 @@ export class Tree {
     let tries = 0;
     let delay = 1000;
     while (!this.stopped && tries < TRIES) {
+      if (this.held(part)) return;
       let answer: string | null;
       try { answer = await this.engine.compact(prompt + note); } catch {
         if (this.stopped) return;

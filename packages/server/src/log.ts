@@ -3,7 +3,7 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick } from "@membr/protocol";
+import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick, type ImportEstimate, type ImportMark } from "@membr/protocol";
 
 const SLOT = 16;
 const DAY = 86_400_000;
@@ -11,7 +11,9 @@ type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
 type SavedGoal = { revision: number; value: string | null };
 export type AllowRule = { tool: string; input: Record<string, unknown> };
-type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule };
+type ImportRun = { paused: boolean; estimate: ImportEstimate };
+type ImportControl = { id: string; value: ImportRun };
+type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl };
 type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
@@ -40,6 +42,9 @@ function syncDirectory(dir: string) {
 }
 
 export class Log {
+  readonly importRuns = new Map<string, ImportRun>();
+  private readonly imported = new Set<string>();
+  private readonly importMarks: Array<ImportMark | undefined> = [];
   private readonly answers = new Map<string, Answer>();
   private readonly locations: Array<Location | undefined> = [];
   private readonly machine: string;
@@ -96,8 +101,17 @@ export class Log {
             if (turn === null || typeof turn !== "object" || !("id" in turn) || typeof turn.id !== "number" || !Number.isSafeInteger(turn.id) || turn.id < 0 || !("phase" in turn) || (turn.phase !== "running" && turn.phase !== "done")) throw new Error(`Invalid turn in ${file}`);
             (turn.phase === "running" ? this.started : this.finished).add(turn.id);
           }
+          if ("importRun" in raw) {
+            const control = raw.importRun;
+            if (!control || typeof control !== "object" || !("id" in control) || typeof control.id !== "string" || !("value" in control)) throw new Error("Invalid import control");
+            const run = control.value;
+            if (!run || typeof run !== "object" || !("paused" in run) || typeof run.paused !== "boolean" || !("estimate" in run)) throw new Error("Invalid import state");
+            const parsed = parseEvent({ type: "import-estimate", id: control.id, estimate: run.estimate });
+            if (parsed.type === "import-estimate") this.importRuns.set(control.id, { paused: run.paused, estimate: parsed.estimate });
+          }
           if ("i" in raw) {
             const entry = parseEntry(raw);
+            this.rememberImport(entry);
             if (this.locations[entry.i]) throw new Error(`Duplicate message index in ${file}`);
             this.place(index, entry.i, { day, at, length: end - at });
             if (entry.from.machine === this.machine) this.seq = Math.max(this.seq, entry.from.seq + 1);
@@ -115,6 +129,41 @@ export class Log {
       fs.fsyncSync(index);
     } finally { fs.closeSync(index); }
     syncDirectory(dir);
+  }
+
+  hasImported(session: string, message: string): boolean { return this.imported.has(JSON.stringify([session, message])); }
+  importAt(i: number): ImportMark | undefined { return this.importMarks[i]; }
+
+  importEntry(run: string, input: { kind: "note" | "ai"; text: string; date: string; session: string; message: string }): Entry {
+    const entry: Entry = { ...this.entry(input.kind, input.text), date: input.date, imported: { run, session: input.session, message: input.message } };
+    this.write({ ...entry, event: crypto.randomUUID() });
+    return entry;
+  }
+
+  beginImport(id: string, estimate: ImportEstimate): void {
+    if (!this.importRuns.has(id)) this.write({ event: crypto.randomUUID(), importRun: { id, value: { paused: false, estimate } } });
+  }
+
+  acceptImport(act: Extract<Act, { act: "import" }>, estimate: ImportEstimate): Answer {
+    const answer: Answer = { type: "answer", id: act.id, ok: true, entry: null };
+    this.write({ act: act.id, ans: answer, importRun: { id: act.id, value: this.importRuns.get(act.id) ?? { paused: false, estimate } } });
+    return answer;
+  }
+
+  controlImport(act: Extract<Act, { act: "go" }>): Answer {
+    const run = this.importRuns.get(act.import);
+    if (!run) throw new Error("No import " + act.import + ".");
+    const answer: Answer = { type: "answer", id: act.id, ok: true, entry: null };
+    this.write({ act: act.id, ans: answer, importRun: { id: act.import, value: { ...run, paused: act.paused } } });
+    return answer;
+  }
+
+  private rememberImport(entry: Entry): void {
+    const mark = entry.imported;
+    if (!mark) return;
+    this.imported.add(JSON.stringify([mark.session, mark.message]));
+    this.importMarks[entry.i] = mark;
+    if (!this.importRuns.has(mark.run)) this.importRuns.set(mark.run, { paused: false, estimate: { sessions: 0, messages: 0, compactions: 0 } });
   }
 
   get count(): number { return this.locations.length; }
@@ -213,7 +262,7 @@ export class Log {
 
   private write(record: LogRecord): void {
     if (this.failure) throw this.failure;
-    const date = record.date ?? new Date().toISOString();
+    const date = record.imported ? new Date().toISOString() : record.date ?? new Date().toISOString();
     const entry = record.i === undefined ? null : parseEntry(record);
     const bytes = Buffer.from(JSON.stringify(record) + "\n");
     const day = Date.parse(date.slice(0, 10)) / DAY;
@@ -233,7 +282,9 @@ export class Log {
       if (record.allow) this.allowed.push(record.allow);
       if (record.pick) this.savedPick = record.pick;
       if (record.goal) this.savedGoal = record.goal;
+      if (record.importRun) this.importRuns.set(record.importRun.id, record.importRun.value);
       if (entry) {
+        this.rememberImport(entry);
         const index = fs.openSync(path.join(this.dir, "main.index"), "r+");
         try { this.place(index, entry.i, { day, at, length: bytes.length - 1 }); } finally { fs.closeSync(index); }
         this.seq++;

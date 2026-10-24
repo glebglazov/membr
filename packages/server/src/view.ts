@@ -90,9 +90,16 @@ export class View {
       const entry = this.log.read(--at)!;
       bytes += Buffer.byteLength(entry.kind + ": " + entry.text);
     }
-    const crossing = this.lines.find((part) => part.i * 2 ** part.l < at && end(part) > at);
-    if (crossing) at = crossing.i * 2 ** crossing.l;
-    const older = this.lines.filter((part) => end(part) <= at);
+    const older: Line[] = [];
+    const prefix = (part: Line): void => {
+      if (end(part) <= at) { older.push(part); return; }
+      if (part.i * 2 ** part.l >= at || part.l === 0) return;
+      for (const i of [part.i * 2, part.i * 2 + 1]) {
+        const child = { l: part.l - 1, i };
+        prefix({ ...child, text: this.tree.read(child) ?? WAIT });
+      }
+    };
+    this.lines.forEach(prefix);
     let recent = "";
     for (let i = at; i < this.log.count; i++) {
       const entry = this.log.read(i)!;
@@ -103,10 +110,23 @@ export class View {
 
   sync(): void {
     let changed = !fs.existsSync(this.file);
-    for (let i = this.lines.length ? end(this.lines[this.lines.length - 1]) : 0; i < this.log.count; i++) {
+    for (let i = this.lines.length ? end(this.lines[this.lines.length - 1]) : 0; i < this.log.count;) {
       const entry = this.log.read(i)!;
-      const source = `${entry.kind}: ${entry.text}` + (entry.images ?? []).map((name) => `\n[image docs/images/${name}]`).join("");
-      this.lines.push({ l: 0, i, text: this.tree.read({ l: 0, i }) ?? (Buffer.byteLength(source) <= 512 ? source : WAIT) });
+      if (entry.imported) {
+        let upto = i + 1;
+        while (upto < this.log.count && this.log.importAt(upto)?.run === entry.imported.run) upto++;
+        while (i < upto) {
+          let l = Math.floor(Math.log2(upto - i));
+          while (i % 2 ** l) l--;
+          const part = { l, i: i / 2 ** l };
+          this.lines.push({ ...part, text: this.tree.read(part) ?? WAIT });
+          i += 2 ** l;
+        }
+      } else {
+        const source = `${entry.kind}: ${entry.text}` + (entry.images ?? []).map((name) => `\n[image docs/images/${name}]`).join("");
+        this.lines.push({ l: 0, i, text: this.tree.read({ l: 0, i }) ?? (Buffer.byteLength(source) <= 512 ? source : WAIT) });
+        i++;
+      }
       changed = true;
     }
     const pick = this.pick;
@@ -120,12 +140,14 @@ export class View {
   }
 
   async batch(upto: number, signal: AbortSignal): Promise<void> {
-    let count: number;
+    let liveTail: boolean;
     do {
-      count = this.log.count;
+      const count = this.log.count;
       await this.tree.settle(count, signal);
       signal.throwIfAborted();
-    } while (count !== this.log.count);
+      liveTail = false;
+      for (let i = count; i < this.log.count; i++) if (!this.log.importAt(i)) { liveTail = true; break; }
+    } while (liveTail);
     const lines = this.lines.map((part) => ({ ...part, text: this.tree.read(part) ?? part.text }));
     const merged = merge(lines, 64000 - Buffer.byteLength(HEAD), (part) =>
       part.i * 2 ** part.l < upto && end(part) > upto ? null : this.tree.read(part));

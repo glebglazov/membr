@@ -58,3 +58,9 @@ select:focus-visible, input:focus-visible { outline: 2px solid var(--mid); outli
 .attachments { display: flex; gap: 12px; overflow-x: auto; margin: 0 0 12px; }
 .attachments > div { flex: 0 0 120px; }
 .attachments img { width: 120px; height: 90px; object-fit: contain; }
+
+.imports { margin: 0 0 1rem; }
+.imports section { display: grid; gap: .6rem; padding: .8rem 0; }
+.imports label { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.imports input { min-width: 0; max-width: 100%; }
+.import-run p { overflow-wrap: anywhere; }

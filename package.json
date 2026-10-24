@@ -6,7 +6,7 @@
   "bin": { "membr": "packages/server/src/main.ts" },
   "scripts": {
     "test": "bun test",
-    "test:web": "bun packages/web/test/browser.e2e.ts",
+    "test:web": "bun packages/web/test/browser.e2e.ts && bun packages/web/test/import.e2e.ts",
     "serve": "bun packages/server/src/main.ts serve",
     "build:web": "bun build packages/web/src/main.ts --target browser --outdir packages/web/dist"
   },

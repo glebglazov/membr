@@ -40,7 +40,7 @@ To run the browser checks, install Chromium once after `bun install`:
 bunx playwright install chromium
 ```
 
-Then run all three checks with one command from the repository root:
+Then run the browser checks with one command from the repository root:
 
 ```sh
 bun run test:web
@@ -48,6 +48,7 @@ bun run test:web
 
 The checks start the real server with a fake Engine in a temporary data
 directory. They check a live turn in two tabs, approval answers across tabs,
+folder imports with estimates, pause and resume,
 and light and dark layouts at desktop width and 390 px. They make no model calls.
 
 The Engine contract tests run Claude Code on your plan, so `bun test` skips

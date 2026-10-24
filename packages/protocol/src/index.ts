@@ -4,13 +4,20 @@ export type Hello = { type: "hello"; version: string; kind: "web" | "term"; devi
 export type Pick = { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; fast: boolean };
 export type Part = { l: number; i: number };
 export type MemoryLine = Part & { text: string };
+export type ImportSource = "claude-code" | "codex";
+export type ImportFile = { name: string; text: string };
+export type ImportInput = { source: ImportSource; path: string; files?: ImportFile[] };
+export type ImportEstimate = { sessions: number; messages: number; compactions: number };
+export type ImportStatus = ImportEstimate & { id: string; phase: "running" | "paused" | "complete" };
+export type ImportMark = { run: string; session: string; message: string };
 export type Entry = {
   i: number;
-  kind: "user" | "unii" | "tool" | "echo" | "work" | "note";
+  kind: "user" | "unii" | "tool" | "echo" | "work" | "note" | "ai";
   text: string;
   date: string;
   from: { machine: string; seq: number };
   images?: string[];
+  imported?: ImportMark;
 };
 export type Act = { type: "act"; id: string } & (
   | { act: "say"; text: string; images?: string[] }
@@ -18,7 +25,7 @@ export type Act = { type: "act"; id: string } & (
   | { act: "goal"; text: string | null }
   | { act: "pick"; pick: Pick }
   | { act: "answer"; approval: string; choice: "once" | "always" | "deny" }
-  | { act: "import"; source: "claude-code" | "codex" | "claude.ai" | "chatgpt"; path: string }
+  | { act: "import"; source: "claude-code" | "codex" | "claude.ai" | "chatgpt"; path: string; files?: ImportFile[] }
   | { act: "go"; import: string; paused: boolean }
 );
 export type Read = { type: "read"; id: string } & (
@@ -26,6 +33,7 @@ export type Read = { type: "read"; id: string } & (
   | { read: "root" }
   | { read: "roots" }
   | { read: "agent"; name: string }
+  | ({ read: "import" } & ImportInput)
 );
 export type Answer = { type: "answer"; id: string } & (
   | { ok: true; entry: number | null }
@@ -46,6 +54,8 @@ export type Event =
   | { type: "state"; state: State }
   | Answer
   | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; live?: string; error?: string }
+  | { type: "import-estimate"; id: string; estimate: ImportEstimate }
+  | { type: "imports"; imports: ImportStatus[] }
   | { type: "error"; id: string | null; reason: string };
 export type ClientMessage = Hello | Act | Read;
 
@@ -91,6 +101,19 @@ export function parsePick(value: unknown): Pick {
   const v = object(value);
   return { model: id(v.model), effort: oneOf(v.effort, ["low", "medium", "high", "xhigh", "max"]), fast: boolean(v.fast) };
 }
+function importFiles(value: unknown): ImportFile[] {
+  const files = list(value, (item) => { const f = object(item); return { name: string(f.name), text: string(f.text) }; });
+  if (files.length > 10000 || files.reduce((n, f) => n + f.text.length, 0) > 32 * 2 ** 20) throw new Error("Choose at most 32 MB of session files.");
+  return files;
+}
+function importEstimate(value: unknown): ImportEstimate {
+  const v = object(value);
+  return { sessions: integer(v.sessions), messages: integer(v.messages), compactions: integer(v.compactions) };
+}
+function importMark(value: unknown): ImportMark {
+  const v = object(value);
+  return { run: id(v.run), session: string(v.session), message: string(v.message) };
+}
 function memoryLine(value: unknown): MemoryLine {
   const v = object(value);
   return { ...part(v), text: string(v.text) };
@@ -107,9 +130,10 @@ export function parseEntry(value: unknown): Entry {
   const date = string(v.date);
   if (!Number.isFinite(Date.parse(date))) throw new Error("Expected a date");
   return {
-    i: integer(v.i), kind: oneOf(v.kind, ["user", "unii", "tool", "echo", "work", "note"]), text: string(v.text), date,
+    i: integer(v.i), kind: oneOf(v.kind, ["user", "unii", "tool", "echo", "work", "note", "ai"]), text: string(v.text), date,
     from: { machine: id(from.machine), seq: integer(from.seq) },
     ...(v.images === undefined ? {} : { images: list(v.images, string) }),
+    ...(v.imported === undefined ? {} : { imported: importMark(v.imported) }),
   };
 }
 export function parseClientMessage(value: unknown): ClientMessage {
@@ -127,7 +151,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "goal": return { ...base, act: "goal", text: nullable(v.text, string) };
       case "pick": return { ...base, act: "pick", pick: parsePick(v.pick) };
       case "answer": return { ...base, act: "answer", approval: id(v.approval), choice: oneOf(v.choice, ["once", "always", "deny"]) };
-      case "import": return { ...base, act: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: id(v.path) };
+      case "import": return { ...base, act: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       case "go": return { ...base, act: "go", import: id(v.import), paused: boolean(v.paused) };
       default: throw new Error("Unknown act");
     }
@@ -139,6 +163,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "root": return { ...base, read: "root" };
       case "roots": return { ...base, read: "roots" };
       case "agent": return { ...base, read: "agent", name: id(v.name) };
+      case "import": return { ...base, read: "import", source: oneOf(v.source, ["claude-code", "codex"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       default: throw new Error("Unknown read");
     }
   }
@@ -161,6 +186,8 @@ export function parseEvent(value: unknown): Event {
         ? { type: "answer", id: id(v.id), ok: true, entry: nullable(v.entry, integer) }
         : { type: "answer", id: id(v.id), ok: false, reason: string(v.reason) };
     case "read": return { type: "read", id: id(v.id), entries: list(v.entries, parseEntry), parts: list(v.parts, part), lines: list(v.lines, memoryLine), ...(v.live === undefined ? {} : { live: string(v.live) }), ...(v.error === undefined ? {} : { error: string(v.error) }) };
+    case "import-estimate": return { type: "import-estimate", id: id(v.id), estimate: importEstimate(v.estimate) };
+    case "imports": return { type: "imports", imports: list(v.imports, (item) => { const run = object(item); return { ...importEstimate(run), id: id(run.id), phase: oneOf(run.phase, ["running", "paused", "complete"]) }; }) };
     case "error": return { type: "error", id: nullable(v.id, id), reason: string(v.reason) };
     case "state": {
       const s = object(v.state);
