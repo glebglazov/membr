@@ -1,0 +1,141 @@
+[
+  {
+    "id": "gpt-export",
+    "title": "Website ChatGPT",
+    "create_time": 1790856000,
+    "current_node": "a",
+    "mapping": {
+      "root": {
+        "parent": null,
+        "message": null
+      },
+      "u": {
+        "parent": "root",
+        "message": {
+          "id": "g-user",
+          "author": {
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "ChatGPT website question",
+              {
+                "content_type": "image_asset_pointer",
+                "asset_pointer": "file-service://example"
+              }
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "all"
+        }
+      },
+      "old": {
+        "parent": "u",
+        "message": {
+          "id": "g-old",
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "OLD BRANCH"
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "all"
+        }
+      },
+      "hidden": {
+        "parent": "u",
+        "message": {
+          "id": "g-hidden",
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "HIDDEN MESSAGE"
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "all",
+          "metadata": {
+            "is_visually_hidden_from_conversation": true
+          }
+        }
+      },
+      "thinking": {
+        "parent": "hidden",
+        "message": {
+          "id": "g-think",
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "thoughts",
+            "parts": [
+              "PRIVATE GPT THOUGHT"
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "all"
+        }
+      },
+      "call": {
+        "parent": "thinking",
+        "message": {
+          "id": "g-call",
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Search membr"
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "browser",
+          "channel": "analysis"
+        }
+      },
+      "echo": {
+        "parent": "call",
+        "message": {
+          "id": "g-echo",
+          "author": {
+            "role": "tool"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Search result"
+            ]
+          },
+          "create_time": 1790856001,
+          "recipient": "all"
+        }
+      },
+      "a": {
+        "parent": "echo",
+        "message": {
+          "id": "g-ai",
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "ChatGPT website answer"
+            ]
+          },
+          "create_time": 1790856002,
+          "recipient": "all"
+        }
+      }
+    }
+  }
+]

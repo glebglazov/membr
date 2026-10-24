@@ -4,7 +4,7 @@ export type Hello = { type: "hello"; version: string; kind: "web" | "term"; devi
 export type Pick = { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; fast: boolean };
 export type Part = { l: number; i: number };
 export type MemoryLine = Part & { text: string };
-export type ImportSource = "claude-code" | "codex";
+export type ImportSource = "claude-code" | "codex" | "claude.ai" | "chatgpt";
 export type ImportFile = { name: string; text: string };
 export type ImportInput = { source: ImportSource; path: string; files?: ImportFile[] };
 export type ImportEstimate = { sessions: number; messages: number; compactions: number };
@@ -25,7 +25,7 @@ export type Act = { type: "act"; id: string } & (
   | { act: "goal"; text: string | null }
   | { act: "pick"; pick: Pick }
   | { act: "answer"; approval: string; choice: "once" | "always" | "deny" }
-  | { act: "import"; source: "claude-code" | "codex" | "claude.ai" | "chatgpt"; path: string; files?: ImportFile[] }
+  | ({ act: "import" } & ImportInput)
   | { act: "go"; import: string; paused: boolean }
 );
 export type Read = { type: "read"; id: string } & (
@@ -163,7 +163,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "root": return { ...base, read: "root" };
       case "roots": return { ...base, read: "roots" };
       case "agent": return { ...base, read: "agent", name: id(v.name) };
-      case "import": return { ...base, read: "import", source: oneOf(v.source, ["claude-code", "codex"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
+      case "import": return { ...base, read: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       default: throw new Error("Unknown read");
     }
   }

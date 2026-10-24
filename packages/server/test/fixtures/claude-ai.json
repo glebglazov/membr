@@ -1,0 +1,51 @@
+[
+  {
+    "uuid": "claude-export",
+    "name": "Website Claude",
+    "created_at": "2026-10-01T12:00:00Z",
+    "chat_messages": [
+      {
+        "uuid": "c-user",
+        "sender": "human",
+        "created_at": "2026-10-01T12:00:01Z",
+        "text": "Claude website question",
+        "attachments": [
+          {
+            "file_name": "notes.txt"
+          }
+        ]
+      },
+      {
+        "uuid": "c-ai",
+        "sender": "assistant",
+        "created_at": "2026-10-01T12:00:02Z",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "PRIVATE CLAUDE THOUGHT"
+          },
+          {
+            "type": "text",
+            "text": "Claude website answer"
+          },
+          {
+            "type": "tool_use",
+            "name": "search",
+            "input": {
+              "query": "membr"
+            }
+          },
+          {
+            "type": "tool_result",
+            "content": [
+              {
+                "type": "text",
+                "text": "Found membr"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,4 +1,4 @@
-// Local session readers and estimate adapted from UniiChat Import.ts at 0500bf6.
+// Session readers and estimate adapted from UniiChat Import.ts at 0500bf6.
 // Copyright 2026 Higher Order Company. Licensed under Apache-2.0.
 // See licenses/UniiChat.txt.
 import fs from "node:fs/promises";
@@ -17,7 +17,7 @@ function object(value: unknown): Record<string, unknown> { return value !== null
 function text(value: unknown): string { return typeof value === "string" ? value : ""; }
 function parts(value: unknown): string {
   if (typeof value === "string") return value;
-  return Array.isArray(value) ? value.map((item) => { const p = object(item); return typeof item === "string" ? item : typeof p.text === "string" ? p.text : text(p.type).includes("image") ? "[image]" : ""; }).filter(Boolean).join("\n") : "";
+  return Array.isArray(value) ? value.map((item) => { const p = object(item); return typeof item === "string" ? item : typeof p.text === "string" ? p.text : (text(p.type) || text(p.content_type)).includes("image") ? "[image]" : ""; }).filter(Boolean).join("\n") : "";
 }
 function date(value: unknown, last: string): string {
   if (value === undefined) return last;
@@ -79,7 +79,78 @@ function session(file: ImportFile, source: ImportSource): Session | null {
   return messages.length ? { id, name: `${source === "claude-code" ? "Claude Code" : "Codex"} session in ${where || "unknown folder"}`, messages } : null;
 }
 
+function exported(file: ImportFile, source: "claude.ai" | "chatgpt"): Session[] {
+  let chats: unknown;
+  try { chats = JSON.parse(file.text); } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("The export is not valid JSON.");
+    throw error;
+  }
+  if (!Array.isArray(chats)) throw new Error("Choose an export with a list of conversations.");
+  return chats.flatMap((value) => {
+    const chat = object(value);
+    if (source === "claude.ai" ? !Array.isArray(chat.chat_messages) : chat.mapping === null || typeof chat.mapping !== "object" || Array.isArray(chat.mapping)) {
+      throw new Error(`The file is not a ${source} conversations export.`);
+    }
+    const native = text(chat.uuid) || text(chat.id) || text(chat.conversation_id);
+    if (!native) throw new Error("An exported conversation has no id.");
+    const messages: Message[] = [];
+    let last = date(source === "claude.ai" ? chat.created_at : chat.create_time, "");
+    const emit = (id: string, block: string, role: string, value: string) => {
+      if (!value.trim() || !last) return;
+      for (let start = 0, page = 0; start < value.length; page++) {
+        let end = Math.min(start + 30000, value.length);
+        if (end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1])) end--;
+        messages.push({ id: `${id}:${block}:${page}`, text: `${role}: ${value.slice(start, end)}`, date: last });
+        start = end;
+      }
+    };
+    if (source === "chatgpt") {
+      const mapping = object(chat.mapping), nodes: Array<{ id: string; message: Record<string, unknown> }> = [];
+      const seen = new Set<string>();
+      let id = text(chat.current_node);
+      if (!id && Object.keys(mapping).length) throw new Error("The ChatGPT conversation has no current node.");
+      while (id) {
+        if (seen.has(id) || !Object.hasOwn(mapping, id)) throw new Error("The ChatGPT conversation has an invalid message tree.");
+        seen.add(id);
+        const node = object(mapping[id]);
+        nodes.push({ id, message: object(node.message) });
+        id = text(node.parent);
+      }
+      for (const { id, message: m } of nodes.reverse()) {
+        last = date(m.create_time, last);
+        const content = object(m.content), metadata = object(m.metadata), role = object(m.author).role;
+        if (metadata.is_visually_hidden_from_conversation === true || content.content_type === "thoughts" || content.content_type === "reasoning_recap") continue;
+        const kind = role === "user" ? "user" : role === "assistant" ? m.recipient && m.recipient !== "all" ? "tool" : "assistant" : role === "tool" ? "echo" : null;
+        if (kind === "assistant" && (m.channel === "analysis" || m.channel === "reasoning")) continue;
+        if (kind) emit(text(m.id) || id, "0", kind, (kind === "tool" ? text(m.recipient) + " " : "") + parts(content.parts ?? [content.text]));
+      }
+    } else {
+      const rows: unknown[] = Array.isArray(chat.chat_messages) ? chat.chat_messages : [];
+      for (const [index, value] of rows.entries()) {
+        const m = object(value), id = text(m.uuid) || text(m.id) || String(index);
+        last = date(m.created_at, last);
+        if (m.sender !== "human" && m.sender !== "assistant") continue;
+        const blocks = Array.isArray(m.content) ? m.content.map(object) : [{ type: "text", text: text(m.text) }];
+        const files = [...(Array.isArray(m.attachments) ? m.attachments : []), ...(Array.isArray(m.files) ? m.files : [])];
+        const body = [parts(blocks.filter((b) => b.type === "text" || b.type === "image")), ...files.map((f) => "[file " + text(object(f).file_name) + "]")].filter(Boolean).join("\n");
+        emit(id, "0", m.sender === "human" ? "user" : "assistant", body);
+        for (const [i, b] of blocks.entries()) {
+          if (b.type === "tool_use") emit(id, `tool-${i}`, "tool", text(b.name) + " " + JSON.stringify(b.input));
+          if (b.type === "tool_result") emit(id, `tool-${i}`, "echo", parts(b.content));
+        }
+      }
+    }
+    return messages.length ? [{ id: `${source}:${native}`, name: `${source === "claude.ai" ? "Claude" : "ChatGPT"} chat "${text(chat.title) || text(chat.name)}"`, messages }] : [];
+  });
+}
+
 async function files(input: ImportInput): Promise<ImportFile[]> {
+  if (input.source === "claude.ai" || input.source === "chatgpt") {
+    if (input.files) return input.files;
+    if (!input.path) throw new Error("Choose a conversations JSON file.");
+    const name = input.path.startsWith("~/") ? path.join(os.homedir(), input.path.slice(2)) : path.resolve(input.path);
+    return [{ name, text: await fs.readFile(name, "utf8") }];
+  }
   const accepted = (name: string) => name.endsWith(".jsonl") && !name.split(/[\\/]/).includes("subagents");
   if (input.files) return input.files.filter((file) => accepted(file.name));
   const root = input.path || (input.source === "claude-code" ? "~/.claude/projects" : "~/.codex");
@@ -130,7 +201,7 @@ export class Imports {
   constructor(private readonly log: Log, private readonly tree: Tree, private readonly emit: (event: Event) => void, private readonly record: (entries: Entry[]) => void) {}
 
   async plan(input: ImportInput): Promise<{ entries: Imported[]; estimate: ImportEstimate }> {
-    const sessions = (await files(input)).map((file) => session(file, input.source)).filter((s): s is Session => s !== null).sort((a, b) => a.messages[0].date.localeCompare(b.messages[0].date) || a.id.localeCompare(b.id));
+    const sessions = (await files(input)).flatMap((file) => input.source === "claude.ai" || input.source === "chatgpt" ? exported(file, input.source) : [session(file, input.source)]).filter((s): s is Session => s !== null).sort((a, b) => a.messages[0].date.localeCompare(b.messages[0].date) || a.id.localeCompare(b.id));
     const keys = new Set<string>();
     const entries: Imported[] = [];
     for (const s of sessions) {
@@ -160,7 +231,6 @@ export class Imports {
           const answer = this.log.controlImport(act);
           this.tree.sync(); this.changed(); return answer;
         }
-        if (act.source !== "claude-code" && act.source !== "codex") throw new Error("Choose Claude Code or Codex sessions.");
         const plan = await this.plan({ ...act, source: act.source });
         const answered = this.log.answer(act.id);
         if (answered) return answered;

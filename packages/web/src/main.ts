@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row } from "@membr/core";
 import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
 import "./style.css";
+import { readExport } from "./export.ts";
 import { speechRecognition, type Recognition } from "./speech.ts";
 
 let model = createModel();
@@ -145,37 +146,39 @@ function ImportPanel() {
   const [folder, setFolder] = useState("~/.claude/projects");
   const [reading, setReading] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
+  const website = source === "claude.ai" || source === "chatgpt";
   const plan = model.importPlan;
   const pending = [...model.pending.values()].some((request) => request.act === "import");
   async function choose(files: File[]) {
     setReading(true);
     try {
-      const selected = files.filter((file) => file.name.endsWith(".jsonl") && !file.webkitRelativePath.split("/").includes("subagents"));
+      const selected = website ? files : files.filter((file) => file.name.endsWith(".jsonl") && !file.webkitRelativePath.split("/").includes("subagents"));
+      if (!selected.length) throw new Error("No session files were found.");
       if (selected.length > 10000) throw new Error("Choose at most 10,000 session files.");
-      if (selected.reduce((bytes, file) => bytes + file.size, 0) > 32 * 2 ** 20) throw new Error("Choose at most 32 MB of session files.");
-      const sessions = await Promise.all(selected.map(async (file) => ({ name: file.webkitRelativePath || file.name, text: await file.text() })));
-      const selectedInput = { source, path: files[0]?.webkitRelativePath.split("/")[0] ?? "Selected folder", files: sessions };
-      if (new TextEncoder().encode(JSON.stringify(selectedInput)).length > 32 * 2 ** 20) throw new Error("The session request exceeds 32 MB. Use the server folder for larger imports.");
+      if (!website && selected.reduce((bytes, file) => bytes + file.size, 0) > 32 * 2 ** 20) throw new Error("Choose at most 32 MB of session files.");
+      const sessions = await Promise.all(selected.map(async (file) => ({ name: file.webkitRelativePath || file.name, text: website ? await readExport(file) : await file.text() })));
+      const selectedInput = { source, path: website ? files[0].name : files[0]?.webkitRelativePath.split("/")[0] ?? "Selected folder", files: sessions };
+      if (new TextEncoder().encode(JSON.stringify(selectedInput)).length > 32 * 2 ** 20) throw new Error(website ? "The export request exceeds 32 MB. Use fewer conversations or the server JSON file." : "The session request exceeds 32 MB. Use the server folder for larger imports.");
       input({ type: "import-plan", id: id(), input: selectedInput });
-    } catch (error) { model = hear(model, { type: "error", id: null, reason: error instanceof Error ? error.message : "The folder could not be read." }); changed(); }
+    } catch (error) { model = hear(model, { type: "error", id: null, reason: error instanceof Error ? error.message : "The files could not be read." }); changed(); }
     finally { setReading(false); }
   }
   return h("details", { class: "imports" },
     h("summary", null, "Import past sessions"),
     h("section", { "aria-label": "Import sessions" },
-      h("label", null, "Session source", h("select", { "aria-label": "Session source", value: source, onChange: (event: Event) => {
+      h("label", null, "Session source", h("select", { "aria-label": "Session source", value: source, disabled: reading, onChange: (event: Event) => {
         if (!(event.currentTarget instanceof HTMLSelectElement)) return;
         const selected = event.currentTarget.value;
-        if (selected === "claude-code" || selected === "codex") { setSource(selected); setFolder(selected === "claude-code" ? "~/.claude/projects" : "~/.codex"); }
-      } }, h("option", { value: "claude-code" }, "Claude Code"), h("option", { value: "codex" }, "Codex"))),
-      h("input", { type: "file", multiple: true, webkitdirectory: true, hidden: true, ref: picker, "aria-label": "Session folder", onChange: (event: Event) => {
+        if (selected === "claude-code" || selected === "codex" || selected === "claude.ai" || selected === "chatgpt") { setSource(selected); setFolder(selected === "claude-code" ? "~/.claude/projects" : selected === "codex" ? "~/.codex" : ""); }
+      } }, h("option", { value: "claude-code" }, "Claude Code"), h("option", { value: "codex" }, "Codex"), h("option", { value: "claude.ai" }, "claude.ai"), h("option", { value: "chatgpt" }, "ChatGPT"))),
+      h("input", { key: website ? "export" : "folder", type: "file", multiple: !website, webkitdirectory: website ? undefined : true, accept: website ? ".zip,.json" : undefined, hidden: true, ref: picker, "aria-label": website ? "Website export" : "Session folder", onChange: (event: Event) => {
         if (!(event.currentTarget instanceof HTMLInputElement)) return;
         const files = [...event.currentTarget.files ?? []]; event.currentTarget.value = "";
         if (files.length) void choose(files);
       } }),
-      h("button", { type: "button", disabled: reading || pending, onClick: () => picker.current?.click() }, reading ? "Reading folder..." : "Choose folder"),
-      h("label", null, "Server folder", h("input", { "aria-label": "Server folder", value: folder, onInput: (event: Event) => { if (event.currentTarget instanceof HTMLInputElement) setFolder(event.currentTarget.value); } })),
-      h("button", { type: "button", disabled: reading || pending, onClick: () => input({ type: "import-plan", id: id(), input: { source, path: folder } }) }, "Estimate server folder"),
+      h("button", { type: "button", disabled: reading || pending, onClick: () => picker.current?.click() }, reading ? "Reading files..." : website ? "Choose ZIP or JSON" : "Choose folder"),
+      h("label", null, website ? "Server JSON file" : "Server folder", h("input", { "aria-label": website ? "Server JSON file" : "Server folder", value: folder, onInput: (event: Event) => { if (event.currentTarget instanceof HTMLInputElement) setFolder(event.currentTarget.value); } })),
+      h("button", { type: "button", disabled: reading || pending, onClick: () => input({ type: "import-plan", id: id(), input: { source, path: folder } }) }, website ? "Estimate server JSON file" : "Estimate server folder"),
       plan && h("div", { "aria-label": "Import estimate" },
         h("p", null, `${plan.input.source}: ${plan.input.path}`),
         plan.estimate ? h("p", null, `${plan.estimate.sessions} sessions, ${plan.estimate.messages} new messages. Estimated plan usage: ${plan.estimate.compactions} compaction calls. Retries can use more calls.`) : h("p", null, "Reading sessions..."),
