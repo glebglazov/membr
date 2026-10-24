@@ -25,7 +25,8 @@ test.skipIf(process.env.MEMBR_REAL_SDK !== "1")("S1 real Engine answers a messag
     console.log(JSON.stringify({ reply: reply.entry.text, live: true, sessions, dataDirectory: dir }));
   } finally {
     client?.close();
-    hub.close();
+    await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 240_000);
 
@@ -54,6 +55,7 @@ test.skipIf(process.env.MEMBR_REAL_SDK !== "1")("S1 real stop cancels queued inp
     console.log(JSON.stringify({ reply: reply.entry.text, sameEpochAfterStop: true, sessions, dataDirectory: dir }));
   } finally {
     client?.close();
-    hub.close();
+    await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 300_000);

@@ -45,9 +45,22 @@ test("loopback opens the page and socket without a token", async () => {
   const hub = await startCLI();
   const page = await fetch(hub.url);
   expect(page.status).toBe(200);
-  expect(await page.text()).toContain('name="color-scheme" content="light dark"');
-  expect((await fetch(new URL("/main.js", hub.url))).headers.get("content-type")).toContain("javascript");
-  expect(await (await fetch(new URL("/main.css", hub.url))).text()).toContain("prefers-color-scheme");
+  const html = await page.text();
+  expect(html).toContain('name="color-scheme" content="light dark"');
+  const assets = Array.from(html.matchAll(/(?:src|href)="([^"]+)"/g), ([, asset]) => new URL(asset!, hub.url)).filter((url) => url.protocol !== "data:");
+  expect(assets.length).toBeGreaterThan(0);
+  const contentTypes: string[] = [];
+  for (const asset of assets) {
+    const response = await fetch(asset);
+    expect(response.status).toBe(200);
+    const contentType = response.headers.get("content-type")!;
+    contentTypes.push(contentType);
+    const body = await response.text();
+    expect(body.length).toBeGreaterThan(0);
+    if (contentType.includes("text/css")) expect(body).toContain("prefers-color-scheme");
+  }
+  expect(contentTypes.some((type) => type.includes("javascript"))).toBe(true);
+  expect(contentTypes.some((type) => type.includes("text/css"))).toBe(true);
   const client = await TestClient.connect(new URL("/ws", hub.url).href.replace("http:", "ws:"));
   clients.push(client);
   await client.wait("ready");
@@ -86,8 +99,11 @@ test("a non-loopback request needs a token and the sign-in link sets a reusable 
   expect(cookie).toContain("SameSite=Strict");
   expect(signIn.headers.get("referrer-policy")).toBe("no-referrer");
   const headers = { Cookie: cookie.split(";")[0] };
-  expect((await fetch(url, { headers })).status).toBe(200);
-  expect((await fetch(new URL("/main.js", url), { headers })).status).toBe(200);
+  const page = await fetch(url, { headers });
+  expect(page.status).toBe(200);
+  const script = (await page.text()).match(/<script[^>]+src="([^"]+)"/)![1]!;
+  expect((await fetch(new URL(script, url), { headers })).status).toBe(200);
+  expect((await fetch(new URL(script, url))).status).toBe(401);
   const socket = new URL("/ws", url).href.replace("http:", "ws:");
   const client = await TestClient.connect(socket, { headers });
   clients.push(client);

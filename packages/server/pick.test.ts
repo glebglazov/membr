@@ -103,6 +103,29 @@ test("restart opens a new epoch with the saved pick and replays its first answer
   expect(b.events.filter((event) => event.type === "entry")).toHaveLength(0);
 });
 
+for (const [field, value] of [["effort", "invalid"], ["fast", "yes"]] as const) {
+  test(`an invalid pick ${field} gets a saved error answer and changes no pick`, async () => {
+    const before = serve();
+    const client = await connect(before);
+    client.act({ type: "act", act: "pick", id: "valid", pick: OPUS });
+    await client.wait("answer");
+    const mark = client.events.length;
+    client.socket.send(JSON.stringify({ type: "act", act: "pick", id: "invalid", pick: { ...HAIKU, [field]: value } }));
+    const answer = await client.wait("answer", mark);
+    expect(answer).toMatchObject({ type: "answer", id: "invalid", ok: false, reason: expect.any(String) });
+    expect(client.events.slice(mark).some((event) => event.type === "state" || event.type === "error")).toBe(false);
+    expect(before.engine.epochs[0].picks).toEqual([OPUS]);
+    await before.close();
+    const after = serve(before.dir);
+    const recovered = await connect(after);
+    expect((await recovered.wait("state")).state.pick).toEqual(OPUS);
+    expect(after.engine.epochs[0].options.pick).toEqual(OPUS);
+    recovered.act({ type: "act", act: "pick", id: "invalid", pick: HAIKU });
+    expect(await recovered.wait("answer")).toEqual(answer);
+    expect(after.engine.epochs[0].picks).toEqual([]);
+  });
+}
+
 test("concurrent picks apply in order while stop remains available", async () => {
   const hub = serve();
   const a = await connect(hub);

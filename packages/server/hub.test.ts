@@ -145,23 +145,29 @@ test("bad credentials and incompatible versions have reasons and reveal no log",
   }
 });
 
-test("malformed messages cannot change the log, and a resent goal act keeps its first answer", async () => {
+test("malformed acts save error answers without chat entries, and resends keep their first answer", async () => {
   const server = await serve();
   const client = await connect(server);
-  for (const bad of ["{", JSON.stringify({ type: "act", act: "say", id: "bad", text: 42 }), JSON.stringify({ type: "read", id: "bad", read: "zoom", part: { l: -1, i: 0 } })]) {
+  for (const bad of ["{", JSON.stringify({ type: "act", act: "say", id: "", text: 42 }), JSON.stringify({ type: "read", id: "bad", read: "zoom", part: { l: -1, i: 0 } })]) {
     const mark = client.events.length;
     client.socket.send(bad);
     expect((await client.wait("error", mark)).reason.length).toBeGreaterThan(0);
   }
   expect(records(server.dir)).toHaveLength(0);
+  client.socket.send(JSON.stringify({ type: "act", act: "say", id: "bad", text: 42 }));
+  const invalid = await client.wait("answer");
+  expect(invalid).toMatchObject({ id: "bad", ok: false });
+  const retry = client.events.length;
+  client.act({ type: "act", act: "say", id: "bad", text: "Do not log" });
+  expect(await client.wait("answer", retry)).toEqual(invalid);
   client.act({ type: "act", id: "goal", act: "goal", text: "Future work" });
-  const answer = await client.wait("answer");
+  const answer = await client.wait("answer", 0, (event) => event.id === "goal");
   expect(answer.ok).toBe(true);
   const mark = client.events.length;
   client.act({ type: "act", id: "goal", act: "say", text: "Do not log" });
   expect(await client.wait("answer", mark)).toEqual(answer);
-  expect(records(server.dir)).toHaveLength(1);
-  expect(records(server.dir)[0].kind).toBeUndefined();
+  expect(records(server.dir)).toHaveLength(2);
+  expect(records(server.dir).every((record) => record.kind === undefined)).toBe(true);
 });
 
 test("an incomplete final line is removed before the next durable append", async () => {

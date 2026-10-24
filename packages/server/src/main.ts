@@ -34,10 +34,10 @@ export async function main(engine?: Engine) {
     process.exit(1);
   }
 
-  // Bun 1.3.14 refuses Unix socket probes after the SDK loads node:net.
   const { serveHub } = await import("./hub.ts");
   const { server, token, close } = serveHub({ dir, port, hostname: values.host, engine, config });
   url = server.url.href;
+  taken.lock.update();
   console.log(`membr: serving ${dir} at ${url}`);
   console.log(`membr: sign in at ${url}?token=${encodeURIComponent(token)}`);
 

@@ -32,11 +32,12 @@ test.skipIf(process.env.MEMBR_REAL_SDK !== "1")("S1 real Engine uses zoom to ans
     if (!result || result.type !== "entry") throw new Error("The zoom result was not logged");
     expect(JSON.parse(result.entry.text)).toMatchObject({ error: false, text: expect.stringContaining(secret) });
     const tools = calls.map((call) => call.name);
-    expect(tools.every((name) => name === "mcp__memory__zoom" || name === "mcp__memory__date")).toBe(true);
+    expect(tools.every((name) => name === "mcp__memory__zoom" || name === "mcp__memory__date" || name === "ToolSearch")).toBe(true);
     expect(client.events.filter((event) => event.type === "error")).toEqual([]);
     console.log(JSON.stringify({ zoom: calls.find((call) => call.id === JSON.parse(result.entry.text).id), result: JSON.parse(result.entry.text), tools, reply: reply.entry.text, dataDirectory: dir }));
   } finally {
     client?.close();
-    hub.close();
+    await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 240000);

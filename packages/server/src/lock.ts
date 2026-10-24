@@ -1,62 +1,70 @@
-// one server per data directory, so two never write the same log. The lock
-// is a unix socket that the holder listens on: a socket a crash left behind
-// refuses connections and is taken over, and a live holder answers each
-// connection with who it is.
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFile } from "./durable.ts";
+import { dlopen, read } from "bun:ffi";
+
+function systemLock() {
+  const flock = { args: ["i32", "i32"], returns: "i32" } as const;
+  if (process.platform === "darwin") return dlopen("/usr/lib/libSystem.B.dylib", { flock, __error: { args: [], returns: "ptr" } });
+  const symbols = { flock, __errno_location: { args: [], returns: "ptr" } } as const;
+  try { return dlopen("libc.so.6", symbols); }
+  catch { return dlopen("libc.so", symbols); }
+}
+const native = systemLock();
+const errno = "__error" in native.symbols ? native.symbols.__error : native.symbols.__errno_location;
+const LOCK_EX = 2;
+const LOCK_NB = 4;
 
 export type Holder = { pid: number; url: string };
 
-export type Lock = { release(): void };
+export type Lock = { update(): void; release(): void };
 
 export type Taken = { lock: Lock } | { heldBy: Holder };
 
-// `holder` is read when another process asks, so the url can name the port
-// the server bound after it took the lock
 export async function lock(dir: string, holder: () => Holder): Promise<Taken> {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "lock");
-  while (true) {
-    try {
-      const listener = Bun.listen({
-        unix: file,
-        socket: { open: (sock) => void sock.end(JSON.stringify(holder())), data() {} },
-      });
-      return {
-        lock: {
-          release() {
-            listener.stop(true);
-            fs.rmSync(file, { force: true });
-          },
-        },
-      };
-    } catch (err: any) {
-      if (err.code !== "EADDRINUSE") {
-        throw err;
+  // All contenders must lock the same inode, so this file stays after release.
+  const guard = fs.openSync(path.join(dir, "lock.guard"), "a", 0o600);
+  try {
+    while (native.symbols.flock(guard, LOCK_EX | LOCK_NB) !== 0) {
+      const pointer = errno();
+      if (pointer === null) throw new Error("The system did not return errno");
+      const code = read.i32(pointer);
+      if (code !== 4 && code !== (process.platform === "darwin" ? 35 : 11)) throw new Error(`Cannot lock ${dir}: errno ${code}`);
+      const heldBy = owner(file);
+      if (heldBy) {
+        fs.closeSync(guard);
+        return { heldBy };
       }
+      await Bun.sleep(10);
     }
-    const heldBy = await ask(file);
-    if (heldBy !== null) {
-      return { heldBy };
+    if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSocket()) {
+      throw new Error(`Legacy socket lock at ${file}. Stop the old server and remove this socket before starting membr.`);
     }
-    fs.rmSync(file, { force: true });
+    const update = () => replaceFile(file, JSON.stringify(holder()));
+    update();
+    return { lock: {
+      update,
+      release() {
+        try { fs.rmSync(file, { force: true }); }
+        finally { fs.closeSync(guard); }
+      },
+    } };
+  } catch (error) {
+    fs.closeSync(guard);
+    throw error;
   }
 }
 
-// the live holder of the lock, or null for a socket nobody listens on or a
-// holder that closed without an answer while it shut down.
-// Bun.connect, not node:net: in Bun 1.3, node:net is refused by a Bun.listen
-// unix socket that Bun.connect reaches.
-async function ask(file: string): Promise<Holder | null> {
-  let reply = "";
-  const { promise, resolve } = Promise.withResolvers<Holder | null>();
-  await Bun.connect({
-    unix: file,
-    socket: {
-      data: (_, chunk) => void (reply += chunk),
-      close: () => resolve(reply === "" ? null : JSON.parse(reply)),
-      connectError: () => resolve(null),
-    },
-  }).catch(() => resolve(null));
-  return promise;
+function owner(file: string): Holder | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.url !== "string") throw new Error(`Invalid lock holder in ${file}`);
+    process.kill(value.pid, 0);
+    return value;
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ESRCH")) return null;
+    throw error;
+  }
 }

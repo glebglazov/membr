@@ -4,11 +4,9 @@ declare const EMBEDDED_WEB: Record<string, string> | undefined;
 
 let assets: Promise<Map<string, Blob | string>> | undefined;
 async function build(): Promise<Map<string, Blob | string>> {
-  const result = await Bun.build({ entrypoints: [path.join(import.meta.dir, "../../web/src/main.ts")], target: "browser", minify: true });
+  const result = await Bun.build({ entrypoints: [path.join(import.meta.dir, "../../web/src/index.html")], target: "browser", minify: true });
   if (!result.success) throw new AggregateError(result.logs, "The web renderer did not build");
-  const files = new Map<string, Blob | string>(result.outputs.map((output) => ["/" + path.basename(output.path), output]));
-  files.set("/", await Bun.file(new URL("../../web/src/index.html", import.meta.url)).text());
-  return files;
+  return new Map(result.outputs.map((output) => [path.basename(output.path) === "index.html" ? "/" : "/" + path.basename(output.path), output]));
 }
 
 export async function web(request: Request): Promise<Response> {

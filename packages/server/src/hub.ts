@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { VERSION, parseClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
+import { VERSION, parseClientMessage, type ClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
 import { Log, identity } from "./log.ts";
 import { Chat } from "./chat.ts";
 import { claude, type Engine, type EpochOptions } from "./engine.ts";
@@ -140,7 +140,16 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
       maxPayloadLength: 36 * 2 ** 20,
       async message(socket, data) {
         try {
-          const message = parseClientMessage(JSON.parse(typeof data === "string" ? data : data.toString()));
+          const input: unknown = JSON.parse(typeof data === "string" ? data : data.toString());
+          let message: ClientMessage;
+          try { message = parseClientMessage(input); }
+          catch (error) {
+            if (socket.data.phase !== "ready" || input === null || typeof input !== "object" || !("type" in input) || input.type !== "act"
+              || !("id" in input) || typeof input.id !== "string" || input.id.length === 0 || input.id.length > 256) throw error;
+            const reason = error instanceof Error ? error.message : "Request failed";
+            send(socket, log.apply({ type: "act", act: "say", id: input.id, text: "" }, log.count, reason).answer);
+            return;
+          }
           if (socket.data.phase === "hello") {
             if (message.type !== "hello") return refuse(socket, "The first message must be hello");
             if (Number(message.version.split(".")[0]) !== Number(VERSION.split(".")[0])) return refuse(socket, `Protocol ${message.version} is incompatible with ${VERSION}`);

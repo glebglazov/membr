@@ -205,6 +205,7 @@ function open(view: string, options: EpochOptions): Epoch {
       tool("tell", "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\".", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: agents.tell(name, message) }] })),
     ] : []),
   ] }) } : undefined;
+  const readTools = memory ? ["mcp__memory__zoom", "mcp__memory__date"] : [];
   const session = query({
     prompt: inbox,
     options: {
@@ -219,11 +220,10 @@ function open(view: string, options: EpochOptions): Epoch {
       permissionMode: "auto",
       disallowedTools: ["Agent"],
       mcpServers,
-      allowedTools: memory ? ["mcp__memory__zoom", "mcp__memory__date", ...(agents ? ["mcp__memory__spawn", "mcp__memory__tell"] : [])] : [],
       includePartialMessages: true,
       persistSession: true,
       canUseTool: async (tool, input, { signal }) =>
-        (await options.ask?.(tool, input, signal))
+        (readTools.includes(tool) || await options.ask?.(tool, input, signal))
           ? { behavior: "allow", updatedInput: input }
           : { behavior: "deny", message: "The user did not allow this tool call." },
     },

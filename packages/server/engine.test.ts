@@ -68,7 +68,8 @@ test("the Engine registers zoom and date and sends their text, errors and images
     { name: "zoom", description: "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on." },
     { name: "date", description: "The date and time of message id." },
   ]);
-  expect(wire.allowed).toEqual(["mcp__memory__zoom", "mcp__memory__date"]);
+  expect(wire.allowed ?? []).toEqual([]);
+  expect(wire.permissions).toEqual(Array(2).fill({ behavior: "allow", updatedInput: { id: 3 } }));
   expect(wire.answers).toEqual([
     { content: [{ type: "text", text: "3,1,0" }, { type: "image", data: "aW1hZ2U=", mimeType: "image/png" }], isError: false },
     { content: [{ type: "text", text: "No line 99+1. Roots: 0+4." }], isError: true },
@@ -85,7 +86,12 @@ test("main MCP registers spawn and tell while child input stays synthetic", asyn
     { name: "spawn", description: "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task." },
     { name: "tell", description: "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\"." },
   ]);
-  expect(wire.calls[0].allowed).toEqual(["mcp__memory__zoom", "mcp__memory__date", "mcp__memory__spawn", "mcp__memory__tell"]);
+  expect(wire.calls[0].allowed ?? []).toEqual([]);
+  expect(wire.requests).toEqual(["mcp__memory__spawn", "mcp__memory__tell"]);
+  expect(wire.permissions).toEqual([
+    { behavior: "deny", message: "The user did not allow this tool call." },
+    { behavior: "allow", updatedInput: {} },
+  ]);
   expect(wire.calls[1].tools.map((tool: { name: string }) => tool.name)).toEqual(["zoom", "date"]);
   expect(wire.delegated).toEqual([{ tasks: ["Task"], effort: "high" }, { name: "Agent1", message: "More" }]);
   expect(wire.answers).toEqual([{ content: [{ type: "text", text: "Started Agent1." }] }, { content: [{ type: "text", text: "Sent." }] }]);
