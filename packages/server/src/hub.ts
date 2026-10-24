@@ -2,7 +2,8 @@ import type { ServerWebSocket } from "bun";
 import { VERSION, parseClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
 import { Log, identity } from "./log.ts";
 import { Chat } from "./chat.ts";
-import type { Engine, EpochOptions } from "./engine.ts";
+import { claude, type Engine, type EpochOptions } from "./engine.ts";
+import { Tree } from "./tree.ts";
 
 type Connection = { phase: "hello"; tokens: string[] } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -26,6 +27,7 @@ function credentials(request: Request): string[] {
 
 export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions> }) {
   const log = new Log(options.dir);
+  let tree: Tree | undefined;
   const token = identity(options.dir, "token");
   const sockets = new Set<Socket>();
   const send = (socket: Socket, event: Event) => socket.send(JSON.stringify(event));
@@ -39,7 +41,7 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
       return;
     }
     if (request.read === "roots") {
-      send(socket, { type: "read", id: request.id, entries: [], parts: Array.from({ length: log.count }, (_, i) => ({ l: 0, i })) });
+      send(socket, { type: "read", id: request.id, entries: [], parts: tree!.roots() });
       return;
     }
     const start = request.part.i * 2 ** request.part.l;
@@ -80,14 +82,14 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
               if (entry) send(socket, { type: "entry", entry });
             }
             sockets.add(socket);
-            for (const ask of chat.asks) send(socket, ask);
-            send(socket, { type: "state", state: chat.state });
+            for (const ask of chat!.asks) send(socket, ask);
+            send(socket, { type: "state", state: chat!.state });
             send(socket, { type: "ready", version: VERSION });
             return;
           }
           if (message.type === "hello") return refuse(socket, "Hello was already received");
           if (message.type === "read") return read(socket, message);
-          send(socket, chat.act(message));
+          send(socket, chat!.act(message));
         } catch (error) {
           const reason = error instanceof Error ? error.message : "Request failed";
           if (socket.data.phase === "hello") refuse(socket, reason);
@@ -97,12 +99,18 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
       close(socket) { sockets.delete(socket); },
     },
   });
-  let chat: Chat;
+  let chat: Chat | undefined;
   try {
-    chat = new Chat(log, (event) => { for (const client of sockets) send(client, event); }, options.engine, options.epoch);
+    chat = new Chat(log, (event) => {
+      if (event.type === "entry") tree?.sync();
+      for (const client of sockets) send(client, event);
+    }, options.engine, options.epoch);
+    tree = new Tree(options.dir, log, options.engine ?? claude);
   } catch (error) {
+    chat?.close();
+    tree?.close();
     server.stop(true);
     throw error;
   }
-  return { server, token, close() { chat.close(); server.stop(true); } };
+  return { server, token, close() { tree?.close(); chat?.close(); server.stop(true); } };
 }

@@ -51,6 +51,6 @@ export class FakeEngine implements Engine {
     epoch.emit({ kind: "session", id: `fake-session-${this.epochs.length}` });
     return epoch;
   }
-  async compact(): Promise<string | null> { throw new Error("No compaction was scripted"); }
+  async compact(_prompt: string): Promise<string | null> { return "A compacted message."; }
   async account(): Promise<Account> { throw new Error("No account was scripted"); }
 }
