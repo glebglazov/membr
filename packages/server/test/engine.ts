@@ -12,6 +12,7 @@ export class FakeEpoch implements Epoch {
   private wake: (() => void) | null = null;
   private failure: Error | null = null;
   onInterrupt: () => Promise<void> = async () => {};
+  onPick: (pick: Pick) => Promise<void> = async () => {};
 
   constructor(readonly view: string, readonly options: EpochOptions, private readonly script: (epoch: FakeEpoch, message: Message) => void) {}
 
@@ -26,7 +27,7 @@ export class FakeEpoch implements Epoch {
   emit(...events: EngineEvent[]): void { this.queue.push(...events.map((event) => event.kind === "end" && event.through === 0 ? { ...event, through: this.messages.length } : event)); this.wake?.(); }
   fail(error: Error): void { this.failure = error; this.wake?.(); }
   async interrupt(): Promise<void> { this.interrupts++; await this.onInterrupt(); }
-  async pick(pick: Pick): Promise<void> { this.picks.push(pick); }
+  async pick(pick: Pick): Promise<void> { this.picks.push(pick); await this.onPick(pick); }
   close(): void { this.closed = true; this.wake?.(); }
   get events(): AsyncIterable<EngineEvent> { return this.stream(); }
 

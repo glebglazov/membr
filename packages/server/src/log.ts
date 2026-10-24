@@ -3,12 +3,13 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import { parseEntry, parseEvent, type Act, type Answer, type Entry } from "@membr/protocol";
+import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick } from "@membr/protocol";
 
 const SLOT = 16;
 const DAY = 86_400_000;
 type Turn = { id: number; phase: "running" | "done" };
-type Record = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn };
+type SavedPick = { revision: number; value: Pick };
+type Record = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick };
 type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
@@ -45,6 +46,7 @@ export class Log {
   private readonly finished = new Set<number>();
   private readonly events = new Set<string>();
   private failure: unknown;
+  private savedPick: SavedPick | null = null;
 
   constructor(private readonly dir: string) {
     fs.mkdirSync(path.join(dir, "main"), { recursive: true });
@@ -64,6 +66,12 @@ export class Log {
             const ans = parseEvent(raw.ans);
             if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
             this.answers.set(raw.act, ans);
+            if ("pick" in raw) {
+              const pick = raw.pick;
+              if (!ans.ok || pick === null || typeof pick !== "object" || !("revision" in pick) || typeof pick.revision !== "number" || !Number.isSafeInteger(pick.revision) || pick.revision < 1 || !("value" in pick)) throw new Error(`Invalid pick in ${file}`);
+              const saved = { revision: pick.revision, value: parsePick(pick.value) };
+              if (saved.revision > (this.savedPick?.revision ?? 0)) this.savedPick = saved;
+            }
           } else if ("event" in raw && typeof raw.event === "string" && !this.events.has(raw.event)) {
             this.events.add(raw.event);
           } else throw new Error(`Invalid log record in ${file}`);
@@ -94,6 +102,7 @@ export class Log {
   }
 
   get count(): number { return this.locations.length; }
+  get pick(): Pick | null { return this.savedPick?.value ?? null; }
 
   read(i: number): Entry | null {
     const location = this.locations[i];
@@ -115,10 +124,11 @@ export class Log {
     const entry = refusal ? null : act.act === "say"
       ? this.entry("user", act.text, act.images)
       : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.") : null;
-    const answer: Answer = entry
-      ? { type: "answer", id: act.id, ok: true, entry: entry.i }
+    const pick = !refusal && act.act === "pick" ? { revision: (this.savedPick?.revision ?? 0) + 1, value: act.pick } : undefined;
+    const answer: Answer = entry || pick
+      ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
       : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
-    this.write({ ...entry, act: act.id, ans: answer, ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
+    this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
     return { answer, entry, fresh: true };
   }
 
@@ -169,6 +179,7 @@ export class Log {
       if ("act" in record) this.answers.set(record.act, record.ans);
       else this.events.add(record.event);
       if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
+      if (record.pick) this.savedPick = record.pick;
       if (entry) {
         const index = fs.openSync(path.join(this.dir, "main.index"), "r+");
         try { this.place(index, entry.i, { day, at, length: bytes.length - 1 }); } finally { fs.closeSync(index); }

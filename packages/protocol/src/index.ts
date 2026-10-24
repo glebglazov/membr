@@ -82,7 +82,7 @@ function version(value: unknown): string {
   if (!/^\d+\.\d+(?:\.\d+)?$/.test(result)) throw new Error("Expected a protocol version such as 1.0");
   return result;
 }
-function pick(value: unknown): Pick {
+export function parsePick(value: unknown): Pick {
   const v = object(value);
   return { model: id(v.model), effort: oneOf(v.effort, ["low", "medium", "high", "xhigh", "max"]), fast: boolean(v.fast) };
 }
@@ -116,7 +116,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "say": return { ...base, act: "say", text: string(v.text), ...(v.images === undefined ? {} : { images: list(v.images, string) }) };
       case "stop": return { ...base, act: "stop", agent: nullable(v.agent, id) };
       case "goal": return { ...base, act: "goal", text: nullable(v.text, string) };
-      case "pick": return { ...base, act: "pick", pick: pick(v.pick) };
+      case "pick": return { ...base, act: "pick", pick: parsePick(v.pick) };
       case "answer": return { ...base, act: "answer", approval: id(v.approval), choice: oneOf(v.choice, ["once", "always", "deny"]) };
       case "import": return { ...base, act: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: id(v.path) };
       case "go": return { ...base, act: "go", import: id(v.import), paused: boolean(v.paused) };
@@ -155,7 +155,7 @@ export function parseEvent(value: unknown): Event {
         const u = object(value);
         return { input: integer(u.input), cacheRead: integer(u.cacheRead), cacheWrite: integer(u.cacheWrite), output: integer(u.output) };
       });
-      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, pick), agents: list(s.agents, id), usage } };
+      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), agents: list(s.agents, id), usage } };
     }
     default: throw new Error("Unknown event");
   }

@@ -8,6 +8,7 @@ import { Log } from "./log.ts";
 type Turn = { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closed" };
 type Session = { id: string; epoch: Epoch };
 const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
+const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
 const PROMPT = fs.readFileSync(new URL("./prompt.txt", import.meta.url), "utf8");
 
 export class Chat {
@@ -15,10 +16,12 @@ export class Chat {
   private session: Session;
   private usage: State["usage"] = null;
   private sent = 0;
-  private readonly options: EpochOptions;
+  private options: EpochOptions;
+  private picking = Promise.resolve();
 
   constructor(private readonly log: Log, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}) {
     this.options = { pick: PICK, append: PROMPT, cwd: process.cwd(), ...options };
+    if (log.pick) this.options.pick = log.pick;
     for (const turn of log.interrupted) log.finish(turn, "The server restarted before the turn ended.");
     this.session = this.open();
     void this.read(this.session);
@@ -29,7 +32,7 @@ export class Chat {
   }
 
   act(act: Act): Answer {
-    const refusal = this.turn.phase === "closed" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : undefined;
+    const refusal = this.turn.phase === "closed" ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
     const id = this.turn.phase === "running" || this.turn.phase === "stopping" ? this.turn.id : this.log.count;
     const result = this.log.apply(act, id, refusal);
     if (!result.fresh || !result.answer.ok) return result.answer;
@@ -43,6 +46,16 @@ export class Chat {
       this.turn = { phase: "stopping", id };
       this.change();
       void this.stop(this.session, id);
+    } else if (act.act === "pick") {
+      this.options = { ...this.options, pick: act.pick };
+      this.change();
+      const session = this.session;
+      this.picking = this.picking.then(async () => {
+        if (session !== this.session || this.turn.phase === "closed" || this.turn.phase === "failed") return;
+        await session.epoch.pick(act.pick);
+      }).catch((error) => {
+        if (session === this.session && this.turn.phase !== "closed" && this.turn.phase !== "failed") this.fail(error);
+      });
     }
     return result.answer;
   }
@@ -80,7 +93,7 @@ export class Chat {
             break;
         }
       }
-      if (session === this.session && this.turn.phase !== "closed" && this.turn.phase !== "stopping") throw new Error("The Engine closed the epoch");
+      if (session === this.session && this.turn.phase !== "closed" && this.turn.phase !== "stopping" && this.turn.phase !== "failed") throw new Error("The Engine closed the epoch");
     } catch (error) {
       if (session === this.session && this.turn.phase !== "closed") this.fail(error);
     }
@@ -99,6 +112,7 @@ export class Chat {
   }
 
   private fail(error: unknown): void {
+    if (this.turn.phase === "closed" || this.turn.phase === "failed") return;
     const reason = error instanceof Error ? error.message : "The Engine failed";
     const turn = this.turn;
     this.turn = { phase: "failed", reason };
