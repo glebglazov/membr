@@ -1,0 +1,231 @@
+[
+  {
+    "type": "view",
+    "parts": []
+  },
+  {
+    "type": "state",
+    "state": {
+      "busy": false,
+      "wait": "",
+      "goal": null,
+      "pick": {
+        "model": "sonnet",
+        "effort": "high",
+        "fast": false
+      },
+      "agents": [],
+      "usage": null
+    }
+  },
+  {
+    "type": "ready",
+    "version": "1.0"
+  },
+  {
+    "type": "entry",
+    "entry": {
+      "i": 0,
+      "kind": "user",
+      "text": "Check the folder",
+      "date": "2026-10-24T18:15:27.379Z",
+      "from": {
+        "machine": "8bd6bd15-f683-4548-9df7-8532b4920c78",
+        "seq": 0
+      }
+    }
+  },
+  {
+    "type": "view",
+    "parts": [
+      {
+        "l": 0,
+        "i": 0
+      }
+    ]
+  },
+  {
+    "type": "state",
+    "state": {
+      "busy": true,
+      "wait": "",
+      "goal": null,
+      "pick": {
+        "model": "sonnet",
+        "effort": "high",
+        "fast": false
+      },
+      "agents": [],
+      "usage": null
+    }
+  },
+  {
+    "type": "answer",
+    "id": "say-1",
+    "ok": true,
+    "entry": 0
+  },
+  {
+    "type": "live",
+    "text": "I will ",
+    "agent": null
+  },
+  {
+    "type": "live",
+    "text": "check.",
+    "agent": null
+  },
+  {
+    "type": "entry",
+    "entry": {
+      "i": 1,
+      "kind": "unii",
+      "text": "I will check.",
+      "date": "2026-10-24T18:15:27.384Z",
+      "from": {
+        "machine": "8bd6bd15-f683-4548-9df7-8532b4920c78",
+        "seq": 1
+      }
+    }
+  },
+  {
+    "type": "view",
+    "parts": [
+      {
+        "l": 0,
+        "i": 0
+      },
+      {
+        "l": 0,
+        "i": 1
+      }
+    ]
+  },
+  {
+    "type": "entry",
+    "entry": {
+      "i": 2,
+      "kind": "tool",
+      "text": "{\"id\":\"call-1\",\"name\":\"Bash\",\"input\":{\"command\":\"pwd\"}}",
+      "date": "2026-10-24T18:15:27.390Z",
+      "from": {
+        "machine": "8bd6bd15-f683-4548-9df7-8532b4920c78",
+        "seq": 2
+      }
+    }
+  },
+  {
+    "type": "view",
+    "parts": [
+      {
+        "l": 0,
+        "i": 0
+      },
+      {
+        "l": 0,
+        "i": 1
+      },
+      {
+        "l": 0,
+        "i": 2
+      }
+    ]
+  },
+  {
+    "type": "entry",
+    "entry": {
+      "i": 3,
+      "kind": "echo",
+      "text": "{\"id\":\"call-1\",\"text\":\"/project\",\"error\":false}",
+      "date": "2026-10-24T18:15:27.399Z",
+      "from": {
+        "machine": "8bd6bd15-f683-4548-9df7-8532b4920c78",
+        "seq": 3
+      }
+    }
+  },
+  {
+    "type": "view",
+    "parts": [
+      {
+        "l": 0,
+        "i": 0
+      },
+      {
+        "l": 0,
+        "i": 1
+      },
+      {
+        "l": 0,
+        "i": 2
+      },
+      {
+        "l": 0,
+        "i": 3
+      }
+    ]
+  },
+  {
+    "type": "live",
+    "text": "The folder is /project.",
+    "agent": null
+  },
+  {
+    "type": "entry",
+    "entry": {
+      "i": 4,
+      "kind": "unii",
+      "text": "The folder is /project.",
+      "date": "2026-10-24T18:15:27.407Z",
+      "from": {
+        "machine": "8bd6bd15-f683-4548-9df7-8532b4920c78",
+        "seq": 4
+      }
+    }
+  },
+  {
+    "type": "view",
+    "parts": [
+      {
+        "l": 0,
+        "i": 0
+      },
+      {
+        "l": 0,
+        "i": 1
+      },
+      {
+        "l": 0,
+        "i": 2
+      },
+      {
+        "l": 0,
+        "i": 3
+      },
+      {
+        "l": 0,
+        "i": 4
+      }
+    ]
+  },
+  {
+    "type": "state",
+    "state": {
+      "busy": false,
+      "wait": "",
+      "goal": null,
+      "pick": {
+        "model": "sonnet",
+        "effort": "high",
+        "fast": false
+      },
+      "agents": [],
+      "usage": {
+        "input": 20,
+        "cacheRead": 10,
+        "cacheWrite": 0,
+        "output": 10
+      }
+    }
+  }
+]

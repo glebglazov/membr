@@ -1,0 +1,29 @@
+/* Palette and block style adapted from UniiChat at commit 0500bf6.
+   Copyright 2026 Higher Order Company. Apache-2.0. See licenses/UniiChat.txt. */
+:root { color-scheme: light dark; --ink: #111111; --mid: #666666; --paper: #ffffff; --lift: #fafafa; --block: #f2f2f2; --hair: #e8e8e8; --frame: #cccccc; --edge: #111111; --red: #b42318; }
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e3e3e6; --mid: #a6a6ad; --paper: #171719; --lift: #222226; --block: #2c2c31; --hair: #36363c; --frame: #4c4c53; --edge: #85858d; --red: #f8857c; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.app { min-height: 100dvh; display: flex; flex-direction: column; }
+header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 20px; background: var(--paper); border-bottom: 1px solid var(--hair); }
+h1 { margin: 0; font: 600 20px/1.5 "Avenir Next", sans-serif; }
+header span, .label, .pending { font-size: 13px; color: var(--mid); }
+main { width: min(740px, 100% - 32px); margin: 24px auto; flex: 1; }
+.message { margin: 12px 0; padding: 16px 20px; border-radius: 14px; background: var(--block); }
+.message.user, .message.work { background: var(--paper); border: 1px solid var(--edge); }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.label { margin-bottom: 6px; }
+.tool .text, .echo .text { font: 13px/1.6 ui-monospace, monospace; }
+.empty { color: var(--mid); text-align: center; margin: 16vh 0; }
+footer { position: sticky; bottom: 0; padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: var(--paper); }
+form { display: flex; align-items: flex-end; gap: 8px; width: min(740px, 100%); margin: auto; padding: 10px; background: var(--lift); border: 1px solid var(--frame); border-radius: 20px; }
+textarea { flex: 1; min-width: 0; max-height: 40vh; resize: vertical; border: 0; background: transparent; color: inherit; padding: 5px; font: inherit; }
+button { padding: 9px 12px; border: 0; border-radius: 10px; background: var(--block); color: var(--ink); font: inherit; cursor: pointer; }
+button[type=submit] { background: var(--ink); color: var(--paper); }
+button:disabled { opacity: .4; cursor: default; }
+button:focus-visible, textarea:focus-visible { outline: 2px solid var(--mid); outline-offset: 2px; }
+.error, .pending { width: min(740px, 100%); margin: 0 auto 10px; overflow-wrap: anywhere; }
+.error { color: var(--red); }
+@media (max-width: 440px) { header { padding: 10px 16px; } .message { padding: 12px 14px; } form { gap: 5px; } button { padding: 9px; } }

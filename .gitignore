@@ -1,2 +1,3 @@
 node_modules/
 packages/core/.boundary-*/
+packages/web/dist/

@@ -6,7 +6,8 @@
   "bin": { "membr": "packages/server/src/main.ts" },
   "scripts": {
     "test": "bun test",
-    "serve": "bun packages/server/src/main.ts serve"
+    "serve": "bun packages/server/src/main.ts serve",
+    "build:web": "bun build packages/web/src/main.ts --target browser --outdir packages/web/dist"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

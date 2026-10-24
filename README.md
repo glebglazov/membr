@@ -12,7 +12,15 @@ bun install
 bun run serve              # same as: bun packages/server/src/main.ts serve
 ```
 
-`membr serve` listens on `127.0.0.1:8788`. Use `--port N` to change the port.
+`membr serve` listens on `127.0.0.1:8788`. Open that address to chat in your
+browser. Use `--port N` to change the port. The server builds the Preact assets
+on the first page request. `bun run build:web` also builds them in `packages/web/dist`.
+
+Local connections need no token. For access from another device, use
+`--host ADDRESS` with the server's Tailscale or network address. Open the
+sign-in link that the server prints. It sets an HttpOnly cookie and removes
+the token from the address bar. The page follows your OS light or dark setting.
+
 It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
 One server at a time can use a data directory. A second server on the same
 directory exits with status 1 and names the process that holds the lock.
@@ -60,7 +68,9 @@ Send hello first:
 
 The server replays logged `entry` events, then sends `ready`. A different major
 version gets `refused` with a reason. Both `web` and `term` use the same protocol.
-A token supplied by the connection allows `"token":null` in hello.
+A token supplied by the connection allows `"token":null` in hello. A local
+connection to a loopback address also permits `"token":null`. Browser requests
+must use the same origin as the page.
 
 Send a message with an act id that remains the same across retries:
 
@@ -82,7 +92,6 @@ Reads use their own request ids:
 
 A `read` event returns the request id, `parts` and `entries`. Level zero names
 one message. Higher levels name a block of `2 ** l` messages at `i * 2 ** l`.
-This slice has no summaries or model calls. Other acts return a saved failure
-answer. Agent reads return an error. `packages/protocol/src/index.ts` defines
-all message types and their boundary parsers. The reusable S1 test client is
+`packages/protocol/src/index.ts` defines all message types and their boundary
+parsers. The reusable S1 test client is
 `packages/server/test/client.ts`.

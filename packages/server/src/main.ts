@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-// the one `membr` entry point. `membr serve` takes the data directory's lock,
-// then listens on loopback.
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -9,11 +7,11 @@ import { readConfig } from "./config.ts";
 import type { Engine } from "./engine.ts";
 
 export async function main(engine?: Engine) {
-  const USAGE = "usage: membr serve [--port N]";
+  const USAGE = "usage: membr serve [--port N] [--host ADDRESS]";
 
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { port: { type: "string", default: "8788" } },
+    options: { port: { type: "string", default: "8788" }, host: { type: "string", default: "127.0.0.1" } },
   });
 
   if (positionals[0] !== "serve") {
@@ -38,7 +36,7 @@ export async function main(engine?: Engine) {
 
   // Bun 1.3.14 refuses Unix socket probes after the SDK loads node:net.
   const { serveHub } = await import("./hub.ts");
-  const { server, token, close } = serveHub({ dir, port, engine, config });
+  const { server, token, close } = serveHub({ dir, port, hostname: values.host, engine, config });
   url = server.url.href;
   console.log(`membr: serving ${dir} at ${url}`);
   console.log(`membr: sign in at ${url}?token=${encodeURIComponent(token)}`);

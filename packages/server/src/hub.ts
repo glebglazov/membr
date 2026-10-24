@@ -7,8 +7,9 @@ import { Tree } from "./tree.ts";
 import { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { readConfig } from "./config.ts";
+import { web } from "./web.ts";
 
-type Connection = { phase: "hello"; tokens: string[] } | { phase: "ready"; hello: Hello };
+type Connection = { phase: "hello"; tokens: string[]; local: boolean } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
 
 function credentials(request: Request): string[] {
@@ -28,7 +29,11 @@ function credentials(request: Request): string[] {
   return tokens;
 }
 
-export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
+function loopback(address: string): boolean {
+  return address === "::1" || address === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(address) || /^::ffff:127\.\d+\.\d+\.\d+$/.test(address);
+}
+
+export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
   const config = options.config ?? readConfig(options.dir);
   const log = new Log(options.dir);
   let tree: Tree | undefined;
@@ -57,18 +62,31 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
     send(socket, { type: "read", id: request.id, entries: opened.kind === "message" ? [opened.entry] : [], parts: lines.map(({ l, i }) => ({ l, i })), lines, ...(opened.kind === "missing" ? { error: opened.reason } : {}) });
   }
   const server = Bun.serve<Connection>({
-    hostname: "127.0.0.1",
+    hostname: options.hostname ?? "127.0.0.1",
     port: options.port,
     fetch(request, server) {
       const url = new URL(request.url);
-      if (url.pathname !== "/ws") return url.pathname === "/" ? new Response("membr") : new Response("Not found", { status: 404 });
+      const origin = request.headers.get("origin");
+      if (origin !== null && origin !== url.origin) return new Response("Invalid origin", { status: 403 });
+      const local = loopback(server.requestIP(request)?.address ?? "") && (loopback(url.hostname) || url.hostname === "localhost");
       let tokens: string[];
       try { tokens = credentials(request); } catch {
         return new Response("Invalid bearer credentials", { status: 401 });
       }
       if (tokens.some((value) => value !== token)) return new Response("Invalid bearer token", { status: 401 });
-      if (server.upgrade(request, { data: { phase: "hello", tokens } })) return;
-      return new Response("WebSocket upgrade required", { status: 426 });
+      if (url.pathname === "/ws") {
+        if (!local && !tokens.length && (origin !== null || request.headers.get("upgrade")?.toLowerCase() !== "websocket")) return new Response("Bearer token required", { status: 401 });
+        if (server.upgrade(request, { data: { phase: "hello", tokens, local } })) return;
+        return new Response("WebSocket upgrade required", { status: 426 });
+      }
+      if (!local && !tokens.length) return new Response("Bearer token required", { status: 401 });
+      if (url.pathname === "/" && url.searchParams.has("token") && request.method === "GET") {
+        return new Response(null, { status: 303, headers: {
+          Location: "/", "Set-Cookie": `token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${url.protocol === "https:" ? "; Secure" : ""}`,
+          "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        } });
+      }
+      return web(request);
     },
     websocket: {
       message(socket, data) {
@@ -78,7 +96,7 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
             if (message.type !== "hello") return refuse(socket, "The first message must be hello");
             if (Number(message.version.split(".")[0]) !== Number(VERSION.split(".")[0])) return refuse(socket, `Protocol ${message.version} is incompatible with ${VERSION}`);
             const tokens = [...socket.data.tokens, ...(message.token === null ? [] : [message.token])];
-            if (!tokens.length || tokens.some((value) => value !== token)) return refuse(socket, "Invalid bearer token");
+            if ((!socket.data.local && !tokens.length) || tokens.some((value) => value !== token)) return refuse(socket, "Invalid bearer token");
             socket.data = { phase: "ready", hello: message };
             for (let i = 0; i < log.count; i++) {
               const entry = log.read(i);
@@ -88,6 +106,7 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
             for (const ask of chat!.asks) send(socket, ask);
             send(socket, { type: "view", parts: chat!.parts });
             send(socket, { type: "state", state: chat!.state });
+            if (chat!.live) send(socket, { type: "live", text: chat!.live, agent: null });
             send(socket, { type: "ready", version: VERSION });
             return;
           }

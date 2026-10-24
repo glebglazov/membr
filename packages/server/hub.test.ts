@@ -124,7 +124,7 @@ test("bad credentials and incompatible versions have reasons and reveal no log",
   const good = await connect(server);
   good.act({ type: "act", id: "private", act: "say", text: "Private" });
   await good.wait("answer");
-  for (const options of [{ token: "wrong" }, { token: server.token, version: "2.0" }, { token: "wrong", headers: { Authorization: `Bearer ${server.token}` } }, {}]) {
+  for (const options of [{ token: "wrong" }, { token: server.token, version: "2.0" }, { token: "wrong", headers: { Authorization: `Bearer ${server.token}` } }]) {
     const client = await TestClient.connect(server.url, options);
     clients.push(client);
     const refused = await client.wait("refused");

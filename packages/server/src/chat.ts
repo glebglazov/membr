@@ -29,6 +29,7 @@ export class Chat {
   private session: Session;
   private usage: State["usage"] = null;
   private sent = 0;
+  private streaming = "";
   private options: EpochOptions;
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
@@ -53,6 +54,8 @@ export class Chat {
     this.session = this.open();
     void this.read(this.session);
   }
+
+  get live() { return this.streaming; }
 
   get parts() { return this.view.parts; }
 
@@ -200,8 +203,8 @@ export class Chat {
         if (session !== this.session || this.turn.phase === "closed" || this.turn.phase === "closing") return;
         switch (event.kind) {
           case "session": this.log.epoch(session.id, event.id); break;
-          case "delta": this.emit({ type: "live", text: event.text, agent: null }); break;
-          case "text": this.record(this.log.append("unii", event.text)); break;
+          case "delta": this.streaming += event.text; this.emit({ type: "live", text: event.text, agent: null }); break;
+          case "text": this.streaming = ""; this.record(this.log.append("unii", event.text)); break;
           case "tool": this.record(this.log.append("tool", JSON.stringify({ id: event.id, name: event.name, input: event.input }))); break;
           case "echo": this.record(this.log.append("echo", JSON.stringify({ id: event.id, text: event.text, error: event.error }))); break;
           case "compacted": throw new Error("The Engine compacted the epoch unexpectedly");
@@ -308,5 +311,5 @@ export class Chat {
     }).catch((error) => console.error("after: " + (error instanceof Error ? error.message : String(error))));
   }
 
-  private change(): void { this.emit({ type: "state", state: this.state }); }
+  private change(): void { if (!this.state.busy) this.streaming = ""; this.emit({ type: "state", state: this.state }); }
 }
