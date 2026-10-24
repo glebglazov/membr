@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { TestClient } from "./test/client.ts";
 
 const MAIN = path.join(import.meta.dir, "test/serve.ts");
 const running: Bun.Subprocess[] = [];
@@ -62,4 +63,26 @@ test("a lock left by a crashed server is taken over", async () => {
   expect(fs.existsSync(path.join(dir, "lock"))).toBe(true);
 
   await listening(serve(dir));
+});
+
+test("SIGTERM waits for the after command before it releases the server", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-"));
+  const output = path.join(dir, "after.txt");
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ after: `sleep 0.1; printf done > '${output}'` }));
+  const proc = serve(dir);
+  const url = await listening(proc);
+  const token = fs.readFileSync(path.join(dir, "token"), "utf8").trim();
+  const client = await TestClient.connect(url.replace("http:", "ws:") + "ws", { token });
+  try {
+    await client.wait("ready");
+    const mark = client.events.length;
+    client.act({ type: "act", act: "say", id: "before-shutdown", text: "Work" });
+    await client.wait("answer", mark);
+    await client.wait("state", mark, (event) => !event.state.busy);
+    proc.kill("SIGTERM");
+    expect(await proc.exited).toBe(0);
+    expect(fs.readFileSync(output, "utf8")).toBe("done");
+  } finally {
+    client.close();
+  }
 });

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { lock } from "./lock.ts";
+import { readConfig } from "./config.ts";
 import type { Engine } from "./engine.ts";
 
 export async function main(engine?: Engine) {
@@ -27,6 +28,7 @@ export async function main(engine?: Engine) {
   }
 
   const dir = process.env.MEMBR_DIR || path.join(os.homedir(), ".membr");
+  const config = readConfig(dir);
   let url = "";
   const taken = await lock(dir, () => ({ pid: process.pid, url }));
   if ("heldBy" in taken) {
@@ -36,16 +38,21 @@ export async function main(engine?: Engine) {
 
   // Bun 1.3.14 refuses Unix socket probes after the SDK loads node:net.
   const { serveHub } = await import("./hub.ts");
-  const { server, token, close } = serveHub({ dir, port, engine });
+  const { server, token, close } = serveHub({ dir, port, engine, config });
   url = server.url.href;
   console.log(`membr: serving ${dir} at ${url}`);
   console.log(`membr: sign in at ${url}?token=${encodeURIComponent(token)}`);
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
-      close();
-      taken.lock.release();
-      process.exit(0);
+      void close().then(
+        () => { taken.lock.release(); process.exit(0); },
+        (error) => {
+          console.error("membr: " + (error instanceof Error ? error.message : String(error)));
+          taken.lock.release();
+          process.exit(1);
+        },
+      );
     });
   }
 }

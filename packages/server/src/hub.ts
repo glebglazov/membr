@@ -5,6 +5,8 @@ import { Chat } from "./chat.ts";
 import { claude, type Engine, type EpochOptions } from "./engine.ts";
 import { Tree } from "./tree.ts";
 import { Memory } from "./memory.ts";
+import type { ChatConfig } from "./config.ts";
+import { readConfig } from "./config.ts";
 
 type Connection = { phase: "hello"; tokens: string[] } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
@@ -26,7 +28,8 @@ function credentials(request: Request): string[] {
   return tokens;
 }
 
-export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions> }) {
+export function serveHub(options: { dir: string; port: number; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
+  const config = options.config ?? readConfig(options.dir);
   const log = new Log(options.dir);
   let tree: Tree | undefined;
   let memory: Memory;
@@ -105,12 +108,22 @@ export function serveHub(options: { dir: string; port: number; engine?: Engine; 
     chat = new Chat(log, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
-    }, options.engine, options.epoch);
+    }, options.engine, options.epoch, config);
   } catch (error) {
     chat?.close();
     tree?.close();
     server.stop(true);
     throw error;
   }
-  return { server, token, close() { tree?.close(); chat?.close(); server.stop(true); } };
+  let shutdown: Promise<void> | null = null;
+  return { server, token, close(): Promise<void> {
+    if (shutdown) return shutdown;
+    server.stop(true);
+    const done = chat?.close() ?? Promise.resolve();
+    if (!config.afterCommand) {
+      tree?.close();
+      shutdown = done;
+    } else shutdown = done.then(() => { tree?.close(); });
+    return shutdown;
+  } };
 }
