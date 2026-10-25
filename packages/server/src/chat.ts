@@ -6,6 +6,7 @@ import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts"
 import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
+import type { Epochs } from "./epochs.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import { pump } from "./pump.ts";
@@ -33,7 +34,7 @@ export class Chat {
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
 
-  constructor(private readonly log: Log, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
+  constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
     this.approvals = new Approvals(log, emit);
     this.options = { pick: PICK, cwd: process.cwd(), ...options, append: (options.append ?? PROMPT) + (config.rulesText ? "\n\n" + config.rulesText : ""), memory, ask: (tool, input, signal) => {
       if (!canAsk(this.turn)) return Promise.resolve(false);
@@ -186,7 +187,7 @@ export class Chat {
   private read(session: Session): Promise<void> {
     return pump(session.epoch, "epoch", {
       guard: () => session !== this.session || this.closed ? "stop" : "take",
-      session: (id) => this.log.epoch(session.id, id),
+      session: (id) => this.epochs.record(session.id, id),
       live: (text) => { this.streaming += text; this.emit({ type: "live", text, agent: null }); },
       entry: (kind, text) => {
         if (kind === "unii") this.streaming = "";

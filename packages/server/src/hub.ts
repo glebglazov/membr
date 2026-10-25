@@ -1,6 +1,7 @@
 import type { ServerWebSocket } from "bun";
 import { VERSION, parseClientMessage, type ClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
 import { Log, identity } from "./log.ts";
+import { Epochs } from "./epochs.ts";
 import { Chat } from "./chat.ts";
 import { claude, type Engine, type EpochOptions } from "./engine.ts";
 import { Tree } from "./tree.ts";
@@ -19,6 +20,7 @@ type Socket = ServerWebSocket<Connection>;
 export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
   const config = options.config ?? readConfig(options.dir);
   const log = new Log(options.dir);
+  const epochs = new Epochs(options.dir);
   let tree: Tree | undefined;
   let memory: Memory;
   let imports: Imports | undefined;
@@ -156,7 +158,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   try {
     tree = new Tree(options.dir, log, options.engine ?? claude);
     memory = new Memory(log, tree, options.dir);
-    chat = new Chat(log, tree, memory, options.dir, (event) => {
+    chat = new Chat(log, epochs, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
     }, options.engine, options.epoch, config);
@@ -169,7 +171,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     throw error;
   }
   let shutdown: Promise<void> | null = null;
-  const purge = () => void cleanupEpochs(log, options.engine ?? claude, chat!.activeEpoch, Date.now(), options.epoch?.cwd ?? process.cwd()).catch((error) => console.error("membr: session cleanup failed", error));
+  const purge = () => void cleanupEpochs(epochs, options.engine ?? claude, chat!.activeEpoch, Date.now(), options.epoch?.cwd ?? process.cwd()).catch((error) => console.error("membr: session cleanup failed", error));
   purge();
   const cleanupTimer = setInterval(purge, 86_400_000);
   return { server, token, close(): Promise<void> {

@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick, type ImportEstimate, type ImportMark } from "@membr/protocol";
-import { appendFile, replaceFile, syncDirectory, truncateFile } from "./durable.ts";
+import { appendFile, syncDirectory, truncateFile } from "./durable.ts";
 
 const SLOT = 16;
 const DAY = 86_400_000;
@@ -16,7 +16,6 @@ type ImportRun = { paused: boolean; estimate: ImportEstimate };
 type ImportControl = { id: string; value: ImportRun };
 type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl };
 type Location = { day: number; at: number; length: number };
-export type EpochRecord = { session: string; date: string };
 
 export function identity(dir: string, name: string): string {
   const file = path.join(dir, name);
@@ -238,34 +237,6 @@ export class Log {
     const entry = note === undefined ? null : this.entry("note", note);
     this.write({ ...entry, event: `turn:${turn}:done`, turn: { id: turn, phase: "done" } });
     return entry;
-  }
-
-  epoch(epoch: string, session: string, date = new Date().toISOString()): void {
-    const file = path.join(this.dir, "epochs.json");
-    const previous: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-    if (previous === null || typeof previous !== "object" || Array.isArray(previous) || Object.values(previous).some((value) => typeof value !== "string" && (!value || typeof value !== "object" || !("session" in value) || typeof value.session !== "string" || !("date" in value) || typeof value.date !== "string"))) throw new Error("Invalid epoch map");
-    replaceFile(file, JSON.stringify({ ...previous, [epoch]: { session, date } }) + "\n");
-  }
-
-  get epochs(): Record<string, EpochRecord> {
-    const file = path.join(this.dir, "epochs.json");
-    if (!fs.existsSync(file)) return {};
-    const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid epoch map");
-    return Object.fromEntries(Object.entries(raw).flatMap(([epoch, value]) => {
-      if (typeof value === "string") return [[epoch, { session: value, date: "" }]];
-      if (value && typeof value === "object" && "session" in value && typeof value.session === "string" && "date" in value && typeof value.date === "string") return [[epoch, { session: value.session, date: value.date }]];
-      return [];
-    }));
-  }
-
-  removeEpochs(epochs: string[]): void {
-    const all = this.epochs;
-    for (const epoch of epochs) delete all[epoch];
-    const file = path.join(this.dir, "epochs.json");
-    const previous: Record<string, unknown> = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-    for (const [epoch, record] of Object.entries(all)) if (record.date === "" && typeof previous[epoch] === "string") (all as Record<string, unknown>)[epoch] = previous[epoch];
-    replaceFile(file, JSON.stringify(all) + "\n");
   }
 
   get entries(): Entry[] { return Array.from({ length: this.count }, (_, i) => this.read(i)!); }
