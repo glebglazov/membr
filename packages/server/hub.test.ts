@@ -76,13 +76,10 @@ test("two clients see one durable entry and simultaneous resends get its first a
   expect(await a.wait("read")).toEqual({ type: "read", id: "roots", entries: [], parts: [{ l: 0, i: 0 }], lines: [{ l: 0, i: 0, text: "user: " + say.text }] });
   a.read({ type: "read", id: "zoom", read: "zoom", part: { l: 0, i: 0 } });
   expect((await a.wait("read", 0, (event) => event.id === "zoom")).entries).toEqual([first.entry]);
-  const index = fs.readFileSync(path.join(server.dir, "main.index"));
-  expect(index.length).toBe(16);
-  expect(index.readDoubleLE(0)).toBe(0);
-  expect(index.readUInt32LE(12)).toBe(Buffer.byteLength(JSON.stringify(records(server.dir)[0])));
+  expect(fs.existsSync(path.join(server.dir, "main.index"))).toBe(false);
 });
 
-test("a process restart rebuilds a missing index and preserves messages, answers and source sequence", async () => {
+test("a process restart preserves messages, answers and source sequence", async () => {
   const before = await serve();
   const a = await connect(before);
   a.act({ type: "act", id: "kept", act: "say", text: "Remember me" });
@@ -90,7 +87,6 @@ test("a process restart rebuilds a missing index and preserves messages, answers
   const entry = await a.wait("entry");
   before.proc.kill("SIGKILL");
   await before.proc.exited;
-  fs.rmSync(path.join(before.dir, "main.index"));
   const after = await serve(before.dir);
   expect(after.token).toBe(before.token);
   const b = await connect(after);
@@ -102,7 +98,7 @@ test("a process restart rebuilds a missing index and preserves messages, answers
   expect(records(after.dir).map((record) => record.from)).toEqual([
     entry.entry.from, { machine: entry.entry.from.machine, seq: entry.entry.from.seq + 1 },
   ]);
-  expect(fs.statSync(path.join(after.dir, "main.index")).size).toBe(32);
+  expect(fs.existsSync(path.join(after.dir, "main.index"))).toBe(false);
   expect(fs.statSync(path.join(after.dir, "token")).mode & 0o777).toBe(0o600);
 });
 
@@ -185,24 +181,23 @@ test("an incomplete final line is removed before the next durable append", async
   b.act({ type: "act", id: "after", act: "say", text: "After recovery" });
   await b.wait("answer");
   expect(records(after.dir).map((record) => record.text)).toEqual(["Complete", "After recovery"]);
+  expect(fs.existsSync(path.join(after.dir, "main.index"))).toBe(false);
 });
 
-test("a committed entry survives an index write failure without a second append", async () => {
+test("a committed entry survives a directory sync failure without a second append", async () => {
   const before = await serve();
   const client = await connect(before);
-  const index = path.join(before.dir, "main.index");
-  fs.rmSync(index);
-  fs.mkdirSync(index);
-  const act = { type: "act", id: "index-failure", act: "say", text: "Still durable" } as const;
+  const main = path.join(before.dir, "main");
+  fs.chmodSync(main, 0o300);
+  const act = { type: "act", id: "sync-failure", act: "say", text: "Still durable" } as const;
   client.act(act);
-  await client.wait("error");
+  try { await client.wait("error"); } finally { fs.chmodSync(main, 0o700); }
   const mark = client.events.length;
   client.act(act);
   await client.wait("error", mark);
   expect(records(before.dir)).toHaveLength(1);
   before.proc.kill("SIGKILL");
   await before.proc.exited;
-  fs.rmdirSync(index);
   const after = await serve(before.dir);
   const recovered = await connect(after);
   expect((await recovered.wait("entry")).entry.text).toBe(act.text);

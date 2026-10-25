@@ -1,0 +1,2 @@
+{"i":0,"kind":"user","text":"Keep this message.","date":"2026-10-25T11:55:23.046Z","from":{"machine":"f8e52f29-36f1-4b72-8631-8c2dedb422c5","seq":0},"act":"fixture-say","ans":{"type":"answer","id":"fixture-say","ok":true,"entry":0},"turn":{"id":0,"phase":"running"}}
+{"i":1,"kind":"note","text":"The turn ended.","date":"2026-10-25T11:55:23.048Z","from":{"machine":"f8e52f29-36f1-4b72-8631-8c2dedb422c5","seq":1},"event":"turn:0:done","turn":{"id":0,"phase":"done"}}

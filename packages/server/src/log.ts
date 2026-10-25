@@ -1,13 +1,12 @@
-// Daily JSON lines and the 16-byte index slots follow UniiChat Memory.ts
+// Daily JSON lines follow UniiChat Memory.ts
 // at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick, type ImportEstimate, type ImportMark } from "@membr/protocol";
-import { appendFile, syncDirectory, truncateFile } from "./durable.ts";
+import { syncDirectory } from "./durable.ts";
+import { Journal } from "./journal.ts";
 
-const SLOT = 16;
-const DAY = 86_400_000;
 type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
 type SavedGoal = { revision: number; value: string | null };
@@ -15,7 +14,6 @@ export type AllowRule = { tool: string; input: Record<string, unknown> };
 type ImportRun = { paused: boolean; estimate: ImportEstimate };
 type ImportControl = { id: string; value: ImportRun };
 type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl };
-type Location = { day: number; at: number; length: number };
 
 export function identity(dir: string, name: string): string {
   const file = path.join(dir, name);
@@ -42,86 +40,69 @@ export class Log {
   private readonly imported = new Set<string>();
   private readonly importMarks: Array<ImportMark | undefined> = [];
   private readonly answers = new Map<string, Answer>();
-  private readonly locations: Array<Location | undefined> = [];
+  private readonly journal: Journal<number>;
   private readonly machine: string;
   private seq = 0;
   private readonly started = new Set<number>();
   private readonly finished = new Set<number>();
   private readonly events = new Set<string>();
-  private failure: unknown;
   private readonly allowed: AllowRule[] = [];
   private savedPick: SavedPick | null = null;
   private savedGoal: SavedGoal = { revision: 0, value: null };
 
-  constructor(private readonly dir: string) {
-    fs.mkdirSync(path.join(dir, "main"), { recursive: true });
+  constructor(dir: string) {
+    fs.mkdirSync(dir, { recursive: true });
     this.machine = identity(dir, "machine");
-    const index = fs.openSync(path.join(dir, "main.index"), "w", 0o600);
-    try {
-      const files = fs.readdirSync(path.join(dir, "main")).filter((file) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(file)).sort();
-      for (const file of files) {
-        const full = path.join(dir, "main", file);
-        const day = Date.parse(file.slice(0, 10)) / DAY;
-        const data = fs.readFileSync(full);
-        let at = 0;
-        for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, at)) {
-          const raw: unknown = JSON.parse(data.subarray(at, end).toString("utf8"));
-          if (raw === null || typeof raw !== "object") throw new Error(`Invalid log record in ${file}`);
-          if ("act" in raw && typeof raw.act === "string" && "ans" in raw) {
-            const ans = parseEvent(raw.ans);
-            if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
-            this.answers.set(raw.act, ans);
-            if ("allow" in raw) {
-              const allow = raw.allow;
-              if (!ans.ok || allow === null || typeof allow !== "object" || !("tool" in allow) || !("input" in allow)) throw new Error(`Invalid allow rule in ${file}`);
-              const parsed = parseEvent({ type: "ask", id: raw.act, tool: allow.tool, input: allow.input });
-              if (parsed.type === "ask") this.allowed.push({ tool: parsed.tool, input: parsed.input });
-            }
-            if ("pick" in raw) {
-              const pick = raw.pick;
-              if (!ans.ok || pick === null || typeof pick !== "object" || !("revision" in pick) || typeof pick.revision !== "number" || !Number.isSafeInteger(pick.revision) || pick.revision < 1 || !("value" in pick)) throw new Error(`Invalid pick in ${file}`);
-              const saved = { revision: pick.revision, value: parsePick(pick.value) };
-              if (saved.revision > (this.savedPick?.revision ?? 0)) this.savedPick = saved;
-            }
-          } else if ("event" in raw && typeof raw.event === "string" && !this.events.has(raw.event)) {
-            this.events.add(raw.event);
-          } else throw new Error(`Invalid log record in ${file}`);
-          if ("goal" in raw) {
-            const goal = raw.goal;
-            if (goal === null || typeof goal !== "object" || !("revision" in goal) || typeof goal.revision !== "number" || !Number.isSafeInteger(goal.revision) || goal.revision < 1 || !("value" in goal) || (goal.value !== null && typeof goal.value !== "string")) throw new Error(`Invalid goal in ${file}`);
-            if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid goal in ${file}`);
-            if (goal.revision > this.savedGoal.revision) this.savedGoal = { revision: goal.revision, value: goal.value };
-          }
-          if ("turn" in raw) {
-            const turn = raw.turn;
-            if (turn === null || typeof turn !== "object" || !("id" in turn) || typeof turn.id !== "number" || !Number.isSafeInteger(turn.id) || turn.id < 0 || !("phase" in turn) || (turn.phase !== "running" && turn.phase !== "done")) throw new Error(`Invalid turn in ${file}`);
-            (turn.phase === "running" ? this.started : this.finished).add(turn.id);
-          }
-          if ("importRun" in raw) {
-            const control = raw.importRun;
-            if (!control || typeof control !== "object" || !("id" in control) || typeof control.id !== "string" || !("value" in control)) throw new Error("Invalid import control");
-            const run = control.value;
-            if (!run || typeof run !== "object" || !("paused" in run) || typeof run.paused !== "boolean" || !("estimate" in run)) throw new Error("Invalid import state");
-            const parsed = parseEvent({ type: "import-estimate", id: control.id, estimate: run.estimate });
-            if (parsed.type === "import-estimate") this.importRuns.set(control.id, { paused: run.paused, estimate: parsed.estimate });
-          }
-          if ("i" in raw) {
-            const entry = parseEntry(raw);
-            this.rememberImport(entry);
-            if (this.locations[entry.i]) throw new Error(`Duplicate message index in ${file}`);
-            this.place(index, entry.i, { day, at, length: end - at });
-            if (entry.from.machine === this.machine) this.seq = Math.max(this.seq, entry.from.seq + 1);
-          }
-          at = end + 1;
+    this.journal = new Journal<number>(path.join(dir, "main"), (raw, file) => {
+      if (raw === null || typeof raw !== "object") throw new Error(`Invalid log record in ${file}`);
+      if ("act" in raw && typeof raw.act === "string" && "ans" in raw) {
+        const ans = parseEvent(raw.ans);
+        if (ans.type !== "answer" || ans.id !== raw.act || this.answers.has(raw.act)) throw new Error(`Invalid act record in ${file}`);
+        this.answers.set(raw.act, ans);
+        if ("allow" in raw) {
+          const allow = raw.allow;
+          if (!ans.ok || allow === null || typeof allow !== "object" || !("tool" in allow) || !("input" in allow)) throw new Error(`Invalid allow rule in ${file}`);
+          const parsed = parseEvent({ type: "ask", id: raw.act, tool: allow.tool, input: allow.input });
+          if (parsed.type === "ask") this.allowed.push({ tool: parsed.tool, input: parsed.input });
         }
-        if (at < data.length) truncateFile(full, at);
+        if ("pick" in raw) {
+          const pick = raw.pick;
+          if (!ans.ok || pick === null || typeof pick !== "object" || !("revision" in pick) || typeof pick.revision !== "number" || !Number.isSafeInteger(pick.revision) || pick.revision < 1 || !("value" in pick)) throw new Error(`Invalid pick in ${file}`);
+          const saved = { revision: pick.revision, value: parsePick(pick.value) };
+          if (saved.revision > (this.savedPick?.revision ?? 0)) this.savedPick = saved;
+        }
+      } else if ("event" in raw && typeof raw.event === "string" && !this.events.has(raw.event)) {
+        this.events.add(raw.event);
+      } else throw new Error(`Invalid log record in ${file}`);
+      if ("goal" in raw) {
+        const goal = raw.goal;
+        if (goal === null || typeof goal !== "object" || !("revision" in goal) || typeof goal.revision !== "number" || !Number.isSafeInteger(goal.revision) || goal.revision < 1 || !("value" in goal) || (goal.value !== null && typeof goal.value !== "string")) throw new Error(`Invalid goal in ${file}`);
+        if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid goal in ${file}`);
+        if (goal.revision > this.savedGoal.revision) this.savedGoal = { revision: goal.revision, value: goal.value };
       }
-      for (let i = 0; i < this.locations.length; i++) {
-        if (!this.locations[i]) throw new Error(`Missing message ${i}`);
+      if ("turn" in raw) {
+        const turn = raw.turn;
+        if (turn === null || typeof turn !== "object" || !("id" in turn) || typeof turn.id !== "number" || !Number.isSafeInteger(turn.id) || turn.id < 0 || !("phase" in turn) || (turn.phase !== "running" && turn.phase !== "done")) throw new Error(`Invalid turn in ${file}`);
+        (turn.phase === "running" ? this.started : this.finished).add(turn.id);
       }
-      fs.fsyncSync(index);
-    } finally { fs.closeSync(index); }
-    syncDirectory(dir);
+      if ("importRun" in raw) {
+        const control = raw.importRun;
+        if (!control || typeof control !== "object" || !("id" in control) || typeof control.id !== "string" || !("value" in control)) throw new Error("Invalid import control");
+        const run = control.value;
+        if (!run || typeof run !== "object" || !("paused" in run) || typeof run.paused !== "boolean" || !("estimate" in run)) throw new Error("Invalid import state");
+        const parsed = parseEvent({ type: "import-estimate", id: control.id, estimate: run.estimate });
+        if (parsed.type === "import-estimate") this.importRuns.set(control.id, { paused: run.paused, estimate: parsed.estimate });
+      }
+      if ("i" in raw) {
+        const entry = parseEntry(raw);
+        this.rememberImport(entry);
+        if (entry.from.machine === this.machine) this.seq = Math.max(this.seq, entry.from.seq + 1);
+        return entry.i;
+      }
+    });
+    for (let i = 0; i < this.journal.size; i++) {
+      if (!this.journal.has(i)) throw new Error(`Missing message ${i}`);
+    }
   }
 
   hasImported(session: string, message: string): boolean { return this.imported.has(JSON.stringify([session, message])); }
@@ -159,7 +140,7 @@ export class Log {
     if (!this.importRuns.has(mark.run)) this.importRuns.set(mark.run, { paused: false, estimate: { sessions: 0, messages: 0, compactions: 0 } });
   }
 
-  get count(): number { return this.locations.length; }
+  get count(): number { return this.journal.size; }
   get latestTurn(): number {
     let latest: number | null = null;
     for (const id of this.started) latest = latest === null ? id : Math.max(latest, id);
@@ -170,25 +151,19 @@ export class Log {
   get goal(): SavedGoal { return this.savedGoal; }
 
   read(i: number): Entry | null {
-    const location = this.locations[i];
-    if (!location) return null;
-    const fd = fs.openSync(this.file(location.day), "r");
-    try {
-      const bytes = Buffer.alloc(location.length);
-      if (fs.readSync(fd, bytes, 0, bytes.length, location.at) !== bytes.length) throw new Error("Incomplete log record");
-      return parseEntry(JSON.parse(bytes.toString("utf8")));
-    } finally { fs.closeSync(fd); }
+    const raw = this.journal.read(i);
+    return raw === null ? null : parseEntry(raw);
   }
 
   get interrupted(): number[] { return [...this.started].filter((id) => !this.finished.has(id)); }
 
   answer(id: string): Answer | undefined {
-    if (this.failure) throw this.failure;
+    this.journal.check();
     return this.answers.get(id);
   }
 
   apply(act: Act, turn: number, refusal?: string, approval?: AllowRule): { answer: Answer; entry: Entry | null; fresh: boolean } {
-    if (this.failure) throw this.failure;
+    this.journal.check();
     const previous = this.answers.get(act.id);
     if (previous) return { answer: previous, entry: null, fresh: false };
     const entry = refusal ? null : act.act === "say"
@@ -232,7 +207,7 @@ export class Log {
   }
 
   finish(turn: number, note?: string): Entry | null {
-    if (this.failure) throw this.failure;
+    this.journal.check();
     if (this.finished.has(turn)) return null;
     const entry = note === undefined ? null : this.entry("note", note);
     this.write({ ...entry, event: `turn:${turn}:done`, turn: { id: turn, phase: "done" } });
@@ -246,45 +221,20 @@ export class Log {
   }
 
   private write(record: LogRecord): void {
-    if (this.failure) throw this.failure;
+    this.journal.check();
     const date = record.imported ? new Date().toISOString() : record.date ?? new Date().toISOString();
     const entry = record.i === undefined ? null : parseEntry(record);
-    const bytes = Buffer.from(JSON.stringify(record) + "\n");
-    const day = Date.parse(date.slice(0, 10)) / DAY;
-    const file = this.file(day);
-    try {
-      const at = appendFile(file, bytes);
-      if ("act" in record) this.answers.set(record.act, record.ans);
-      else this.events.add(record.event);
-      if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
-      if (record.allow) this.allowed.push(record.allow);
-      if (record.pick) this.savedPick = record.pick;
-      if (record.goal) this.savedGoal = record.goal;
-      if (record.importRun) this.importRuns.set(record.importRun.id, record.importRun.value);
-      if (entry) {
-        this.rememberImport(entry);
-        const index = fs.openSync(path.join(this.dir, "main.index"), "r+");
-        try { this.place(index, entry.i, { day, at, length: bytes.length - 1 }); } finally { fs.closeSync(index); }
-        this.seq++;
-      }
-    } catch (error) {
-      // A failed write can still have reached disk. Restart must recover it
-      // before another act can append to this log.
-      this.failure = error;
-      throw error;
+    this.journal.append(record, entry?.i, date);
+    if ("act" in record) this.answers.set(record.act, record.ans);
+    else this.events.add(record.event);
+    if (record.turn) (record.turn.phase === "running" ? this.started : this.finished).add(record.turn.id);
+    if (record.allow) this.allowed.push(record.allow);
+    if (record.pick) this.savedPick = record.pick;
+    if (record.goal) this.savedGoal = record.goal;
+    if (record.importRun) this.importRuns.set(record.importRun.id, record.importRun.value);
+    if (entry) {
+      this.rememberImport(entry);
+      this.seq++;
     }
-  }
-
-  private file(day: number): string {
-    return path.join(this.dir, "main", new Date(day * DAY).toISOString().slice(0, 10) + ".jsonl");
-  }
-
-  private place(fd: number, i: number, location: Location) {
-    const slot = Buffer.alloc(SLOT);
-    slot.writeDoubleLE(location.at, 0);
-    slot.writeUInt32LE(location.day, 8);
-    slot.writeUInt32LE(location.length, 12);
-    fs.writeSync(fd, slot, 0, SLOT, i * SLOT);
-    this.locations[i] = location;
   }
 }
