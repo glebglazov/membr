@@ -4,7 +4,7 @@ declare const EMBEDDED_WEB: Record<string, string> | undefined;
 
 let assets: Promise<Map<string, Blob | string>> | undefined;
 async function build(): Promise<Map<string, Blob | string>> {
-  const result = await Bun.build({ entrypoints: [path.join(import.meta.dir, "../../web/src/index.html")], target: "browser", minify: true });
+  const result = await Bun.build({ entrypoints: [path.join(import.meta.dir, "../../web/src/index.html"), path.join(import.meta.dir, "../../web/src/mermaid.ts")], target: "browser", minify: true });
   if (!result.success) throw new AggregateError(result.logs, "The web renderer did not build");
   return new Map(result.outputs.map((output) => [path.basename(output.path) === "index.html" ? "/" : "/" + path.basename(output.path), output]));
 }
@@ -27,6 +27,6 @@ export async function web(request: Request): Promise<Response> {
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   } });
 }

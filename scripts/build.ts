@@ -12,15 +12,13 @@ const embeddedWeb = Object.fromEntries(await Promise.all(
 ));
 
 await mkdir(path.dirname(output), { recursive: true });
-const build = Bun.spawn([
-  process.execPath,
-  "build",
-  "--compile",
-  "--minify",
-  `--define=EMBEDDED_WEB=${JSON.stringify(embeddedWeb)}`,
-  "--define=MEMBR_STANDALONE=true",
-  path.join(root, "packages/server/src/main.ts"),
-  `--outfile=${output}`,
-], { cwd: root, stdout: "inherit", stderr: "inherit" });
-if (await build.exited !== 0) throw new Error("membr did not build");
+// The web assets go in as a define in this process: on the command line they outgrow the argument limit.
+const build = await Bun.build({
+  entrypoints: [path.join(root, "packages/server/src/main.ts")],
+  target: "bun",
+  minify: true,
+  compile: { outfile: output },
+  define: { EMBEDDED_WEB: JSON.stringify(embeddedWeb), MEMBR_STANDALONE: "true" },
+});
+if (!build.success) throw new AggregateError(build.logs, "membr did not build");
 console.log(`Built ${output}`);

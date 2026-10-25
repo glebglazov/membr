@@ -67,24 +67,52 @@ nav a[aria-current=page] { background: var(--block); color: var(--ink); }
 main { width: min(680px, 100% - 40px); margin: 0 auto; padding: 28px 0 12px; flex: 1; display: flex; flex-direction: column; gap: 22px; }
 main h2 { margin: 0; font: 600 24px/1.2 var(--serif); }
 .label, .pending { font-size: 12px; color: var(--mid); }
-.message .label { font: 600 11px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mid); margin-bottom: 8px; }
+.message > .label { font: 600 11px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mid); margin-bottom: 8px; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.unii .text, .message.ai .text { font: 17px/1.65 var(--serif); }
-.message.live .text::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: 2px; background: var(--accent); vertical-align: -2px; animation: pulse 1s steps(1) infinite; }
+.message.live .text:not(.markdown)::after, .message.live .markdown > :last-child::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: 2px; background: var(--accent); vertical-align: -2px; animation: pulse 1s steps(1) infinite; }
+/* Markdown in messages */
+.markdown { white-space: normal; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown table, .markdown figure { margin: 0 0 .75em; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 1.2em 0 .45em; font-family: var(--serif); font-weight: 600; line-height: 1.25; }
+.markdown h1 { font-size: 1.45em; } .markdown h2 { font-size: 1.25em; } .markdown h3 { font-size: 1.1em; } .markdown h4 { font-size: 1em; }
+.markdown ul, .markdown ol { padding-left: 1.4em; }
+.markdown li { margin: .2em 0; }
+.markdown a { color: var(--accent); }
+.markdown blockquote { padding-left: 14px; border-left: 2px solid var(--line); color: var(--mid); }
+.markdown hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+.markdown code { font: .82em var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--block); }
+.markdown pre { padding: 10px 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.markdown pre code { padding: 0; background: none; font-size: 12.5px; line-height: 1.55; }
+.markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font: 14px/1.45 var(--sans); }
+.markdown th, .markdown td { padding: 6px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.markdown th { background: var(--block); }
+.markdown img { max-width: 100%; }
+.diagram { padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.diagram-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px 5px 12px; border-bottom: 1px solid var(--line); font: 12px var(--sans); color: var(--mid); }
+.diagram-canvas { display: flex; justify-content: center; padding: 14px; overflow-x: auto; font: 13px var(--sans); color: var(--mid); }
+.diagram-canvas svg { max-width: 100%; height: auto; }
+.diagram > pre { display: none; margin: 0; border: 0; border-radius: 0; }
+.diagram.source > pre { display: block; }
+.diagram.source .diagram-canvas { display: none; }
+.diagram.failed .diagram-canvas { display: block; }
+
 .message.user { align-self: flex-end; max-width: 82%; padding: 10px 15px; background: var(--block); border-radius: 16px 16px 4px 16px; }
-.message.user .label { display: none; }
+.message.user > .label { display: none; }
 .message.work, .message.note { padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .message.tool, .message.echo { padding: 9px 13px; background: var(--surface); border: 1px solid var(--line); font: 12.5px/1.6 var(--mono); }
 .message.tool { border-radius: 10px; }
-.message.tool .label { font-size: 10px; margin-bottom: 4px; }
+.message.tool > .label { font-size: 10px; margin-bottom: 4px; }
 .message.tool:has(+ .message.echo) { border-radius: 10px 10px 0 0; }
 .message.echo { margin-top: -22px; border-top: 0; border-radius: 0 0 10px 10px; color: var(--mid); max-height: 260px; overflow-y: auto; }
-.message.tool + .message.echo .label { display: none; }
+.message.tool + .message.echo > .label { display: none; }
 .message.echo:not(.message.tool + .message.echo) { margin-top: 0; border-top: 1px solid var(--line); border-radius: 10px; }
 .message.summary { display: block; width: 100%; text-align: left; padding: 2px 0 2px 16px; border: 0; border-left: 2px solid var(--accent); border-radius: 0; background: transparent; color: var(--mid); font: italic 15.5px/1.6 var(--serif); }
 .message.summary:hover { color: var(--ink); background: transparent; }
-.summary .label, .summary .text { display: block; }
-.summary .label { font-style: normal; color: var(--accent); }
+.summary > .label, .summary > .text { display: block; }
+.summary > .label { font-style: normal; color: var(--accent); }
 .memory-open { display: flex; flex-direction: column; gap: 18px; padding-left: 16px; border-left: 2px solid var(--line); }
 .close-block { align-self: flex-start; }
 .attached-image { display: block; max-width: 100%; max-height: 400px; border-radius: 10px; margin-top: 10px; }

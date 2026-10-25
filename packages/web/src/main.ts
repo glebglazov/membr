@@ -4,6 +4,7 @@ import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheS
 import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
+import { Markdown } from "./markdown.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
@@ -82,10 +83,12 @@ function connect() {
   };
 }
 
+const PROSE = new Set<Entry["kind"]>(["unii", "ai", "work", "note"]);
+
 function Block({ entry }: { entry: Entry }) {
   const label = { user: "You", unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note", ai: "Imported chat" }[entry.kind];
   return h("article", { class: `message ${entry.kind}`, "data-entry": entry.i },
-    h("div", { class: "label" }, label), h("div", { class: "text" }, entry.text),
+    h("div", { class: "label" }, label), PROSE.has(entry.kind) ? h(Markdown, { text: entry.text }) : h("div", { class: "text" }, entry.text),
     entry.images?.map((name) => h("a", { href: `/docs/images/${encodeURIComponent(name)}`, target: "_blank", rel: "noreferrer", key: name }, h("img", { class: "attached-image", src: `/docs/images/${encodeURIComponent(name)}`, alt: "Attached image", loading: "lazy" }))));
 }
 
@@ -291,11 +294,11 @@ function App() {
         h("h2", { key: "title" }, `${model.agent} log`),
         !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
         [...agent.entries.values()].sort((a, b) => a.i - b.i).map((entry) => h(Block, { entry, key: entry.i })),
-        agent.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h("div", { class: "text" }, agent.live)),
+        agent.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h(Markdown, { text: agent.live, diagrams: false })),
       ] : [
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
         body.map((row) => h(MemoryBlock, { row, key: row.kind === "message" ? `entry-${row.entry.i}` : partKey(row.part) })),
-        model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h("div", { class: "text" }, model.live)),
+        model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
       ],
       h("div", { ref: end })),
     h("footer", null,

@@ -132,6 +132,25 @@ async function responsiveLayout(browser: Browser): Promise<void> {
   } });
 }
 
+async function markdownReply(browser: Browser): Promise<void> {
+  const reply = "## Overview\n\nThe **hub** owns the chat.\n\n```mermaid\nflowchart LR\n  B[Browser] --> H[Hub]\n```\n\n<img src=x onerror=alert(1)>";
+  const engine = new FakeEngine((epoch) => epoch.emit({ kind: "text", text: reply }, END));
+  await withChat({ browser, engine, check: async (context, url) => {
+    const page = await openChat(context, url);
+    await send(page, "Explain the hub.");
+    const chat = page.getByRole("main", { name: "Chat", exact: true });
+    await expect(chat.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+    await expect(chat.locator("strong", { hasText: "hub" })).toBeVisible();
+    const diagram = chat.locator("figure.diagram");
+    await expect(diagram.locator("svg")).toBeVisible();
+    await expect(diagram.locator("svg")).toContainText("Hub");
+    await diagram.getByRole("button", { name: "Source", exact: true }).click();
+    await expect(diagram.locator("pre")).toContainText("B[Browser] --> H[Hub]");
+    await expect(diagram.locator("svg")).toBeHidden();
+    expect(await chat.locator("img[onerror]").count(), "Sanitizing drops event handlers from model HTML.").toBe(0);
+  } });
+}
+
 let browser: Browser | undefined;
 try {
   browser = await chromium.launch();
@@ -141,7 +160,9 @@ try {
   console.log("PASS An approval answer closes the card in both tabs.");
   await responsiveLayout(browser);
   console.log("PASS Light and dark layouts fit desktop and 390 px widths.");
-  console.log("3 browser checks passed.");
+  await markdownReply(browser);
+  console.log("PASS A reply renders Markdown and draws its Mermaid diagram.");
+  console.log("4 browser checks passed.");
 } finally {
   await browser?.close();
 }

@@ -5,6 +5,9 @@
   "dependencies": {
     "@membr/core": "workspace:*",
     "@membr/protocol": "workspace:*",
+    "dompurify": "3.4.17",
+    "marked": "18.1.1",
+    "mermaid": "12.2.0",
     "preact": "10.27.2"
   }
 }
