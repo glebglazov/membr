@@ -36,6 +36,12 @@ function loopback(address: string): boolean {
   return address === "::1" || address === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(address) || /^::ffff:127\.\d+\.\d+\.\d+$/.test(address);
 }
 
+// `tailscale serve` forwards tailnet HTTPS to loopback as plain HTTP. It replaces any client copy of
+// Tailscale-User-Login, and a DNS-rebinding page can not take a ts.net Host, so the request is as trusted as localhost.
+function tailnet(request: Request, url: URL): boolean {
+  return url.hostname.endsWith(".ts.net") && request.headers.has("tailscale-user-login") && request.headers.get("x-forwarded-proto") === "https";
+}
+
 export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
   const config = options.config ?? readConfig(options.dir);
   const log = new Log(options.dir);
@@ -78,9 +84,12 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     maxRequestBodySize: 32 * 2 ** 20,
     async fetch(request, server) {
       const url = new URL(request.url);
+      const peer = loopback(server.requestIP(request)?.address ?? "");
+      const proxied = peer && tailnet(request, url);
+      if (proxied) url.protocol = "https:";
       const origin = request.headers.get("origin");
       if (origin !== null && origin !== url.origin) return new Response("Invalid origin", { status: 403 });
-      const local = loopback(server.requestIP(request)?.address ?? "") && (loopback(url.hostname) || url.hostname === "localhost");
+      const local = peer && (loopback(url.hostname) || url.hostname === "localhost" || proxied);
       let tokens: string[];
       try { tokens = credentials(request); } catch {
         return new Response("Invalid bearer credentials", { status: 401 });

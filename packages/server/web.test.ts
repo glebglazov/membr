@@ -158,6 +158,21 @@ test("a non-loopback request needs a token and the sign-in link sets a reusable 
   await hello.wait("ready");
 });
 
+test("tailscale serve opens the page and socket without a token", async () => {
+  const hub = await startCLI();
+  const host = `mac.tail0.ts.net:${hub.url.port}`;
+  const tailnet = { Host: host, "Tailscale-User-Login": "me@example.com", "X-Forwarded-Proto": "https" };
+  expect((await fetch(hub.url, { headers: tailnet })).status).toBe(200);
+  const client = await TestClient.connect(new URL("/ws", hub.url).href.replace("http:", "ws:"), { headers: { ...tailnet, Origin: `https://${host}` } });
+  clients.push(client);
+  await client.wait("ready");
+  const { "Tailscale-User-Login": _, ...anonymous } = tailnet;
+  expect((await fetch(hub.url, { headers: anonymous })).status).toBe(401);
+  expect((await fetch(hub.url, { headers: { ...tailnet, Host: "other.example" } })).status).toBe(401);
+  const signIn = await fetch(`${hub.link}`, { headers: tailnet, redirect: "manual" });
+  expect(signIn.headers.get("set-cookie")).toContain("Secure");
+});
+
 test("a reconnect receives the current main text before the next delta", async () => {
   const engine = new FakeEngine((epoch) => epoch.emit({ kind: "delta", text: "The first part" }));
   const hub = start("127.0.0.1", engine);
