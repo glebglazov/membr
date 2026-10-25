@@ -116,15 +116,18 @@ main h2 { margin: 0; font: 600 24px/1.2 var(--serif); }
 .markdown img { max-width: 100%; }
 .diagram { padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .diagram-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px 5px 12px; border-bottom: 1px solid var(--line); font: 12px var(--sans); color: var(--mid); }
-.diagram-canvas { display: flex; justify-content: center; padding: 14px; overflow-x: auto; font: 13px var(--sans); color: var(--mid); }
-.diagram-canvas svg { max-width: 100%; height: auto; }
+.diagram-canvas { display: flex; justify-content: center; height: clamp(180px, 50vh, 480px); min-height: 160px; padding: 14px; overflow: hidden; font: 13px var(--sans); color: var(--mid); }
+.diagram-canvas svg { display: block; width: 100%; height: 100%; max-width: none !important; min-width: 0; min-height: 0; }
 .diagram-canvas svg.zoomed { cursor: grab; user-select: none; }
 .diagram-canvas svg.zoomed:active { cursor: grabbing; }
 .diagram-zoom { display: flex; gap: 2px; margin-left: auto; }
+.diagram-resize { display: flex; width: 100%; height: 18px; padding: 0; border-radius: 0; border-top: 1px solid var(--line); background: var(--surface); cursor: ns-resize; touch-action: none; }
+.diagram-resize::after { content: ""; width: 32px; height: 3px; border-radius: 2px; background: var(--mid); }
+.diagram.source .diagram-resize, .diagram.failed .diagram-resize { display: none; }
 .diagram > pre { display: none; margin: 0; border: 0; border-radius: 0; }
 .diagram.source > pre { display: block; }
 .diagram.source .diagram-canvas { display: none; }
-.diagram.failed .diagram-canvas { display: block; }
+.diagram.failed .diagram-canvas { display: block; height: auto !important; min-height: 0; }
 
 .message.user { align-self: flex-end; max-width: 82%; padding: 10px 15px; background: var(--block); border-radius: 16px 16px 4px 16px; }
 .message.user > .label { display: none; }
@@ -165,6 +168,7 @@ footer > * { width: min(680px, 100%); margin-left: auto; margin-right: auto; }
 .error, .pending { overflow-wrap: anywhere; }
 .toast { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 10px 14px; border: 1px solid var(--red); border-radius: 12px; background: var(--surface); color: var(--red); }
 .pending { margin-bottom: 8px; }
+.new-messages { display: flex; justify-content: center; margin-bottom: 8px; }
 .agent-bar { display: flex; justify-content: center; }
 .composer { display: grid; gap: 8px; padding: 12px 12px 10px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }

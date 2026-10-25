@@ -28,7 +28,7 @@ const diagrams = new Map<HTMLElement, () => void>();
 function themed(api: Mermaid): Mermaid {
   const css = getComputedStyle(document.documentElement);
   const value = (name: string) => css.getPropertyValue(name).trim();
-  api.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base", fontFamily: value("--sans"), themeVariables: {
+  api.initialize({ startOnLoad: false, suppressErrorRendering: true, securityLevel: "strict", theme: "base", fontFamily: value("--sans"), themeVariables: {
     darkMode: dark.matches, background: value("--surface"), primaryColor: value("--block"), primaryTextColor: value("--ink"),
     primaryBorderColor: value("--mid"), lineColor: value("--mid"), secondaryColor: value("--surface"), tertiaryColor: value("--paper"),
     clusterBkg: value("--paper"), clusterBorder: value("--line"), edgeLabelBackground: value("--surface"), fontSize: "13px",
@@ -54,6 +54,7 @@ async function draw(figure: HTMLElement): Promise<void> {
     diagrams.set(figure, () => {});
     canvas.textContent = "This diagram did not render: " + (error instanceof Error ? error.message : String(error));
     figure.classList.add("failed", "source");
+    figure.querySelector<HTMLButtonElement>(".diagram-bar > button")!.textContent = "Diagram";
   }
 }
 

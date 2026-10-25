@@ -12,13 +12,43 @@ export function diagramZoom(canvas: HTMLElement, svg: SVGSVGElement, bar: HTMLEl
   let gestureScale: number | null = null;
   const controls = document.createElement("span");
   controls.className = "diagram-zoom";
+  const handle = document.createElement("button");
+  handle.type = "button";
+  handle.className = "diagram-resize";
+  handle.setAttribute("aria-label", "Resize diagram height");
+  handle.title = "Drag to resize. Arrow Up and Arrow Down change height. Home restores the initial height.";
+  let resizing: { pointer: number; y: number; height: number } | null = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resizing = { pointer: event.pointerId, y: event.clientY, height: canvas.getBoundingClientRect().height };
+    handle.setPointerCapture(event.pointerId);
+  }, options);
+  handle.addEventListener("pointermove", (event) => {
+    if (!resizing || resizing.pointer !== event.pointerId) return;
+    canvas.style.height = `${Math.max(0, resizing.height + event.clientY - resizing.y)}px`;
+  }, options);
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) handle.addEventListener(type, () => { resizing = null; }, options);
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") canvas.style.removeProperty("height");
+    else canvas.style.height = `${Math.max(0, canvas.getBoundingClientRect().height + (event.key === "ArrowUp" ? -32 : 32))}px`;
+  }, options);
+  canvas.after(handle);
   function change(next: number, from: Point, to = from): void {
     next = Math.max(1, Math.min(8, next));
     const rect = svg.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    const matrix = svg.getScreenCTM();
+    if (!matrix) return;
+    const inverse = matrix.inverse();
+    const start = new DOMPoint(from.x, from.y).matrixTransform(inverse);
+    const finish = new DOMPoint(to.x, to.y).matrixTransform(inverse);
+    const ratio = scale / next;
     const width = base.width / next, height = base.height / next;
-    const x = view.x + (from.x - rect.x) / rect.width * view.width - (to.x - rect.x) / rect.width * width;
-    const y = view.y + (from.y - rect.y) / rect.height * view.height - (to.y - rect.y) / rect.height * height;
+    const x = start.x - (finish.x - view.x) * ratio;
+    const y = start.y - (finish.y - view.y) * ratio;
     view = { x: Math.max(base.x, Math.min(base.x + base.width - width, x)), y: Math.max(base.y, Math.min(base.y + base.height - height, y)), width, height };
     scale = next;
     svg.setAttribute("viewBox", scale === 1 ? original : `${view.x} ${view.y} ${width} ${height}`);
@@ -85,5 +115,5 @@ export function diagramZoom(canvas: HTMLElement, svg: SVGSVGElement, bar: HTMLEl
     change(gestureScale * event.scale, center());
   }, { ...options, passive: false });
   canvas.addEventListener("gestureend", () => { gestureScale = null; }, options);
-  return () => { controller.abort(); controls.remove(); };
+  return () => { controller.abort(); controls.remove(); handle.remove(); };
 }

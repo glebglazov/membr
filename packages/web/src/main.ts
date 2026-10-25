@@ -6,6 +6,7 @@ import "./style.css";
 import { readExport } from "./export.ts";
 import { Markdown } from "./markdown.ts";
 import { BriefRow } from "./briefs.ts";
+import { useChatScroll } from "./chat-scroll.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
@@ -236,18 +237,15 @@ function App() {
   const [draft, setDraft] = useState("");
   const [readingImages, setReadingImages] = useState(false);
   const files = useRef<HTMLInputElement>(null);
-  const end = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
+  const agent = model.agent === null ? null : model.agents.get(model.agent);
+  const scroll = useChatScroll(model.page === "chat" && (model.agent !== null || !model.folded), { log: model.agent ?? "", entries: agent?.entries ?? model.entries, live: agent?.live ?? model.live, ready: model.connection === "ready" && (model.agent === null || agent?.loaded === true) });
   changed = () => update((value) => value + 1);
   useEffect(() => {
-    const scroll = () => { follow.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120; };
     const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : "chat" });
     page();
-    window.addEventListener("scroll", scroll);
     window.addEventListener("hashchange", page);
-    return () => { window.removeEventListener("scroll", scroll); window.removeEventListener("hashchange", page); };
+    return () => { window.removeEventListener("hashchange", page); };
   }, []);
-  useEffect(() => { if (follow.current && model.page === "chat" && !model.folded) end.current?.scrollIntoView({ block: "end" }); }, [model.entries, model.live, model.agents, model.agent]);
   async function attach(selected: File[]) {
     setReadingImages(true);
     try {
@@ -269,16 +267,14 @@ function App() {
   function send() {
     if ((!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused") return;
     input({ type: "send", id: id(), text: draft });
-    if (!model.error) setDraft("");
-    follow.current = true;
+    if (!model.error) { setDraft(""); scroll.followLatest(); }
   }
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
   const tone = model.connection === "ready" ? model.state.busy ? "busy" : "ready" : model.connection === "refused" ? "refused" : "offline";
   const body = rows(model);
-  const agent = model.agent === null ? null : model.agents.get(model.agent);
   const chatting = model.page === "chat" && model.agent === null;
   return h("div", { class: "app" },
-    h("header", null,
+    h("header", { ref: scroll.header },
       h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
       h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory")),
       h("div", { class: "meta" },
@@ -288,7 +284,7 @@ function App() {
         model.state.agents.length > 0 && h("span", { class: "at-work" }, `${model.state.agents.length} agent${model.state.agents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    h("main", { "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
+    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
       chatting && body.length > 0 && h("div", { class: "fold-bar" },
@@ -301,14 +297,14 @@ function App() {
           model.agent !== null && model.state.agents.includes(model.agent) && h("span", { class: "label" }, "at work")),
         !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
         brief([...agent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
-        agent.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h(Markdown, { text: agent.live, diagrams: false })),
+        agent.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h(Markdown, { text: agent.live, diagrams: false })),
       ] : [
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
         body.map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
-        model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
-      ],
-      h("div", { ref: end })),
-    h("footer", null,
+        model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
+      ]),
+    h("footer", { ref: scroll.footer },
+      scroll.hasUnseen && h("div", { class: "new-messages" }, h("button", { type: "button", class: "primary", onClick: scroll.goToUnseen }, "New messages")),
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),

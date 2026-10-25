@@ -67,7 +67,9 @@ export function BriefRow({ brief, working, openAgent }: Props) {
       body = h(Markdown, { text: brief.text });
       break;
   }
-  return h("details", { class: `brief ${brief.kind}`, "data-entry": brief.i },
+  const calls = brief.kind === "tools" ? brief.calls : brief.kind === "spawn" ? [brief.call] : [];
+  const entries = calls.flatMap((call) => call.result ? [call.i, call.result.i] : [call.i]);
+  return h("details", { class: `brief ${brief.kind}`, "data-entry": brief.i, "data-entries": entries.join(" ") },
     // Spaces between the parts keep the line readable as text; the flex layout ignores them.
     h("summary", null, chevron, line.flatMap((part) => [part, " "])),
     h("div", { class: "brief-body" }, body));

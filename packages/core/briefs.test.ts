@@ -22,8 +22,8 @@ test("a run of tool calls folds into one brief that pairs each call with its res
   expect(items.map((item) => item.kind === "message" ? item.entry.kind : item.brief.kind)).toEqual(["user", "tools", "unii"]);
   const tools = items[1].kind === "brief" && items[1].brief.kind === "tools" ? items[1].brief : null;
   expect(tools?.calls.map(({ tool, what, result }) => [tool, what, result])).toEqual([
-    ["Read", "…/server/src/tree.ts", { text: "export class Tree", error: false }],
-    ["Bash", "Run the tests", { text: "1 fail", error: true }],
+    ["Read", "…/server/src/tree.ts", { i: 4, text: "export class Tree", error: false }],
+    ["Bash", "Run the tests", { i: 3, text: "1 fail", error: true }],
     ["zoom", "messages from 12, 4 of them", null],
   ]);
 });
@@ -56,7 +56,7 @@ test("reports and notes are briefs, and imported calls pair with the next result
     { kind: "report", i: 0, agent: "store-reader", text: "The log is append-only.\n\nIt is the source of truth." },
     { kind: "report", i: 1, agent: "Agent1", text: "Old reply" },
     { kind: "note", i: 2, text: "after: hook failed" },
-    { kind: "tools", i: 3, calls: [{ i: 3, tool: "shell", what: "ls", input: { command: "ls" }, result: { text: "README.md", error: false } }] },
+    { kind: "tools", i: 3, calls: [{ i: 3, tool: "shell", what: "ls", input: { command: "ls" }, result: { i: 4, text: "README.md", error: false } }] },
   ]);
 });
 

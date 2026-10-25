@@ -1,7 +1,7 @@
 import type { Entry } from "@membr/protocol";
 
 // One tool call and its result, paired from a tool entry and its echo entry.
-export type Call = { i: number; tool: string; what: string; input: unknown; result: { text: string; error: boolean } | null };
+export type Call = { i: number; tool: string; what: string; input: unknown; result: { i: number; text: string; error: boolean } | null };
 // A brief stands for technical entries in the chat: it reads as one line and opens to the detail.
 export type Brief =
   | { kind: "tools"; i: number; calls: Call[] }
@@ -101,8 +101,8 @@ export function brief(entries: Entry[]): Item[] {
       const result = echo(entry);
       const open = run.find((pending) => pending.call.result === null && result.id !== null && pending.id === result.id)
         ?? (result.id === null ? run.findLast((pending) => pending.call.result === null) : undefined);
-      if (open) open.call.result = { text: result.text, error: result.error };
-      else run.push({ id: result.id, call: { i: entry.i, tool: "result", what: "of an earlier call", input: {}, result: { text: result.text, error: result.error } } });
+      if (open) open.call.result = { i: entry.i, text: result.text, error: result.error };
+      else run.push({ id: result.id, call: { i: entry.i, tool: "result", what: "of an earlier call", input: {}, result: { i: entry.i, text: result.text, error: result.error } } });
       continue;
     }
     flush();
