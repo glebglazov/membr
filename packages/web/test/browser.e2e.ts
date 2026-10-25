@@ -97,10 +97,10 @@ type Layout = {
   background: string;
 };
 const layouts: Layout[] = [
-  { width: 1200, height: 900, colorScheme: "light", background: "rgb(255, 255, 255)" },
-  { width: 1200, height: 900, colorScheme: "dark", background: "rgb(23, 23, 25)" },
-  { width: 390, height: 844, colorScheme: "light", background: "rgb(255, 255, 255)" },
-  { width: 390, height: 844, colorScheme: "dark", background: "rgb(23, 23, 25)" },
+  { width: 1200, height: 900, colorScheme: "light", background: "rgb(247, 245, 240)" },
+  { width: 1200, height: 900, colorScheme: "dark", background: "rgb(22, 21, 19)" },
+  { width: 390, height: 844, colorScheme: "light", background: "rgb(247, 245, 240)" },
+  { width: 390, height: 844, colorScheme: "dark", background: "rgb(22, 21, 19)" },
 ];
 
 async function responsiveLayout(browser: Browser): Promise<void> {

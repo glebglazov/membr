@@ -103,29 +103,64 @@ function MemoryBlock({ row }: { row: Row }): ComponentChild {
     row.rows.map((child) => h(MemoryBlock, { row: child, key: child.kind === "message" ? `entry-${child.entry.i}` : partKey(child.part) })));
 }
 
-function Controls() {
-  const pick = effectivePick(model);
+const ICONS = {
+  gear: "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z",
+  clip: "M21 12.5l-8.6 8.6a5.5 5.5 0 01-7.8-7.8l9.2-9.2a3.7 3.7 0 015.2 5.2l-9.2 9.2a1.8 1.8 0 01-2.6-2.6l8.5-8.5",
+  up: "M12 19V5M5 12l7-7 7 7",
+};
+
+function Icon({ name }: { name: keyof typeof ICONS }) {
+  return h("svg", { class: "icon", viewBox: "0 0 24 24", "aria-hidden": "true" }, h("path", { d: ICONS[name] }));
+}
+
+function compact(tokens: number): string {
+  return tokens < 1000 ? String(tokens) : tokens < 1e6 ? `${Math.round(tokens / 1000)}k` : `${(tokens / 1e6).toFixed(1)}M`;
+}
+
+function Usage() {
+  const epoch = model.state.epoch;
+  const share = cacheShare(model.state.usage);
+  if (!epoch) return null;
+  return h("span", { class: "usage" }, `${compact(inputTokens(epoch) + epoch.output)} tokens`, share !== null && ` · cache ${Math.round(share * 100)}%`);
+}
+
+function Settings() {
+  const panel = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const close = (event: Event) => { if (panel.current?.open && event.target instanceof Node && !panel.current.contains(event.target)) panel.current.open = false; };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
   const share = cacheShare(model.state.usage);
   const epoch = model.state.epoch;
-  return h("section", { class: "controls", "aria-label": "Chat controls" },
-    h("div", { class: "chips", "aria-label": "Chat status" },
-      h("span", { class: "chip", "aria-label": "Current model" }, `Model ${model.state.pick?.model ?? "unavailable"}`),
-      h("span", { class: "chip", "aria-label": "Epoch use", title: "Total input and output tokens reported for completed chat turns in the current epoch, including cache reads and writes." }, `Epoch ${epoch ? (inputTokens(epoch) + epoch.output).toLocaleString() + " tokens" : "unavailable"}`),
-      h("span", { class: "chip", "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, `Cache ${share === null ? "unavailable" : (share * 100).toFixed(1) + "%"}`),
-      h("span", { class: "chip goal", "aria-label": "Goal", title: model.state.goal ?? "No goal" }, `Goal ${model.state.goal ?? "none"}`)),
-    h("div", { class: "pick-bar" },
-      h("label", null, "Model", h("select", { "aria-label": "Model", value: pick?.model ?? "", disabled: !pick || model.connection === "refused", onChange: (event: Event) => {
-        if (event.currentTarget instanceof HTMLSelectElement) input({ type: "pick", id: id(), change: { model: event.currentTarget.value } });
-      } }, !pick && h("option", { value: "" }, "Loading"), MODELS.map((name) => h("option", { value: name, key: name }, name)))),
-      h("label", null, "Effort", h("select", { "aria-label": "Effort", value: pick?.effort ?? "", disabled: !pick || model.connection === "refused", onChange: (event: Event) => {
-        if (!(event.currentTarget instanceof HTMLSelectElement)) return;
-        const selected = event.currentTarget.value;
-        const effort = EFFORTS.find((value) => value === selected);
-        if (effort) input({ type: "pick", id: id(), change: { effort } });
-      } }, !pick && h("option", { value: "" }, "Loading"), EFFORTS.map((effort) => h("option", { value: effort, key: effort }, effort)))),
-      h("label", { class: "fast-mode" }, h("input", { type: "checkbox", "aria-label": "Fast mode", checked: pick?.fast ?? false, disabled: !pick || model.connection === "refused", onChange: (event: Event) => {
-        if (event.currentTarget instanceof HTMLInputElement) input({ type: "pick", id: id(), change: { fast: event.currentTarget.checked } });
-      } }), "Fast mode")));
+  return h("details", { class: "settings", ref: panel },
+    h("summary", { "aria-label": "Settings", title: "Settings" }, h(Icon, { name: "gear" })),
+    h("div", { class: "popover" },
+      h("dl", { class: "facts", "aria-label": "Chat status" },
+        h("div", { "aria-label": "Current model" }, h("dt", null, "Model"), h("dd", null, model.state.pick?.model ?? "unavailable")),
+        h("div", { "aria-label": "Epoch use", title: "Total input and output tokens reported for completed chat turns in the current epoch, including cache reads and writes." }, h("dt", null, "Epoch"), h("dd", null, epoch ? (inputTokens(epoch) + epoch.output).toLocaleString() + " tokens" : "unavailable")),
+        h("div", { "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, h("dt", null, "Cache"), h("dd", null, share === null ? "unavailable" : (share * 100).toFixed(1) + "%")),
+        h("div", { "aria-label": "Goal", title: model.state.goal ?? "No goal" }, h("dt", null, "Goal"), h("dd", null, model.state.goal ?? "none"))),
+      h(ImportPanel, null),
+      h("a", { class: "export", href: "/export" }, "Export memory")));
+}
+
+function PickBar() {
+  const pick = effectivePick(model);
+  const disabled = !pick || model.connection === "refused";
+  return h("div", { class: "pick-bar", "aria-label": "Chat controls" },
+    h("select", { "aria-label": "Model", title: "Model", value: pick?.model ?? "", disabled, onChange: (event: Event) => {
+      if (event.currentTarget instanceof HTMLSelectElement) input({ type: "pick", id: id(), change: { model: event.currentTarget.value } });
+    } }, !pick && h("option", { value: "" }, "Loading"), MODELS.map((name) => h("option", { value: name, key: name }, name))),
+    h("select", { "aria-label": "Effort", title: "Effort", value: pick?.effort ?? "", disabled, onChange: (event: Event) => {
+      if (!(event.currentTarget instanceof HTMLSelectElement)) return;
+      const selected = event.currentTarget.value;
+      const effort = EFFORTS.find((value) => value === selected);
+      if (effort) input({ type: "pick", id: id(), change: { effort } });
+    } }, !pick && h("option", { value: "" }, "Loading"), EFFORTS.map((effort) => h("option", { value: effort, key: effort }, effort))),
+    h("label", { class: "fast-mode", title: "Fast mode" }, h("input", { type: "checkbox", "aria-label": "Fast mode", checked: pick?.fast ?? false, disabled, onChange: (event: Event) => {
+      if (event.currentTarget instanceof HTMLInputElement) input({ type: "pick", id: id(), change: { fast: event.currentTarget.checked } });
+    } }), h("span", { "aria-hidden": "true" }, "⚡"), h("span", { class: "narrow-hide" }, "Fast")));
 }
 
 function ApprovalCards() {
@@ -134,7 +169,7 @@ function ApprovalCards() {
   }, h("h2", null, `Allow ${approval.tool}?`),
   h("pre", null, JSON.stringify(approval.input, null, 2)),
   h("div", { class: "approval-actions" }, ([{ choice: "once", label: "Allow once" }, { choice: "always", label: "Always" }, { choice: "deny", label: "Deny" }] satisfies { choice: "once" | "always" | "deny"; label: string }[]).map(({ choice, label }) => h("button", {
-    type: "button", key: choice, disabled: model.connection !== "ready" || answering(model, approval.id),
+    type: "button", key: choice, class: choice === "once" ? "primary" : "ghost", disabled: model.connection !== "ready" || answering(model, approval.id),
     onClick: () => input({ type: "answer", id: id(), approval: approval.id, choice }),
   }, label))),
   h("p", { class: "label" }, answering(model, approval.id) ? "Waiting for the answer." : "Always allows this tool with this exact input."))));
@@ -229,22 +264,29 @@ function App() {
     follow.current = true;
   }
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
+  const tone = model.connection === "ready" ? model.state.busy ? "busy" : "ready" : model.connection === "refused" ? "refused" : "offline";
   const body = rows(model);
   const agent = model.agent === null ? null : model.agents.get(model.agent);
+  const chatting = model.page === "chat" && model.agent === null;
   return h("div", { class: "app" },
-    h("header", null, h("h1", null, "membr"),
-      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Tree")),
-      h("span", { role: "status" }, status)),
-    h(Controls, null),
-    h(ImportPanel, null),
-    h("div", { class: "agent-tabs", role: "tablist", "aria-label": "Conversations" },
+    h("header", null,
+      h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
+      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory")),
+      h("div", { class: "meta" },
+        h("span", { class: `pulse ${tone}`, "aria-hidden": "true" }),
+        h("span", { role: "status" }, status),
+        model.imports.some((run) => run.phase === "running") && h("span", { class: "importing" }, "Importing"),
+        h(Usage, null),
+        h(Settings, null))),
+    model.agents.size > 0 && h("div", { class: "agent-tabs", role: "tablist", "aria-label": "Conversations" },
       h("button", { type: "button", role: "tab", "aria-selected": model.agent === null && model.page === "chat", onClick: () => input({ type: "tab", name: null }) }, "Main chat"),
-      [...model.agents.keys()].map((name) => h("button", { type: "button", role: "tab", key: name, "aria-selected": model.agent === name, onClick: () => input({ type: "tab", name }) }, name, model.state.agents.includes(name) ? " · working" : ""))),
+      [...model.agents.keys()].map((name) => h("button", { type: "button", role: "tab", key: name, class: model.state.agents.includes(name) ? "working" : undefined, "aria-selected": model.agent === name, onClick: () => input({ type: "tab", name }) }, name, model.state.agents.includes(name) ? " · working" : ""))),
     h("main", { "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
-      model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
-      model.page === "chat" && model.agent === null && h("button", { type: "button", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all"),
-      model.folded && model.page === "chat" && model.agent === null && h("p", { class: "label" }, "The whole chat in the fewest blocks."),
+      model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
+      chatting && body.length > 0 && h("div", { class: "fold-bar" },
+        model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
+        h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
       agent ? [
         h("h2", { key: "title" }, `${model.agent} log`),
         !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
@@ -257,13 +299,12 @@ function App() {
       ],
       h("div", { ref: end })),
     h("footer", null,
-      h("a", { href: "/export" }, "Export memory"),
       h(ApprovalCards, null),
-      model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
+      model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),
-      model.page === "chat" && model.agent !== null && h("button", { type: "button", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`),
-      model.page === "chat" && model.agent === null && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
-      model.page === "chat" && model.agent === null && h("form", { onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
+      model.page === "chat" && model.agent !== null && h("div", { class: "agent-bar" }, h("button", { type: "button", class: "ghost", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`)),
+      chatting && h("form", { class: "composer", onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
+        model.attachments.length > 0 && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", class: "ghost small", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
         h("textarea", { "aria-label": "Message", placeholder: "Message membr", value: draft, rows: 2,
           onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) setDraft(event.currentTarget.value); },
           onKeyDown: (event: KeyboardEvent) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) { event.preventDefault(); send(); } } }),
@@ -273,9 +314,12 @@ function App() {
           event.currentTarget.value = "";
           if (selected.length) void attach(selected);
         } }),
-        h("button", { type: "button", disabled: readingImages || model.connection === "refused", onClick: () => files.current?.click() }, readingImages ? "Reading images..." : "Attach"),
-        h("button", { type: "submit", disabled: (!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused" }, "Send"),
-        h("button", { type: "button", disabled: !model.state.busy || model.connection !== "ready", onClick: () => input({ type: "stop", id: id() }) }, "Stop"))));
+        h("div", { class: "composer-row" },
+          h("button", { type: "button", class: "ghost", "aria-label": readingImages ? "Reading images..." : "Attach", disabled: readingImages || model.connection === "refused", onClick: () => files.current?.click() }, h(Icon, { name: "clip" }), h("span", { class: "narrow-hide" }, readingImages ? "Reading images..." : "Attach")),
+          h(PickBar, null),
+          h("span", { class: "grow" }),
+          model.state.busy && h("button", { type: "button", class: "ghost", disabled: model.connection !== "ready", onClick: () => input({ type: "stop", id: id() }) }, "Stop"),
+          h("button", { type: "submit", class: "send", "aria-label": "Send", title: "Send", disabled: (!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused" }, h(Icon, { name: "up" }))))));
 }
 
 render(h(App, null), document.getElementById("app")!);

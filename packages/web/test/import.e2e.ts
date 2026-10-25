@@ -23,6 +23,7 @@ try {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(hub.server.url.href);
   await expect(page.getByRole("status")).toHaveText("Ready");
+  await page.getByLabel("Settings", { exact: true }).click();
   await page.getByText("Import past sessions", { exact: true }).click();
   await page.getByLabel("Session folder", { exact: true }).setInputFiles(folder);
   await expect(page.getByLabel("Import estimate")).toContainText("20 new messages");
@@ -38,9 +39,11 @@ try {
   await expect(page.getByRole("main", { name: "Chat", exact: true })).toContainText("The live turn finished.");
   expect(engine.calls).toBe(calls);
   const second = await context.newPage(); await second.goto(hub.server.url.href);
+  await second.getByLabel("Settings", { exact: true }).click();
   await second.getByText("Import past sessions", { exact: true }).click();
   await expect(second.getByRole("button", { name: "Resume import", exact: true })).toBeVisible();
   await second.getByRole("button", { name: "Resume import", exact: true }).click();
+  await page.getByLabel("Settings", { exact: true }).click();
   await expect(page.getByText(/20 messages, complete/)).toBeVisible();
   await expect(second.getByText(/20 messages, complete/)).toBeVisible();
   await page.getByLabel("Session folder", { exact: true }).setInputFiles(folder);
