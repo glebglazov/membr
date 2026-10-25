@@ -1,10 +1,11 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row } from "@membr/core";
+import { act, brief, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row } from "@membr/core";
 import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
 import { Markdown } from "./markdown.ts";
+import { BriefRow } from "./briefs.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
@@ -83,7 +84,7 @@ function connect() {
   };
 }
 
-const PROSE = new Set<Entry["kind"]>(["unii", "ai", "work", "note"]);
+const PROSE = new Set<Entry["kind"]>(["unii", "ai"]);
 
 function Block({ entry }: { entry: Entry }) {
   const label = { user: "You", unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note", ai: "Imported chat" }[entry.kind];
@@ -92,8 +93,13 @@ function Block({ entry }: { entry: Entry }) {
     entry.images?.map((name) => h("a", { href: `/docs/images/${encodeURIComponent(name)}`, target: "_blank", rel: "noreferrer", key: name }, h("img", { class: "attached-image", src: `/docs/images/${encodeURIComponent(name)}`, alt: "Attached image", loading: "lazy" }))));
 }
 
+function rowKey(row: Row): string {
+  return row.kind === "message" ? `entry-${row.entry.i}` : row.kind === "brief" ? `brief-${row.brief.i}` : partKey(row.part);
+}
+
 function MemoryBlock({ row }: { row: Row }): ComponentChild {
   if (row.kind === "message") return h(Block, { entry: row.entry });
+  if (row.kind === "brief") return h(BriefRow, { brief: row.brief, working: model.state.agents, openAgent: (name) => input({ type: "agent", name }) });
   const { part } = row;
   const name = `${part.i * 2 ** part.l}+${2 ** part.l}`;
   if (row.kind === "summary") return h("button", {
@@ -103,7 +109,7 @@ function MemoryBlock({ row }: { row: Row }): ComponentChild {
   return h("section", { class: "memory-open", "data-part": partKey(part) },
     h("button", { type: "button", class: "close-block", "aria-label": `Close block ${name}`, onClick: () => input({ type: "close", part }) }, `Close ${2 ** part.l} message${part.l === 0 ? "" : "s"}`),
     row.loading && h("p", { role: "status", class: "label" }, "Loading block..."),
-    row.rows.map((child) => h(MemoryBlock, { row: child, key: child.kind === "message" ? `entry-${child.entry.i}` : partKey(child.part) })));
+    row.rows.map((child) => h(MemoryBlock, { row: child, key: rowKey(child) })));
 }
 
 const ICONS = {
@@ -279,11 +285,9 @@ function App() {
         h("span", { class: `pulse ${tone}`, "aria-hidden": "true" }),
         h("span", { role: "status" }, status),
         model.imports.some((run) => run.phase === "running") && h("span", { class: "importing" }, "Importing"),
+        model.state.agents.length > 0 && h("span", { class: "at-work" }, `${model.state.agents.length} agent${model.state.agents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    model.agents.size > 0 && h("div", { class: "agent-tabs", role: "tablist", "aria-label": "Conversations" },
-      h("button", { type: "button", role: "tab", "aria-selected": model.agent === null && model.page === "chat", onClick: () => input({ type: "tab", name: null }) }, "Main chat"),
-      [...model.agents.keys()].map((name) => h("button", { type: "button", role: "tab", key: name, class: model.state.agents.includes(name) ? "working" : undefined, "aria-selected": model.agent === name, onClick: () => input({ type: "tab", name }) }, name, model.state.agents.includes(name) ? " · working" : ""))),
     h("main", { "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
@@ -291,13 +295,16 @@ function App() {
         model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
         h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
       agent ? [
-        h("h2", { key: "title" }, `${model.agent} log`),
+        h("div", { key: "title", class: "agent-title" },
+          h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "agent", name: null }) }, "← Main chat"),
+          h("h2", null, model.agent),
+          model.agent !== null && model.state.agents.includes(model.agent) && h("span", { class: "label" }, "at work")),
         !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
-        [...agent.entries.values()].sort((a, b) => a.i - b.i).map((entry) => h(Block, { entry, key: entry.i })),
+        brief([...agent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
         agent.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h(Markdown, { text: agent.live, diagrams: false })),
       ] : [
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
-        body.map((row) => h(MemoryBlock, { row, key: row.kind === "message" ? `entry-${row.entry.i}` : partKey(row.part) })),
+        body.map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
         model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
       ],
       h("div", { ref: end })),

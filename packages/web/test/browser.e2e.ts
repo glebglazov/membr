@@ -151,6 +151,40 @@ async function markdownReply(browser: Browser): Promise<void> {
   } });
 }
 
+async function briefsAndAgents(browser: Browser): Promise<void> {
+  const engine = new FakeEngine((epoch, message) => {
+    const agents = epoch.options.agents;
+    if (!agents) return epoch.emit({ kind: "text", text: "The log is **append-only**." }, { ...END, reply: "The log is **append-only**." });
+    if (message.from === "membr") return epoch.emit(END);
+    epoch.emit({ kind: "tool", id: "read", name: "Read", input: { file_path: "/repo/packages/server/src/log.ts" } }, { kind: "echo", id: "read", text: "export class Log", error: false });
+    epoch.emit({ kind: "tool", id: "spawn", name: "mcp__memory__spawn", input: { tasks: [{ name: "store-reader", task: "Read log.ts" }] } });
+    epoch.emit({ kind: "echo", id: "spawn", text: agents.spawn([{ name: "store-reader", task: "Read log.ts" }]), error: false }, { kind: "text", text: "I asked store-reader." }, END);
+  });
+  await withChat({ browser, engine, check: async (context, url) => {
+    const page = await openChat(context, url);
+    await send(page, "Explain the log.");
+    const chat = page.getByRole("main", { name: "Chat", exact: true });
+    const tools = chat.locator("details.brief.tools");
+    await expect(tools.locator(":scope > summary")).toContainText("Made 1 tool call");
+    await expect(tools.locator(".call")).toBeHidden();
+    await tools.locator(":scope > summary").click();
+    await expect(tools.locator(".call-what")).toHaveText("…/server/src/log.ts");
+    await expect(chat.locator("details.brief.spawn summary")).toContainText("Started 1 agent");
+    const report = chat.locator("details.brief.report");
+    await expect(report.locator(":scope > summary")).toContainText("store-reader reported");
+    await report.locator(":scope > summary").click();
+    await expect(report.locator("strong", { hasText: "append-only" })).toBeVisible();
+    await expect(page.locator(".agent-tabs")).toHaveCount(0);
+    await report.getByRole("button", { name: "Open store-reader's chat", exact: true }).click();
+    const agentChat = page.getByRole("main", { name: "store-reader log", exact: true });
+    await expect(agentChat.getByRole("heading", { name: "store-reader", exact: true })).toBeVisible();
+    await expect(agentChat.getByText("Read log.ts", { exact: true })).toBeVisible();
+    await expect(agentChat.locator("details.brief.note summary").last()).toContainText("Finished.");
+    await agentChat.getByRole("button", { name: "← Main chat", exact: true }).click();
+    await expect(chat.getByText("I asked store-reader.", { exact: true })).toBeVisible();
+  } });
+}
+
 let browser: Browser | undefined;
 try {
   browser = await chromium.launch();
@@ -162,7 +196,9 @@ try {
   console.log("PASS Light and dark layouts fit desktop and 390 px widths.");
   await markdownReply(browser);
   console.log("PASS A reply renders Markdown and draws its Mermaid diagram.");
-  console.log("4 browser checks passed.");
+  await briefsAndAgents(browser);
+  console.log("PASS Tool calls, an agent start and its report fold into briefs that open the agent's chat.");
+  console.log("5 browser checks passed.");
 } finally {
   await browser?.close();
 }

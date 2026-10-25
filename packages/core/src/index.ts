@@ -1,5 +1,6 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
+import { brief, type Brief } from "./briefs.ts";
 import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
@@ -35,7 +36,7 @@ export type Input =
   | { type: "import-start"; id: string }
   | { type: "import-go"; id: string; run: string; paused: boolean }
   | { type: "send"; id: string; text: string }
-  | { type: "tab"; name: string | null }
+  | { type: "agent"; name: string | null }
   | { type: "attach"; images: Attachment[] }
   | { type: "detach"; id: string }
   | { type: "stop"; id: string; agent?: string | null }
@@ -50,8 +51,11 @@ export type Input =
   | { type: "flush" }
   | { type: "reads" };
 export type ConnectionEvent = { type: "connecting" | "offline" };
+export type { Brief, Call } from "./briefs.ts";
+export { brief } from "./briefs.ts";
 export type Row =
   | { kind: "message"; entry: Entry }
+  | { kind: "brief"; brief: Brief }
   | { kind: "summary"; part: Part; text: string }
   | { kind: "open"; part: Part; rows: Row[]; loading: boolean };
 
@@ -195,7 +199,7 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     ? post(model, [{ type: "act", act: "import", id: input.id, ...model.importPlan.input }]) : output(model);
   if (input.type === "import-go") return post(model, [{ type: "act", act: "go", id: input.id, import: input.run, paused: input.paused }]);
   if (input.type === "flush") return output(model, [...model.pending.values()].filter((request) => !model.uploads.has(request.id)), [...model.reads.values()], [...model.uploads.values()]);
-  if (input.type === "tab") {
+  if (input.type === "agent") {
     if (input.name !== null && !model.agents.has(input.name)) return output(model);
     const next = { ...model, agent: input.name, page: "chat" as const };
     const refreshed = input.name === null ? next : requestAgent(next, input.name);
@@ -325,6 +329,20 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
   }
 }
 
+// Folds each stretch of whole messages into briefs, inside open memory blocks too.
+function briefed(rows: Row[]): Row[] {
+  const out: Row[] = [];
+  let messages: Entry[] = [];
+  const flush = () => { out.push(...brief(messages)); messages = []; };
+  for (const row of rows) {
+    if (row.kind === "message") { messages.push(row.entry); continue; }
+    flush();
+    out.push(row.kind === "open" ? { ...row, rows: briefed(row.rows) } : row);
+  }
+  flush();
+  return out;
+}
+
 export function rows(model: Model): Row[] {
   const overview = model.folded || model.page === "tree";
   function block(part: Part, whole = false): Row {
@@ -349,5 +367,5 @@ export function rows(model: Model): Row[] {
       if (entry.i >= covered) result.push({ kind: "message", entry });
     }
   }
-  return result;
+  return briefed(result);
 }

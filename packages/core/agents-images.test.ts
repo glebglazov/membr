@@ -15,7 +15,7 @@ test("S2 agent tabs keep independent live logs, refresh on switching, and recove
   model = hear(model, { type: "live", agent: null, text: "Main partial" });
   expect(model.entries.get(0)?.text).toBe("Main answer");
   expect(model.live).toBe("Main partial");
-  let selected = act(model, { type: "tab", name: "Agent1" });
+  let selected = act(model, { type: "agent", name: "Agent1" });
   expect(selected.model.agent).toBe("Agent1");
   expect(selected.model.agents.get("Agent1")?.live).toBe("Next part");
   expect(selected.reads[0]).toMatchObject({ read: "agent", name: "Agent1" });
@@ -24,10 +24,10 @@ test("S2 agent tabs keep independent live logs, refresh on switching, and recove
   expect(model.entries.size).toBe(1);
   model = hear(model, { type: "agent-entry", name: "Agent1", entry: entry(2, "Next part") });
   expect(model.agents.get("Agent1")?.live).toBe("");
-  selected = act(model, { type: "tab", name: "Agent2" });
+  selected = act(model, { type: "agent", name: "Agent2" });
   expect(selected.reads.at(-1)).toMatchObject({ read: "agent", name: "Agent2" });
-  expect(act(selected.model, { type: "tab", name: null }).model.agent).toBeNull();
-  expect(act(model, { type: "tab", name: "Missing" }).model).toBe(model);
+  expect(act(selected.model, { type: "agent", name: null }).model.agent).toBeNull();
+  expect(act(model, { type: "agent", name: "Missing" }).model).toBe(model);
   model = hear(hear(model, { type: "offline" }), { type: "connecting" });
   model = hear(model, { type: "ready", version: "1.0" });
   const refresh = act(model, { type: "flush" }).reads.find((read) => read.read === "agent" && read.name === "Agent1");
