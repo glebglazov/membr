@@ -4,7 +4,6 @@ import { act, createModel, hear, rows, partKey, effectivePick, answering, cacheS
 import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
-import { speechRecognition, type Recognition } from "./speech.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
@@ -192,32 +191,10 @@ function App() {
   const [, update] = useState(0);
   const [draft, setDraft] = useState("");
   const [readingImages, setReadingImages] = useState(false);
-  const [voice, setVoice] = useState<"idle" | "listening">("idle");
-  const recognition = useRef<Recognition | null>(null);
   const files = useRef<HTMLInputElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   changed = () => update((value) => value + 1);
-  useEffect(() => {
-    const Constructor = speechRecognition();
-    if (!Constructor) return;
-    const speech = new Constructor();
-    recognition.current = speech;
-    speech.lang = navigator.language;
-    speech.interimResults = false;
-    speech.onresult = (event) => {
-      const words: string[] = [];
-      for (let i = event.resultIndex; i < event.results.length; i++) if (event.results[i].isFinal) words.push(event.results[i][0].transcript);
-      if (words.length) setDraft((text) => text + (text && !/\s$/.test(text) ? " " : "") + words.join(" "));
-    };
-    speech.onend = () => setVoice("idle");
-    speech.onerror = (event) => {
-      setVoice("idle");
-      model = hear(model, { type: "error", id: null, reason: `Voice input failed. ${event.error}.` });
-      changed();
-    };
-    return () => { speech.onresult = null; speech.onend = null; speech.onerror = null; speech.abort(); recognition.current = null; };
-  }, []);
   useEffect(() => {
     const scroll = () => { follow.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 120; };
     const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : "chat" });
@@ -249,7 +226,6 @@ function App() {
     if ((!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused") return;
     input({ type: "send", id: id(), text: draft });
     if (!model.error) setDraft("");
-    recognition.current?.stop();
     follow.current = true;
   }
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
@@ -298,12 +274,6 @@ function App() {
           if (selected.length) void attach(selected);
         } }),
         h("button", { type: "button", disabled: readingImages || model.connection === "refused", onClick: () => files.current?.click() }, readingImages ? "Reading images..." : "Attach"),
-        speechRecognition() && h("button", { type: "button", "aria-label": "Voice input", "aria-pressed": voice === "listening", onClick: () => {
-          if (voice === "listening") recognition.current?.stop();
-          else try { recognition.current?.start(); setVoice("listening"); } catch {
-            model = hear(model, { type: "error", id: null, reason: "Voice input could not start." }); changed();
-          }
-        } }, voice === "listening" ? "Stop voice" : "Voice"),
         h("button", { type: "submit", disabled: (!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused" }, "Send"),
         h("button", { type: "button", disabled: !model.state.busy || model.connection !== "ready", onClick: () => input({ type: "stop", id: id() }) }, "Stop"))));
 }
