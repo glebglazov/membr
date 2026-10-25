@@ -86,7 +86,7 @@ test("S2 pending memory reads resend on reconnect and a read error permits retry
   expect(rows(model)[0]?.kind).toBe("summary");
 });
 
-test("S2 current view hides archived entries, shows long leaf summaries and includes new tail once", () => {
+test("S2 current view hides archived entries, keeps single messages whole and includes new tail once", () => {
   const leaf: Part = { l: 0, i: 4 };
   let model = hear(ready(), { type: "entry", entry: original });
   model = hear(model, { type: "entry", entry: { ...original, i: 4, text: "Long original ".repeat(100) } });
@@ -94,7 +94,7 @@ test("S2 current view hides archived entries, shows long leaf summaries and incl
   model = hear(model, { type: "entry", entry: { ...original, i: 5, kind: "unii", text: "A live tail" } });
   expect(rows(model)).toEqual([
     { kind: "summary", part: root, text: "Old chat" },
-    { kind: "summary", part: leaf, text: "A summary of the long message" },
+    { kind: "message", entry: { ...original, i: 4, text: "Long original ".repeat(100) } },
     { kind: "message", entry: { ...original, i: 5, kind: "unii", text: "A live tail" } },
   ]);
 });
@@ -113,6 +113,8 @@ test("S2 current-turn long messages remain whole after a view update and reconne
   let other = hear(createModel(), { type: "entry", entry: answer });
   other = hear(other, view);
   expect(rows(other)).toEqual(rows(model));
+  model = hear(model, parseEvent({ ...view, turn: 5 }));
+  expect(rows(model)[1]).toEqual({ kind: "message", entry: answer });
   const folded = act(model, { type: "fold" });
   model = hear(folded.model, reply(rootsRead(folded.reads).id, [{ ...leaf, text: "An answer summary" }]));
   expect(rows(model)).toEqual([{ kind: "summary", part: leaf, text: "An answer summary" }]);

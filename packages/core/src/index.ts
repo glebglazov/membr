@@ -348,15 +348,13 @@ export function rows(model: Model): Row[] {
   function block(part: Part, whole = false): Row {
     const entry = part.l === 0 ? model.entries.get(part.i) : undefined;
     const text = model.nodes.get(partKey(part))?.text ?? (entry ? `${entry.kind}: ${entry.text.slice(0, 160)}` : "(not summarized yet: zoom it)");
-    if (whole && entry && model.turn !== null && entry.i >= model.turn) return { kind: "message", entry };
+    if (whole && entry) return { kind: "message", entry };
     if (model.open.has(partKey(part))) {
       const children: Row[] = part.l === 0
         ? entry ? [{ kind: "message", entry }] : []
         : [{ l: part.l - 1, i: part.i * 2 }, { l: part.l - 1, i: part.i * 2 + 1 }].map((child) => block(child));
       return { kind: "open", part, rows: children, loading: [...model.reads.values()].some((request) => request.read === "zoom" && partKey(request.part) === partKey(part)) };
     }
-    const summary = model.nodes.get(partKey(part));
-    if (whole && entry && (!summary || summary.text === `${entry.kind}: ${entry.text}`)) return { kind: "message", entry };
     return { kind: "summary", part, text };
   }
   const parts = overview ? model.roots ?? [] : model.parts;
