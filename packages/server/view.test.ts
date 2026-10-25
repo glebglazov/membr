@@ -235,12 +235,13 @@ test("a batch fits the complete view with a large pending tail and sends every i
 
 test("a permanent tree write failure ends the summary wait", async () => {
   const hub = await waitingBatch();
-  const index = path.join(hub.dir, "tree.index");
-  fs.renameSync(index, index + ".saved");
-  fs.mkdirSync(index);
+  const tree = path.join(hub.dir, "tree");
+  const file = path.join(tree, new Date().toISOString().slice(0, 10) + ".jsonl");
+  fs.renameSync(file, file + ".saved");
+  fs.mkdirSync(file);
   const mark = hub.client.events.length;
   hub.held.resolve("s".repeat(400));
-  expect((await hub.client.wait("error", mark, () => true, 10000)).reason).toContain("tree.index");
+  expect((await hub.client.wait("error", mark, () => true, 10000)).reason).toContain(file);
   expect((await hub.client.wait("state", mark, (event) => !event.state.busy)).state.wait).toBe("");
   expect(hub.engine.epochs).toHaveLength(1);
   expect(hub.engine.epochs[0].closed).toBe(true);

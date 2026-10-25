@@ -200,7 +200,7 @@ test("a refusal after an oversized answer uses the source instead of the earlier
   expect(nodes(hub.dir)[0].text).toBe(("user: " + source).slice(0, 512));
 });
 
-test("restart rebuilds the index, resumes missing nodes and ignores an old call after close", async () => {
+test("restart rebuilds after a crash, resumes missing nodes and ignores an old call after close", async () => {
   const pending = Promise.withResolvers<string>();
   const before = await serve(new Compactor(async () => pending.promise));
   await say(before, "saved", "short");
@@ -211,7 +211,7 @@ test("restart rebuilds the index, resumes missing nodes and ignores an old call 
   const saved = nodes(before.dir);
   const file = path.join(before.dir, "tree", fs.readdirSync(path.join(before.dir, "tree"))[0]);
   fs.appendFileSync(file, '{"l":0,"i":1');
-  fs.rmSync(path.join(before.dir, "tree.index"));
+  fs.writeFileSync(path.join(before.dir, "tree.index"), "stale index");
   const after = await serve(new Compactor(), before.dir);
   await settled(after, 2);
   expect(nodes(after.dir).find((node) => node.l === 0 && node.i === 0)).toEqual(saved[0]);
@@ -222,15 +222,7 @@ test("restart rebuilds the index, resumes missing nodes and ignores an old call 
   await until(() => before.engine.active === 0);
   expect(fs.readFileSync(file)).toEqual(bytes);
   await coverage(after, ["short", "keep ".repeat(150)]);
-  const index = fs.readFileSync(path.join(after.dir, "tree.index"));
-  for (const node of nodes(after.dir)) {
-    const slot = ((2 * node.i + 1) * 2 ** node.l - 1) * 16;
-    const day = index.readUInt32LE(slot + 8);
-    const at = index.readDoubleLE(slot);
-    const length = index.readUInt32LE(slot + 12);
-    const data = fs.readFileSync(path.join(after.dir, "tree", new Date(day * 86400000).toISOString().slice(0, 10) + ".jsonl"));
-    expect(JSON.parse(data.subarray(at, at + length).toString("utf8"))).toEqual(node);
-  }
+  expect(fs.existsSync(path.join(after.dir, "tree.index"))).toBe(false);
   after.close();
   const again = await serve(new Compactor(), before.dir);
   await settled(again, 2);

@@ -107,6 +107,7 @@ test("the legacy fixture opens without changing its records", () => {
     expect(log.entries.map((entry) => entry.text)).toEqual(["Keep this message.", "The turn ended."]);
     expect(log.answer("fixture-say")).toEqual({ type: "answer", id: "fixture-say", ok: true, entry: 0 });
     expect(log.interrupted).toEqual([]);
+    expect(fs.existsSync(path.join(dir, "tree.index"))).toBe(false);
     expect(tree.dump()).toEqual([
       { l: 0, i: 0, text: "user: Keep this message." },
       { l: 0, i: 1, text: "note: The turn ended." },

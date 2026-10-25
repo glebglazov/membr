@@ -21,3 +21,7 @@ The phase of a turn in which membr summarizes old messages before it starts a ne
 
 **Goal check**:
 The step after a turn ends in which membr asks whether the goal is met, and starts a new turn when it is not.
+
+**Journal**:
+The append-only record files of one store (the log or the tree) under one directory, one file for each day. On open it reads every record, cuts off a half-written last line, and after that it can read any record by where it was written.
+_Avoid_: storage, database, index

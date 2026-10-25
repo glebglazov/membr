@@ -1,21 +1,18 @@
 // Tree layout and compaction prompts ported from UniiChat Memory.ts at 0500bf6.
 // Copyright 2026 Higher Order Company. Licensed under Apache-2.0.
 // See licenses/UniiChat.txt.
-import fs from "node:fs";
 import path from "node:path";
 import type { MemoryLine, Part } from "@membr/protocol";
 import type { Engine } from "./engine.ts";
 import type { Log } from "./log.ts";
 import { end, flat, merge, render } from "./view.ts";
 import { imageMarks } from "./images.ts";
-import { appendFile, syncDirectory, truncateFile } from "./durable.ts";
+import { Journal } from "./journal.ts";
 
 const NODE = 512;
 const JOBS = 4;
 const TRIES = 5;
 const SEEN = 32000;
-const SLOT = 16;
-const DAY = 86_400_000;
 const SCALE = "-".repeat(NODE);
 const LEAF = `Compaction: compress message {id} into one line of at most ${NODE} bytes
 (about 70 words), the length of this ruler:
@@ -30,7 +27,6 @@ of them from there too.
 <input>
 `;
 type Node = Part & { text: string; size: number };
-type Location = { day: number; at: number; length: number };
 
 function key({ l, i }: Part): number { return (2 * i + 1) * 2 ** l - 1; }
 function context(part: Part): number { return part.l === 0 ? part.i : end(part); }
@@ -42,7 +38,7 @@ function cut(text: string): string {
 }
 
 export class Tree {
-  private readonly locations = new Map<number, Location>();
+  private readonly journal: Journal<number>;
   private readonly ready = new Map<number, Part>();
   private readonly busy = new Set<number>();
   private readonly delays = new Map<ReturnType<typeof setTimeout>, () => void>();
@@ -55,9 +51,23 @@ export class Tree {
   private scheduled = false;
   private stopped = false;
 
-  constructor(private readonly dir: string, private readonly log: Log, private readonly engine: Engine) {
-    fs.mkdirSync(path.join(dir, "tree"), { recursive: true });
-    this.load();
+  constructor(dir: string, private readonly log: Log, private readonly engine: Engine) {
+    const nodes: Part[] = [];
+    this.journal = new Journal<number>(path.join(dir, "tree"), (raw, file) => {
+      if (raw === null || typeof raw !== "object" || !("l" in raw) || !("i" in raw) || !("text" in raw) || !("size" in raw)
+        || typeof raw.l !== "number" || !Number.isSafeInteger(raw.l) || raw.l < 0 || raw.l > 52
+        || typeof raw.i !== "number" || !Number.isSafeInteger(raw.i) || raw.i < 0
+        || typeof raw.text !== "string" || raw.text !== Buffer.from(raw.text).toString("utf8")
+        || raw.size !== Buffer.byteLength(raw.text) || raw.size > NODE) throw new Error(`Invalid tree record in ${file}`);
+      const part = { l: raw.l, i: raw.i };
+      if (end(part) > this.log.count || !Number.isSafeInteger(key(part))) throw new Error(`Invalid tree node in ${file}`);
+      nodes.push(part);
+      return key(part);
+    });
+    for (const part of nodes) {
+      if (part.l > 0 && (!this.journal.has(key({ l: part.l - 1, i: part.i * 2 })) || !this.journal.has(key({ l: part.l - 1, i: part.i * 2 + 1 })))) throw new Error("Tree parent has a missing child");
+      this.parent(part);
+    }
     this.sync();
   }
 
@@ -72,7 +82,7 @@ export class Tree {
           const part = { l: 0, i: this.count++ };
           const imported = this.log.importAt(part.i) !== undefined;
           this.importCounts.push(this.importCounts[part.i] + Number(imported));
-          if (!this.locations.has(key(part))) this.ready.set(key(part), part);
+          if (!this.journal.has(key(part))) this.ready.set(key(part), part);
           else this.parent(part);
         }
         this.pump();
@@ -86,7 +96,7 @@ export class Tree {
     for (let i = 0; i < this.log.count; i++) {
       if (this.log.importAt(i)?.run !== run) continue;
       for (let l = 0; (i + 1) % 2 ** l === 0; l++) {
-        if (!this.locations.has(key({ l, i: (i + 1) / 2 ** l - 1 }))) return true;
+        if (!this.journal.has(key({ l, i: (i + 1) / 2 ** l - 1 }))) return true;
       }
     }
     return false;
@@ -118,7 +128,7 @@ export class Tree {
   private cover(count: number): Part[] {
     const parts: Part[] = [];
     const down = (part: Part): void => {
-      if (part.l === 0 || this.locations.has(key(part))) parts.push(part);
+      if (part.l === 0 || this.journal.has(key(part))) parts.push(part);
       else {
         down({ l: part.l - 1, i: part.i * 2 });
         down({ l: part.l - 1, i: part.i * 2 + 1 });
@@ -150,7 +160,7 @@ export class Tree {
       const check = () => {
         const reason = signal.aborted ? signal.reason : this.failure ?? (this.stopped ? new Error("The compactor is closed") : null);
         const built = (part: Part): boolean => {
-          if (this.locations.has(key(part))) return true;
+          if (this.journal.has(key(part))) return true;
           const a = part.i * 2 ** part.l, b = end(part);
           const imports = (this.importCounts[b] ?? 0) - (this.importCounts[a] ?? 0);
           if (imports === b - a) return true;
@@ -175,67 +185,15 @@ export class Tree {
     });
   }
 
-  private file(day: number): string {
-    return path.join(this.dir, "tree", new Date(day * DAY).toISOString().slice(0, 10) + ".jsonl");
-  }
-
-  private load(): void {
-    const index = fs.openSync(path.join(this.dir, "tree.index"), "w", 0o600);
-    const nodes: Part[] = [];
-    try {
-      for (const file of fs.readdirSync(path.join(this.dir, "tree")).filter((file) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(file)).sort()) {
-        const full = path.join(this.dir, "tree", file);
-        const day = Date.parse(file.slice(0, 10)) / DAY;
-        const data = fs.readFileSync(full);
-        let at = 0;
-        for (let stop = data.indexOf(10); stop !== -1; stop = data.indexOf(10, at)) {
-          const raw: unknown = JSON.parse(data.subarray(at, stop).toString("utf8"));
-          if (raw === null || typeof raw !== "object" || !("l" in raw) || !("i" in raw) || !("text" in raw) || !("size" in raw)
-            || typeof raw.l !== "number" || !Number.isSafeInteger(raw.l) || raw.l < 0 || raw.l > 52
-            || typeof raw.i !== "number" || !Number.isSafeInteger(raw.i) || raw.i < 0
-            || typeof raw.text !== "string" || raw.text !== Buffer.from(raw.text).toString("utf8")
-            || raw.size !== Buffer.byteLength(raw.text) || raw.size > NODE) throw new Error(`Invalid tree record in ${file}`);
-          const part = { l: raw.l, i: raw.i };
-          if (end(part) > this.log.count || !Number.isSafeInteger(key(part)) || this.locations.has(key(part))) throw new Error(`Invalid tree node in ${file}`);
-          this.place(index, part, { day, at, length: stop - at });
-          nodes.push(part);
-          at = stop + 1;
-        }
-        if (at < data.length) truncateFile(full, at);
-      }
-      for (const part of nodes) {
-        if (part.l > 0 && (!this.locations.has(key({ l: part.l - 1, i: part.i * 2 })) || !this.locations.has(key({ l: part.l - 1, i: part.i * 2 + 1 })))) throw new Error("Tree parent has a missing child");
-        this.parent(part);
-      }
-      fs.fsyncSync(index);
-    } finally { fs.closeSync(index); }
-    syncDirectory(this.dir);
-  }
-
-  private place(fd: number, part: Part, location: Location): void {
-    const slot = Buffer.alloc(SLOT);
-    slot.writeDoubleLE(location.at, 0);
-    slot.writeUInt32LE(location.day, 8);
-    slot.writeUInt32LE(location.length, 12);
-    fs.writeSync(fd, slot, 0, SLOT, key(part) * SLOT);
-    this.locations.set(key(part), location);
-  }
-
   read(part: Part): string | null {
-    const location = this.locations.get(key(part));
-    if (!location) return null;
-    const fd = fs.openSync(this.file(location.day), "r");
-    try {
-      const bytes = Buffer.alloc(location.length);
-      if (fs.readSync(fd, bytes, 0, bytes.length, location.at) !== bytes.length) throw new Error("Incomplete tree record");
-      return (JSON.parse(bytes.toString("utf8")) as Node).text;
-    } finally { fs.closeSync(fd); }
+    const raw = this.journal.read(key(part));
+    return raw === null ? null : (raw as Node).text;
   }
 
   private parent(part: Part): void {
     const sibling = { l: part.l, i: part.i % 2 === 0 ? part.i + 1 : part.i - 1 };
     const parent = { l: part.l + 1, i: Math.floor(part.i / 2) };
-    if (this.locations.has(key(sibling)) && !this.locations.has(key(parent))) this.ready.set(key(parent), parent);
+    if (this.journal.has(key(sibling)) && !this.journal.has(key(parent))) this.ready.set(key(parent), parent);
   }
 
   private source(part: Part): string {
@@ -251,12 +209,8 @@ export class Tree {
   }
 
   private store(part: Part, text: string): void {
-    const day = Math.floor(Date.now() / DAY);
     const record: Node = { ...part, text, size: Buffer.byteLength(text) };
-    const bytes = Buffer.from(JSON.stringify(record) + "\n");
-    const at = appendFile(this.file(day), bytes);
-    const index = fs.openSync(path.join(this.dir, "tree.index"), "r+");
-    try { this.place(index, part, { day, at, length: bytes.length - 1 }); fs.fsyncSync(index); } finally { fs.closeSync(index); }
+    this.journal.append(record, key(part), new Date().toISOString());
     this.ready.delete(key(part));
     this.parent(part);
     this.waiting.forEach((check) => check());
