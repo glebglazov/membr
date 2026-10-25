@@ -8,6 +8,7 @@ import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
+import { pump } from "./pump.ts";
 import type { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { IMAGE_COUNT, readImage, type Image } from "./images.ts";
@@ -242,44 +243,39 @@ export class Chat {
     this.emit(this.viewEvent(this.view.summaries.filter((part) => part.l === 0 && part.i === entry.i)));
   }
 
-  private async read(session: Session): Promise<void> {
-    try {
-      for await (const event of session.epoch.events) {
-        if (session !== this.session || this.closed) return;
-        switch (event.kind) {
-          case "session": this.log.epoch(session.id, event.id); break;
-          case "delta": this.streaming += event.text; this.emit({ type: "live", text: event.text, agent: null }); break;
-          case "text": this.streaming = ""; this.record(this.log.append("unii", event.text)); break;
-          case "tool": this.record(this.log.append("tool", JSON.stringify({ id: event.id, name: event.name, input: event.input }))); break;
-          case "echo": this.record(this.log.append("echo", JSON.stringify({ id: event.id, text: event.text, error: event.error }))); break;
-          case "compacted": throw new Error("The Engine compacted the epoch unexpectedly");
-          case "end":
-            this.usage = event.usage;
-            this.epochUsage = {
-              input: this.epochUsage.input + event.usage.input, cacheRead: this.epochUsage.cacheRead + event.usage.cacheRead,
-              cacheWrite: this.epochUsage.cacheWrite + event.usage.cacheWrite, output: this.epochUsage.output + event.usage.output,
-            };
-            if (this.turn.phase === "running" && event.through >= this.sent) {
-              const entry = this.log.finish(this.turn.id, event.error === null ? undefined : `The turn failed: ${event.error}`);
-              const goal = event.error === null ? this.log.goal : { revision: 0, value: null };
-              let check: GoalCheck | null = null;
-              if (goal.value === null) this.turn = { phase: "idle" };
-              else {
-                check = { phase: "checking", revision: goal.revision, goal: goal.value, halt: new AbortController() };
-                this.turn = check;
-              }
-              this.afterTurn();
-              if (entry) this.record(entry);
-              if (check) void this.check(check);
-            }
-            this.change();
-            break;
+  private read(session: Session): Promise<void> {
+    return pump(session.epoch, "epoch", {
+      guard: () => session !== this.session || this.closed ? "stop" : "take",
+      session: (id) => this.log.epoch(session.id, id),
+      live: (text) => { this.streaming += text; this.emit({ type: "live", text, agent: null }); },
+      entry: (kind, text) => {
+        if (kind === "unii") this.streaming = "";
+        this.record(this.log.append(kind, text));
+      },
+      end: (event) => {
+        this.usage = event.usage;
+        this.epochUsage = {
+          input: this.epochUsage.input + event.usage.input, cacheRead: this.epochUsage.cacheRead + event.usage.cacheRead,
+          cacheWrite: this.epochUsage.cacheWrite + event.usage.cacheWrite, output: this.epochUsage.output + event.usage.output,
+        };
+        if (this.turn.phase === "running" && event.through >= this.sent) {
+          const entry = this.log.finish(this.turn.id, event.error === null ? undefined : `The turn failed: ${event.error}`);
+          const goal = event.error === null ? this.log.goal : { revision: 0, value: null };
+          let check: GoalCheck | null = null;
+          if (goal.value === null) this.turn = { phase: "idle" };
+          else {
+            check = { phase: "checking", revision: goal.revision, goal: goal.value, halt: new AbortController() };
+            this.turn = check;
+          }
+          this.afterTurn();
+          if (entry) this.record(entry);
+          if (check) void this.check(check);
         }
-      }
-      if (session === this.session && !this.closed && this.turn.phase !== "stopping" && this.turn.phase !== "failed") throw new Error("The Engine closed the epoch");
-    } catch (error) {
-      if (session === this.session && !this.closed) this.fail(error);
-    }
+        this.change();
+      },
+      expectsEvents: () => this.turn.phase !== "stopping" && this.turn.phase !== "failed",
+      fail: (error) => this.fail(error),
+    });
   }
 
   private async stop(session: Session, turn: number): Promise<void> {

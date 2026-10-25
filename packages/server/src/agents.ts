@@ -6,6 +6,7 @@ import { parseEntry, type Entry, type Event } from "@membr/protocol";
 import { EFFORTS, type Ask, type Effort, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { identity } from "./log.ts";
 import { appendFile, truncateFile } from "./durable.ts";
+import { pump } from "./pump.ts";
 
 export type AgentTools = { spawn(tasks: string[], effort?: Effort): string; tell(name: string, message: string): string };
 type Run = { phase: "running" | "stopping"; sent: number; replies: string[]; halt: AbortController };
@@ -128,27 +129,24 @@ export class Agents implements AgentTools {
     } catch (error) { this.failed(agent, error); }
   }
 
-  private async listen(agent: Agent, session: Epoch): Promise<void> {
-    try {
-      for await (const event of session.events) {
-        if (this.closed || agent.session !== session) return;
+  private listen(agent: Agent, session: Epoch): Promise<void> {
+    return pump(session, "agent", {
+      guard: () => this.closed || agent.session !== session ? "stop" : agent.state.phase === "running" || agent.state.phase === "stopping" ? "take" : "skip",
+      session: () => {},
+      live: (text) => { agent.live += text; this.emit({ type: "live", agent: agent.name, text }); },
+      entry: (kind, text) => {
+        this.append(agent, kind, text);
+        if (kind === "unii") agent.live = "";
+      },
+      end: (event) => {
         const run = agent.state;
-        if (run.phase !== "running" && run.phase !== "stopping") continue;
-        switch (event.kind) {
-          case "session": break;
-          case "delta": agent.live += event.text; this.emit({ type: "live", agent: agent.name, text: event.text }); break;
-          case "text": this.append(agent, "unii", event.text); agent.live = ""; break;
-          case "tool": this.append(agent, "tool", JSON.stringify({ id: event.id, name: event.name, input: event.input })); break;
-          case "echo": this.append(agent, "echo", JSON.stringify({ id: event.id, text: event.text, error: event.error })); break;
-          case "compacted": throw new Error("The Engine compacted the agent unexpectedly");
-          case "end":
-            run.replies.push(event.error === null ? event.reply : "failed: " + event.error);
-            if (run.phase === "running" && event.through >= run.sent) this.finish(agent, run);
-            break;
-        }
-      }
-      if (!this.closed && agent.session === session) throw new Error("The Engine closed the agent");
-    } catch (error) { if (!this.closed && agent.session === session) this.failed(agent, error); }
+        if (run.phase !== "running" && run.phase !== "stopping") return;
+        run.replies.push(event.error === null ? event.reply : "failed: " + event.error);
+        if (run.phase === "running" && event.through >= run.sent) this.finish(agent, run);
+      },
+      expectsEvents: () => true,
+      fail: (error) => this.failed(agent, error),
+    });
   }
 
   private finish(agent: Agent, run: Run, note?: string): void {
