@@ -75,6 +75,11 @@ export class Chat {
     return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, epoch: this.epochUsage };
   }
 
+  // Answers an act id the hub could not parse or accept, so a retry with that id gets the same refusal.
+  refuse(id: string, reason: string): Answer {
+    return this.log.apply({ type: "act", act: "say", id, text: "" }, this.log.count, reason).answer;
+  }
+
   act(act: Act): Answer {
     const previous = this.log.answer(act.id);
     if (previous) return previous;

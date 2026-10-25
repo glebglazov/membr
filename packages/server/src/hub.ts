@@ -11,36 +11,10 @@ import { readConfig } from "./config.ts";
 import { web } from "./web.ts";
 import { imagePath, IMAGE_COUNT, storeImage } from "./images.ts";
 import { cleanupEpochs } from "./export-cleanup.ts";
+import { access, admit, type Admitted } from "./access.ts";
 
-type Connection = { phase: "hello"; tokens: string[]; local: boolean } | { phase: "ready"; hello: Hello };
+type Connection = { phase: "hello"; access: Admitted } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
-
-function credentials(request: Request): string[] {
-  const tokens: string[] = [];
-  const authorization = request.headers.get("authorization");
-  if (authorization !== null) {
-    const match = /^Bearer (.+)$/i.exec(authorization);
-    if (!match) throw new Error("Expected a bearer token");
-    tokens.push(match[1]);
-  }
-  const url = new URL(request.url);
-  tokens.push(...url.searchParams.getAll("token"));
-  for (const cookie of (request.headers.get("cookie") ?? "").split(";")) {
-    const [name, ...value] = cookie.trim().split("=");
-    if (name === "token") tokens.push(decodeURIComponent(value.join("=")));
-  }
-  return tokens;
-}
-
-function loopback(address: string): boolean {
-  return address === "::1" || address === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(address) || /^::ffff:127\.\d+\.\d+\.\d+$/.test(address);
-}
-
-// `tailscale serve` forwards tailnet HTTPS to loopback as plain HTTP. It replaces any client copy of
-// Tailscale-User-Login, and a DNS-rebinding page can not take a ts.net Host, so the request is as trusted as localhost.
-function tailnet(request: Request, url: URL): boolean {
-  return url.hostname.endsWith(".ts.net") && request.headers.has("tailscale-user-login") && request.headers.get("x-forwarded-proto") === "https";
-}
 
 export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
   const config = options.config ?? readConfig(options.dir);
@@ -84,26 +58,15 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     maxRequestBodySize: 32 * 2 ** 20,
     async fetch(request, server) {
       const url = new URL(request.url);
-      const peer = loopback(server.requestIP(request)?.address ?? "");
-      const proxied = peer && tailnet(request, url);
-      if (proxied) url.protocol = "https:";
-      const origin = request.headers.get("origin");
-      if (origin !== null && origin !== url.origin) return new Response("Invalid origin", { status: 403 });
-      const local = peer && (loopback(url.hostname) || url.hostname === "localhost" || proxied);
-      let tokens: string[];
-      try { tokens = credentials(request); } catch {
-        return new Response("Invalid bearer credentials", { status: 401 });
-      }
-      if (tokens.some((value) => value !== token)) return new Response("Invalid bearer token", { status: 401 });
+      const granted = access(request, server.requestIP(request)?.address ?? "", token);
+      if (granted.kind === "refused") return new Response(granted.reason, { status: granted.status });
       if (url.pathname === "/ws") {
-        if (!local && !tokens.length && (origin !== null || request.headers.get("upgrade")?.toLowerCase() !== "websocket")) return new Response("Bearer token required", { status: 401 });
-        if (server.upgrade(request, { data: { phase: "hello", tokens, local } })) return;
+        if (server.upgrade(request, { data: { phase: "hello", access: granted } })) return;
         return new Response("WebSocket upgrade required", { status: 426 });
       }
-      if (!local && !tokens.length) return new Response("Bearer token required", { status: 401 });
       if (url.pathname === "/" && url.searchParams.has("token") && request.method === "GET") {
         return new Response(null, { status: 303, headers: {
-          Location: "/", "Set-Cookie": `token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${url.protocol === "https:" ? "; Secure" : ""}`,
+          Location: "/", "Set-Cookie": `token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${granted.secureCookie ? "; Secure" : ""}`,
           "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
         } });
       }
@@ -127,7 +90,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
         } catch (error) {
           const reason = error instanceof Error ? error.message : "The image upload failed.";
           if (!id || id.length > 256) return new Response(reason, { status: 400 });
-          const answer = log.apply({ type: "act", act: "say", id, text: "" }, log.count, reason).answer;
+          const answer = chat!.refuse(id, reason);
           return Response.json(answer, { status: answer.ok ? 200 : 400 });
         }
       }
@@ -156,14 +119,13 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
             if (socket.data.phase !== "ready" || input === null || typeof input !== "object" || !("type" in input) || input.type !== "act"
               || !("id" in input) || typeof input.id !== "string" || input.id.length === 0 || input.id.length > 256) throw error;
             const reason = error instanceof Error ? error.message : "Request failed";
-            send(socket, log.apply({ type: "act", act: "say", id: input.id, text: "" }, log.count, reason).answer);
+            send(socket, chat!.refuse(input.id, reason));
             return;
           }
           if (socket.data.phase === "hello") {
             if (message.type !== "hello") return refuse(socket, "The first message must be hello");
             if (Number(message.version.split(".")[0]) !== Number(VERSION.split(".")[0])) return refuse(socket, `Protocol ${message.version} is incompatible with ${VERSION}`);
-            const tokens = [...socket.data.tokens, ...(message.token === null ? [] : [message.token])];
-            if ((!socket.data.local && !tokens.length) || tokens.some((value) => value !== token)) return refuse(socket, "Invalid bearer token");
+            if (!admit(socket.data.access, message.token, token)) return refuse(socket, "Invalid bearer token");
             socket.data = { phase: "ready", hello: message };
             for (let i = 0; i < log.count; i++) {
               const entry = log.read(i);
