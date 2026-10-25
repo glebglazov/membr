@@ -1,0 +1,152 @@
+import type { Act, Entry, State, Usage } from "@membr/protocol";
+import type { From, Priority } from "./engine.ts";
+import type { Image } from "./images.ts";
+import type { Log } from "./log.ts";
+
+export type PendingInput = { text: string; from: From; images?: Image[] };
+export type Turn = { attempt: number } & (
+  | { phase: "idle" }
+  | { phase: "running" | "stopping"; id: number }
+  | { phase: "summaries"; id: number; pending: PendingInput[] }
+  | { phase: "checking"; revision: number; goal: string }
+  | { phase: "failed"; reason: string }
+  | { phase: "closing" | "closed" }
+);
+export type Facts = { count: number; goal: Log["goal"]; over(id: number): boolean };
+export type Input =
+  | { kind: "prepare"; act: Act["act"] }
+  | { kind: "actFailed"; say: boolean; id: number; error: unknown }
+  | { kind: "start"; input: PendingInput; id: number }
+  | { kind: "stop"; id: number }
+  | { kind: "interrupted"; id: number }
+  | { kind: "ended"; done: boolean; error: string | null; usage: Usage }
+  | { kind: "finished"; source: "ended" | "stopped" | "interrupted" | "failed"; entry: Entry | null; error: boolean }
+  | { kind: "batched" | "rotated"; attempt: number }
+  | { kind: "checked"; attempt: number; met: boolean }
+  | { kind: "checkFailed"; attempt: number; error: unknown }
+  | { kind: "continued"; entry: Entry }
+  | { kind: "continueRecorded"; id: number }
+  | { kind: "report"; text: string; stopped: boolean }
+  | { kind: "fail"; error: unknown }
+  | { kind: "failed"; previous: Turn; reason: string }
+  | { kind: "idle" | "state" | "close" | "closing" | "closed" };
+export type Effect =
+  | { kind: "halt" | "afterHook" | "cancelApprovals" | "closeAgents" | "closeEpoch" | "state" | "closedAfterHook" }
+  | { kind: "dispatch"; input: Input }
+  | { kind: "finish"; id: number; reason?: string; source: "ended" | "stopped" | "interrupted" | "failed" }
+  | { kind: "send"; input: PendingInput; priority: Priority }
+  | { kind: "batch"; id: number; attempt: number }
+  | { kind: "openEpoch"; id: number }
+  | { kind: "checkGoal"; goal: string; attempt: number }
+  | { kind: "interrupt"; id: number }
+  | { kind: "error"; reason: string }
+  | { kind: "fail"; error: unknown }
+  | { kind: "usage"; usage: Usage }
+  | { kind: "record"; entry: Entry }
+  | { kind: "note"; text: string }
+  | { kind: "completeGoal"; revision: number }
+  | { kind: "continueGoal"; text: string }
+  | { kind: "work"; text: string; id: number | null };
+export type Transition = { turn: Turn; effects: Effect[] };
+const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
+const GOAL_NO = "The goal isn't satisfied yet: keep working.";
+
+export function closed(turn: Turn): boolean { return turn.phase === "closing" || turn.phase === "closed"; }
+export function turnId(turn: Turn, count: number): number { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" ? turn.id : count; }
+export function busy(turn: Turn): boolean { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" || turn.phase === "checking"; }
+export function wait(turn: Turn): State["wait"] { return turn.phase === "summaries" ? "summaries" : turn.phase === "checking" ? "goal" : turn.phase === "stopping" ? "Stopping" : ""; }
+export function canDelegate(turn: Turn): boolean { return !closed(turn) && turn.phase !== "stopping" && turn.phase !== "failed"; }
+export function canAsk(turn: Turn): boolean { return canDelegate(turn); }
+export function refusal(turn: Turn, act: Act): string | undefined {
+  return closed(turn) ? "The chat is closed" : turn.phase === "failed" ? turn.reason : turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
+}
+
+export function next(turn: Turn, input: Input, facts: Facts): Transition {
+  const idle: Turn = { phase: "idle", attempt: turn.attempt };
+  switch (input.kind) {
+    case "prepare":
+      return { turn, effects: turn.phase === "checking" && (input.act === "say" || input.act === "goal" || input.act === "stop") ? [{ kind: "halt" }, { kind: "dispatch", input: { kind: "idle" } }] : [] };
+    case "idle": return { turn: idle, effects: [] };
+    case "state": return { turn, effects: [{ kind: "state" }] };
+    case "actFailed":
+      return { turn: input.say && turn.phase === "idle" ? { phase: "running", id: input.id, attempt: turn.attempt } : turn, effects: [{ kind: "dispatch", input: { kind: "fail", error: input.error } }] };
+    case "start": {
+      if (turn.phase === "summaries") return { turn: { ...turn, pending: [...turn.pending, input.input] }, effects: [] };
+      let batch = false;
+      if (turn.phase === "idle") {
+        try { batch = facts.over(input.id); }
+        catch (error) { return { turn: { phase: "running", id: input.id, attempt: turn.attempt }, effects: [{ kind: "fail", error }] }; }
+      }
+      if (batch) {
+        const attempt = turn.attempt + 1;
+        return { turn: { phase: "summaries", id: input.id, pending: [input.input], attempt }, effects: [{ kind: "state" }, { kind: "batch", id: input.id, attempt }] };
+      }
+      return { turn: { phase: "running", id: turn.phase === "running" ? turn.id : input.id, attempt: turn.attempt }, effects: [{ kind: "state" }, { kind: "send", input: input.input, priority: turn.phase === "running" ? "next" : "now" }] };
+    }
+    case "stop":
+      if (turn.phase === "summaries") return { turn, effects: [{ kind: "halt" }, { kind: "finish", id: input.id, source: "stopped" }] };
+      if (turn.phase === "running") return { turn: { ...turn, phase: "stopping", id: input.id }, effects: [{ kind: "cancelApprovals" }, { kind: "state" }, { kind: "interrupt", id: input.id }] };
+      return { turn, effects: [{ kind: "state" }] };
+    case "interrupted":
+      return { turn, effects: turn.phase === "stopping" && turn.id === input.id ? [{ kind: "finish", id: input.id, source: "interrupted" }] : [] };
+    case "ended":
+      return { turn, effects: [{ kind: "usage", usage: input.usage }, ...(turn.phase === "running" && input.done ? [{ kind: "finish", id: turn.id, reason: input.error === null ? undefined : `The turn failed: ${input.error}`, source: "ended" } satisfies Effect] : [{ kind: "state" } satisfies Effect])] };
+    case "finished": {
+      if (input.source === "stopped" || input.source === "interrupted") return { turn: idle, effects: [{ kind: "afterHook" }, { kind: "state" }] };
+      const effects: Effect[] = [{ kind: "afterHook" }];
+      if (input.entry) effects.push({ kind: "record", entry: input.entry });
+      if (input.source === "failed") return { turn, effects };
+      const goal = input.error ? null : facts.goal.value;
+      const result: Turn = goal === null ? idle : { phase: "checking", revision: facts.goal.revision, goal, attempt: turn.attempt + 1 };
+      if (goal !== null) effects.push({ kind: "checkGoal", goal, attempt: result.attempt });
+      effects.push({ kind: "state" });
+      return { turn: result, effects };
+    }
+    case "batched":
+      return { turn, effects: turn.phase === "summaries" && turn.attempt === input.attempt ? [{ kind: "closeEpoch" }, { kind: "openEpoch", id: turn.id }, { kind: "dispatch", input: { kind: "rotated", attempt: input.attempt } }] : [] };
+    case "rotated":
+      if (turn.phase !== "summaries" || turn.attempt !== input.attempt) return { turn, effects: [] };
+      return { turn: { phase: "running", id: turn.id, attempt: turn.attempt }, effects: [...turn.pending.map((input, i): Effect => ({ kind: "send", input, priority: i === 0 ? "now" : "next" })), { kind: "state" }] };
+    case "checked":
+      if (turn.phase !== "checking" || turn.attempt !== input.attempt || facts.goal.revision !== turn.revision) return { turn, effects: [] };
+      return { turn, effects: input.met ? [{ kind: "completeGoal", revision: turn.revision }, { kind: "dispatch", input: { kind: "idle" } }, { kind: "state" }] : [{ kind: "continueGoal", text: GOAL_NO }] };
+    case "checkFailed": {
+      if (turn.phase !== "checking" || turn.attempt !== input.attempt) return { turn, effects: [] };
+      const reason = input.error instanceof Error ? input.error.message : "The goal check failed";
+      return { turn, effects: [{ kind: "note", text: `No goal check: ${reason.replace(/\.$/, "")}. The goal stays; /halt drops it.` }, { kind: "dispatch", input: { kind: "idle" } }, { kind: "state" }] };
+    }
+    case "continued":
+      return { turn: { phase: "running", id: input.entry.i, attempt: turn.attempt }, effects: [{ kind: "record", entry: input.entry }, { kind: "dispatch", input: { kind: "continueRecorded", id: input.entry.i } }] };
+    case "continueRecorded":
+      return { turn: idle, effects: [{ kind: "dispatch", input: { kind: "start", id: input.id, input: { text: GOAL_NO, from: "membr" } } }] };
+    case "report": {
+      if (closed(turn)) return { turn, effects: [] };
+      if (!input.stopped && turn.phase === "checking") return { turn, effects: [{ kind: "halt" }, { kind: "dispatch", input: { kind: "idle" } }, { kind: "dispatch", input }] };
+      const deliver = !input.stopped && (turn.phase === "idle" || turn.phase === "running" || turn.phase === "summaries");
+      return { turn, effects: [{ kind: "work", text: input.text, id: deliver ? turnId(turn, facts.count) : null }] };
+    }
+    case "fail": {
+      if (closed(turn) || turn.phase === "failed") return { turn, effects: [] };
+      const reason = input.error instanceof Error ? input.error.message : "The Engine failed";
+      const effects: Effect[] = turn.phase === "summaries" || turn.phase === "checking" ? [{ kind: "halt" }] : [];
+      effects.push({ kind: "dispatch", input: { kind: "failed", previous: turn, reason } });
+      return { turn, effects };
+    }
+    case "failed": {
+      const effects: Effect[] = [{ kind: "closeAgents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }];
+      const previous = input.previous;
+      if (previous.phase === "running" || previous.phase === "stopping" || previous.phase === "summaries") effects.push({ kind: "finish", id: previous.id, reason: `The turn failed: ${input.reason}`, source: "failed" });
+      effects.push({ kind: "error", reason: input.reason }, { kind: "state" });
+      return { turn: { phase: "failed", reason: input.reason, attempt: turn.attempt }, effects };
+    }
+    case "close": {
+      if (closed(turn)) return { turn, effects: [] };
+      const effects: Effect[] = turn.phase === "summaries" || turn.phase === "checking" ? [{ kind: "halt" }] : [];
+      effects.push({ kind: "dispatch", input: { kind: "closing" } });
+      return { turn, effects };
+    }
+    case "closing":
+      return { turn: { phase: "closing", attempt: turn.attempt }, effects: [{ kind: "closeAgents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }, { kind: "closedAfterHook" }] };
+    case "closed": return { turn: { phase: "closed", attempt: turn.attempt }, effects: [] };
+  }
+}

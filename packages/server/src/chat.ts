@@ -2,31 +2,27 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import PROMPT from "./prompt.txt" with { type: "text" };
 import { type Act, type Answer, type Entry, type Event, type Pick, type State, type Usage } from "@membr/protocol";
-import { claude, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
+import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import { pump } from "./pump.ts";
+import { next, turnId, busy, wait, refusal, canDelegate, canAsk, closed, type Turn, type Input, type Effect } from "./turn.ts";
 import type { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { IMAGE_COUNT, readImage, type Image } from "./images.ts";
 
-type PendingInput = { text: string; from: From; images?: Image[] };
-type SummaryWait = { phase: "summaries"; id: number; pending: PendingInput[]; halt: AbortController };
-type GoalCheck = { phase: "checking"; revision: number; goal: string; halt: AbortController };
-type Turn = SummaryWait | GoalCheck | { phase: "idle" } | { phase: "running" | "stopping"; id: number } | { phase: "failed"; reason: string } | { phase: "closing" | "closed" };
 type Session = { id: string; epoch: Epoch };
 const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
-const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
-const GOAL_NO = "The goal isn't satisfied yet: keep working.";
 
 export class Chat {
   private readonly approvals: Approvals;
   readonly agents: Agents;
   private readonly view: View;
-  private turn: Turn = { phase: "idle" };
+  private turn: Turn = { phase: "idle", attempt: 0 };
+  private halt = new AbortController();
   private session: Session;
   private usage: State["usage"] = null;
   private epochUsage: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
@@ -40,7 +36,7 @@ export class Chat {
   constructor(private readonly log: Log, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
     this.approvals = new Approvals(log, emit);
     this.options = { pick: PICK, cwd: process.cwd(), ...options, append: (options.append ?? PROMPT) + (config.rulesText ? "\n\n" + config.rulesText : ""), memory, ask: (tool, input, signal) => {
-      if (this.closed || this.turn.phase === "failed" || this.turn.phase === "stopping") return Promise.resolve(false);
+      if (!canAsk(this.turn)) return Promise.resolve(false);
       return this.approvals.ask(tool, input, signal);
     } };
     if (log.pick) this.options.pick = log.pick;
@@ -73,7 +69,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" || this.turn.phase === "checking", wait: this.turn.phase === "summaries" ? "summaries" : this.turn.phase === "checking" ? "goal" : this.turn.phase === "stopping" ? "Stopping" : "", goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, epoch: this.epochUsage };
+    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, epoch: this.epochUsage };
   }
 
   // Answers an act id the hub could not parse or accept, so a retry with that id gets the same refusal.
@@ -92,42 +88,27 @@ export class Chat {
         images = act.images.map((name) => readImage(this.dir, name));
       } catch (error) { imageError = error instanceof Error ? error.message : "The image could not be read."; }
     }
-    const refusal = imageError ?? (this.closed ? "The chat is closed" : this.turn.phase === "failed" ? this.turn.reason : this.turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined);
-    const id = this.turn.phase === "running" || this.turn.phase === "stopping" || this.turn.phase === "summaries" ? this.turn.id : this.log.count;
-    if (act.act === "answer") return this.approvals.answer(act, id, refusal);
-    const result = this.log.apply(act, id, refusal ?? (act.act === "stop" && act.agent !== null && !this.agents.has(act.agent) ? "No agent " + act.agent + "." : undefined));
+    const reason = imageError ?? refusal(this.turn, act);
+    const id = turnId(this.turn, this.log.count);
+    if (act.act === "answer") return this.approvals.answer(act, id, reason);
+    const result = this.log.apply(act, id, reason ?? (act.act === "stop" && act.agent !== null && !this.agents.has(act.agent) ? "No agent " + act.agent + "." : undefined));
     if (!result.fresh || !result.answer.ok) return result.answer;
     if (act.act === "stop") {
       this.agents.stop(act.agent);
       if (act.agent !== null) return result.answer;
     }
-    if ((act.act === "say" || act.act === "goal" || act.act === "stop") && this.turn.phase === "checking") {
-      this.turn.halt.abort();
-      this.turn = { phase: "idle" };
-    }
+    this.run({ kind: "prepare", act: act.act });
     try {
       this.view.sync();
       if (result.entry) this.record(result.entry);
     } catch (error) {
-      if (act.act === "say" && this.turn.phase === "idle") this.turn = { phase: "running", id };
-      this.fail(error);
+      this.run({ kind: "actFailed", say: act.act === "say", id, error });
       return result.answer;
     }
     if (act.act === "say") {
-      try { this.start({ text: act.text, from: "user", images }, id); } catch (error) { this.fail(error); }
-    } else if (act.act === "stop" && this.turn.phase === "summaries") {
-      this.turn.halt.abort();
-      try {
-        this.log.finish(id);
-        this.turn = { phase: "idle" };
-        this.afterTurn();
-        this.change();
-      } catch (error) { this.fail(error); }
-    } else if (act.act === "stop" && this.turn.phase === "running") {
-      this.turn = { phase: "stopping", id };
-      this.approvals.cancel();
-      this.change();
-      void this.stop(this.session, id);
+      try { this.run({ kind: "start", input: { text: act.text, from: "user", images }, id }); } catch (error) { this.fail(error); }
+    } else if (act.act === "stop") {
+      this.run({ kind: "stop", id });
     } else if (act.act === "pick") {
       this.options = { ...this.options, pick: act.pick };
       this.change();
@@ -138,8 +119,8 @@ export class Chat {
       }).catch((error) => {
         if (session === this.session && !this.closed && this.turn.phase !== "failed") this.fail(error);
       });
-    } else if (act.act === "goal" || act.act === "stop") {
-      this.change();
+    } else if (act.act === "goal") {
+      this.run({ kind: "state" });
     }
     return result.answer;
   }
@@ -153,14 +134,7 @@ export class Chat {
   }
 
   close(): Promise<void> {
-    if (this.closed) return this.afterQueue;
-    if (this.turn.phase === "summaries") this.turn.halt.abort();
-    if (this.turn.phase === "checking") this.turn.halt.abort();
-    this.turn = { phase: "closing" };
-    this.agents.close();
-    this.approvals.cancel();
-    this.session.epoch.close();
-    this.afterQueue = this.afterQueue.then(() => { this.turn = { phase: "closed" }; });
+    this.run({ kind: "close" });
     return this.afterQueue;
   }
 
@@ -169,46 +143,19 @@ export class Chat {
     return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options) };
   }
 
-  private start(input: PendingInput, id: number): void {
-    if (this.turn.phase === "summaries") { this.turn.pending.push(input); return; }
-    let batch = false;
-    if (this.turn.phase === "idle") {
-      try { batch = this.view.over(id); } catch (error) { this.turn = { phase: "running", id }; throw error; }
-    }
-    if (batch) {
-      const wait: SummaryWait = { phase: "summaries", id, pending: [input], halt: new AbortController() };
-      this.turn = wait;
-      this.change();
-      void this.rotate(wait);
-      return;
-    }
-    const priority = this.turn.phase === "running" ? "next" : "now";
-    this.turn = { phase: "running", id: this.turn.phase === "running" ? this.turn.id : id };
-    this.change();
-    this.sent = this.session.epoch.send(this.inputText(input.text), priority, input.from, input.images);
-  }
-
-  private async rotate(wait: SummaryWait): Promise<void> {
+  private async rotate(id: number, attempt: number, signal: AbortSignal): Promise<void> {
     try {
-      await this.view.batch(wait.id, wait.halt.signal);
-      if (this.turn !== wait) return;
-      const previous = this.session;
-      previous.epoch.close();
-      this.session = this.open(wait.id);
-      void this.read(this.session);
-      this.emit(this.viewEvent());
-      this.turn = { phase: "running", id: wait.id };
-      for (const [i, input] of wait.pending.entries()) this.sent = this.session.epoch.send(this.inputText(input.text), i === 0 ? "now" : "next", input.from, input.images);
-      this.change();
+      await this.view.batch(id, signal);
+      this.run({ kind: "batched", attempt });
     } catch (error) {
-      if (!wait.halt.signal.aborted) this.fail(error);
+      if (!signal.aborted) this.fail(error);
     }
   }
 
-  private get closed() { return this.turn.phase === "closing" || this.turn.phase === "closed"; }
+  private get closed() { return closed(this.turn); }
 
   private canDelegate(): void {
-    if (this.closed || this.turn.phase === "stopping" || this.turn.phase === "failed") throw new Error("The chat cannot start agent work now");
+    if (!canDelegate(this.turn)) throw new Error("The chat cannot start agent work now");
   }
 
   private inputText(text: string): string {
@@ -226,15 +173,8 @@ export class Chat {
   }
 
   private report(text: string, stopped: boolean): void {
-    if (this.closed) return;
-    try {
-      if (!stopped && this.turn.phase === "checking") { this.turn.halt.abort(); this.turn = { phase: "idle" }; }
-      const deliver = !stopped && (this.turn.phase === "idle" || this.turn.phase === "running" || this.turn.phase === "summaries");
-      const id = this.turn.phase === "running" || this.turn.phase === "summaries" ? this.turn.id : this.log.count;
-      const entry = this.log.work(text, deliver ? id : null);
-      this.record(entry);
-      if (deliver) this.start({ text, from: "membr" }, id);
-    } catch (error) { this.fail(error); }
+    try { this.run({ kind: "report", text, stopped }); }
+    catch (error) { this.fail(error); }
   }
 
   private record(entry: Entry): void {
@@ -252,27 +192,7 @@ export class Chat {
         if (kind === "unii") this.streaming = "";
         this.record(this.log.append(kind, text));
       },
-      end: (event) => {
-        this.usage = event.usage;
-        this.epochUsage = {
-          input: this.epochUsage.input + event.usage.input, cacheRead: this.epochUsage.cacheRead + event.usage.cacheRead,
-          cacheWrite: this.epochUsage.cacheWrite + event.usage.cacheWrite, output: this.epochUsage.output + event.usage.output,
-        };
-        if (this.turn.phase === "running" && event.through >= this.sent) {
-          const entry = this.log.finish(this.turn.id, event.error === null ? undefined : `The turn failed: ${event.error}`);
-          const goal = event.error === null ? this.log.goal : { revision: 0, value: null };
-          let check: GoalCheck | null = null;
-          if (goal.value === null) this.turn = { phase: "idle" };
-          else {
-            check = { phase: "checking", revision: goal.revision, goal: goal.value, halt: new AbortController() };
-            this.turn = check;
-          }
-          this.afterTurn();
-          if (entry) this.record(entry);
-          if (check) void this.check(check);
-        }
-        this.change();
-      },
+      end: (event) => this.run({ kind: "ended", done: event.through >= this.sent, error: event.error, usage: event.usage }),
       expectsEvents: () => this.turn.phase !== "stopping" && this.turn.phase !== "failed",
       fail: (error) => this.fail(error),
     });
@@ -281,68 +201,89 @@ export class Chat {
   private async stop(session: Session, turn: number): Promise<void> {
     try {
       await session.epoch.interrupt();
-      if (this.turn.phase !== "stopping" || this.turn.id !== turn || session !== this.session) return;
-      this.log.finish(turn);
-      this.turn = { phase: "idle" };
-      this.afterTurn();
-      this.change();
+      if (session !== this.session) return;
+      this.run({ kind: "interrupted", id: turn });
     } catch (error) {
       if (!this.closed) this.fail(error);
     }
   }
 
-  private async check(check: GoalCheck): Promise<void> {
+  private async check(goal: string, attempt: number, signal: AbortSignal): Promise<void> {
     let met: boolean;
     try {
-      met = await this.engine.checkGoal(check.goal, this.view.goalContext(), check.halt.signal);
+      met = await this.engine.checkGoal(goal, this.view.goalContext(), signal);
     } catch (error) {
-      if (this.turn !== check || check.halt.signal.aborted) return;
-      try {
-        const reason = error instanceof Error ? error.message : "The goal check failed";
-        this.record(this.log.append("note", `No goal check: ${reason.replace(/\.$/, "")}. The goal stays; /halt drops it.`));
-        this.turn = { phase: "idle" };
-        this.change();
-      } catch (failure) { this.fail(failure); }
+      if (signal.aborted) return;
+      try { this.run({ kind: "checkFailed", attempt, error }); }
+      catch (failure) { this.fail(failure); }
       return;
     }
-    if (this.turn !== check || check.halt.signal.aborted || this.log.goal.revision !== check.revision) return;
-    try {
-      if (met) {
-        const entry = this.log.completeGoal(check.revision);
-        if (entry) this.record(entry);
-        this.turn = { phase: "idle" };
-        this.change();
-      } else {
-        const entry = this.log.continueGoal(GOAL_NO);
-        this.turn = { phase: "running", id: entry.i };
-        this.record(entry);
-        this.turn = { phase: "idle" };
-        this.start({ text: GOAL_NO, from: "membr" }, entry.i);
-      }
-    } catch (error) { this.fail(error); }
+    if (signal.aborted) return;
+    try { this.run({ kind: "checked", attempt, met }); }
+    catch (error) { this.fail(error); }
   }
 
-  private fail(error: unknown): void {
-    if (this.closed || this.turn.phase === "failed") return;
-    const reason = error instanceof Error ? error.message : "The Engine failed";
-    const turn = this.turn;
-    if (turn.phase === "summaries") turn.halt.abort();
-    if (turn.phase === "checking") turn.halt.abort();
-    this.turn = { phase: "failed", reason };
-    this.agents.close();
-    this.approvals.cancel();
-    this.session.epoch.close();
-    try {
-      if (turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries") {
-        const entry = this.log.finish(turn.id, `The turn failed: ${reason}`);
-        this.afterTurn();
+  private fail(error: unknown): void { this.run({ kind: "fail", error }); }
+
+  private run(input: Input): void {
+    const result = next(this.turn, input, { count: this.log.count, goal: this.log.goal, over: (id) => this.view.over(id) });
+    if (result.turn.attempt !== this.turn.attempt) this.halt = new AbortController();
+    this.turn = result.turn;
+    const halt = this.halt;
+    for (const effect of result.effects) this.effect(effect, halt);
+  }
+
+  private effect(effect: Effect, halt: AbortController): void {
+    switch (effect.kind) {
+      case "halt": halt.abort(); break;
+      case "dispatch": this.run(effect.input); break;
+      case "finish":
+        try {
+          const entry = this.log.finish(effect.id, effect.reason);
+          this.run({ kind: "finished", source: effect.source, entry, error: effect.reason !== undefined });
+        } catch (error) {
+          if (effect.source === "stopped") this.fail(error);
+          else if (effect.source === "failed") this.emit({ type: "error", id: null, reason: error instanceof Error ? error.message : "The log write failed" });
+          else throw error;
+        }
+        break;
+      case "send": this.sent = this.session.epoch.send(this.inputText(effect.input.text), effect.priority, effect.input.from, effect.input.images); break;
+      case "batch": void this.rotate(effect.id, effect.attempt, halt.signal); break;
+      case "openEpoch":
+        this.session = this.open(effect.id);
+        void this.read(this.session);
+        this.emit(this.viewEvent());
+        break;
+      case "checkGoal": void this.check(effect.goal, effect.attempt, halt.signal); break;
+      case "afterHook": this.afterTurn(); break;
+      case "cancelApprovals": this.approvals.cancel(); break;
+      case "closeAgents": this.agents.close(); break;
+      case "closeEpoch": this.session.epoch.close(); break;
+      case "interrupt": void this.stop(this.session, effect.id); break;
+      case "state": this.change(); break;
+      case "error": this.emit({ type: "error", id: null, reason: effect.reason }); break;
+      case "fail": throw effect.error;
+      case "usage":
+        this.usage = effect.usage;
+        this.epochUsage = {
+          input: this.epochUsage.input + effect.usage.input, cacheRead: this.epochUsage.cacheRead + effect.usage.cacheRead,
+          cacheWrite: this.epochUsage.cacheWrite + effect.usage.cacheWrite, output: this.epochUsage.output + effect.usage.output,
+        };
+        break;
+      case "record": this.record(effect.entry); break;
+      case "note": this.record(this.log.append("note", effect.text)); break;
+      case "completeGoal": {
+        const entry = this.log.completeGoal(effect.revision);
         if (entry) this.record(entry);
+        break;
       }
-    } catch (failure) {
-      this.emit({ type: "error", id: null, reason: failure instanceof Error ? failure.message : "The log write failed" });
+      case "continueGoal": this.run({ kind: "continued", entry: this.log.continueGoal(effect.text) }); break;
+      case "work":
+        this.record(this.log.work(effect.text, effect.id));
+        if (effect.id !== null) this.run({ kind: "start", input: { text: effect.text, from: "membr" }, id: effect.id });
+        break;
+      case "closedAfterHook": this.afterQueue = this.afterQueue.then(() => this.run({ kind: "closed" })); break;
     }
-    this.emit({ type: "error", id: null, reason });
-    this.change();
   }
 
   private afterTurn(): void {
