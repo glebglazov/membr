@@ -23,7 +23,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
         if (spawn && tell) {
           for (const name of ["mcp__memory__spawn", "mcp__memory__tell"]) permissions.push(await options.canUseTool(name, {}, { signal: new AbortController().signal }));
         }
-        if (spawn && tell) answers.push(await spawn.handler({ tasks: ["Task"], effort: "high" }), await tell.handler({ name: "Agent1", message: "More" }));
+        if (spawn && tell) answers.push(await spawn.handler({ tasks: [{ name: "reader", task: "Task" }], effort: "high" }), await tell.handler({ name: "reader", message: "More" }));
         for await (const message of prompt) {
           call.messages.push(message);
           yield { type: "result", subtype: "success", is_error: false, result: "done", user_message_uuid: message.uuid, usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } };
@@ -35,7 +35,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 }));
 const { claude } = await import("../src/engine.ts");
 const options = { cwd: process.cwd(), append: "rules", pick: { model: "sonnet", effort: "low" as const, fast: false }, memory: { zoom: () => ({ text: "chat", error: false, images: [] }), date: () => "date" } };
-const main = claude.open("view", { ...options, ask: async (tool) => { requests.push(tool); return tool === "mcp__memory__tell"; }, agents: { spawn(tasks, effort) { delegated.push({ tasks, effort }); return "Started Agent1."; }, tell(name, message) { delegated.push({ name, message }); return "Sent."; } } });
+const main = claude.open("view", { ...options, ask: async (tool) => { requests.push(tool); return tool === "mcp__memory__tell"; }, agents: { spawn(tasks, effort) { delegated.push({ tasks, effort }); return "Started reader."; }, tell(name, message) { delegated.push({ name, message }); return "Sent."; } } });
 main.send("Work", "now", "user");
 for await (const event of main.events) if (event.kind === "end") break;
 main.close();

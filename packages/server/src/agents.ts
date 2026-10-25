@@ -3,14 +3,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, type Entry, type Event } from "@membr/protocol";
-import { EFFORTS, type Ask, type Effort, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
+import { type Ask, type Effort, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { identity } from "./log.ts";
 import { appendFile, truncateFile } from "./durable.ts";
 import { pump } from "./pump.ts";
 
-export type AgentTools = { spawn(tasks: string[], effort?: Effort): string; tell(name: string, message: string): string };
-type Run = { phase: "running" | "stopping"; sent: number; replies: string[]; halt: AbortController };
-type Agent = { name: string; entries: Entry[]; effort?: Effort; session: Epoch | null; state: Run | { phase: "idle" | "closed" }; live: string; failure?: unknown };
+export type Task = { name: string; task: string };
+export type AgentTools = { spawn(tasks: Task[], effort?: Effort): string; tell(name: string, message: string): string };
+// A subagent does one task. Its session lives only as long as this run: new work goes to a new subagent.
+type Run = { phase: "running" | "stopping"; session: Epoch; sent: number; replies: string[]; halt: AbortController };
+type Agent = { name: string; entries: Entry[]; state: Run | { phase: "finished" }; live: string; failure?: unknown };
 const SUB_HEAD = `You are a subagent of membr, an AI agent that works for one user in a
 single chat that never ends. membr gave you a task. Do it yourself, with
 your tools, following the user's instructions in this prompt.
@@ -21,13 +23,14 @@ says, not what the user's last message says. membr may have given you only
 part of the work. Your final reply is your report to membr. membr may send
 you more messages while you work. Answer the last message.`;
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-function effort(value: string): value is Effort { return (EFFORTS as readonly string[]).includes(value); }
+const RESTARTED = "Stopped: the server restarted.";
 
 export class Agents implements AgentTools {
   private readonly registry = new Map<string, Agent>();
   private readonly dir: string;
   private readonly machine: string;
   private closed = false;
+  private readonly restarted: Agent[] = [];
 
   constructor(dir: string, private readonly engine: Engine, private readonly options: () => EpochOptions, private readonly view: () => string, private readonly ask: Ask, private readonly emit: (event: Event) => void, private readonly change: () => void, private readonly report: (text: string, stopped: boolean) => void) {
     this.dir = path.join(dir, "docs", "agent");
@@ -45,8 +48,21 @@ export class Agents implements AgentTools {
         return entry;
       });
       if (end < data.length) truncateFile(full, Buffer.byteLength(data.slice(0, end)));
-      const saved = entries[0]?.text.replace(/^subagent at effort /, "");
-      this.registry.set(name, { name, entries, ...(saved && effort(saved) ? { effort: saved } : {}), session: null, state: { phase: "idle" }, live: "" });
+      const agent: Agent = { name, entries, state: { phase: "finished" }, live: "" };
+      this.registry.set(name, agent);
+      // finish ends every run with a note. Logs written before it did end on the agent's reply,
+      // so only a task or a tool step at the end marks a subagent the server stopped mid-run.
+      const last = entries.at(-1)?.kind;
+      if (last === "user" || last === "tool" || last === "echo") this.restarted.push(agent);
+    }
+  }
+
+  // Records in the main chat each subagent the restart stopped, once: its stop note makes the next start
+  // see it as finished. Like a turn the restart cut off, it starts no new turn.
+  reportRestarted(): void {
+    for (const agent of this.restarted.splice(0)) {
+      this.append(agent, "note", RESTARTED);
+      this.report(`[${agent.name}] report\n${RESTARTED}\nFull chat: zoom("${agent.name}")`, true);
     }
   }
 
@@ -58,19 +74,17 @@ export class Agents implements AgentTools {
     return agent ? { entries: agent.entries.slice(), live: agent.live } : null;
   }
 
-  spawn(tasks: string[], effort?: Effort): string {
+  spawn(tasks: Task[], effort?: Effort): string {
     if (this.closed) throw new Error("The chat is closed");
     if (!tasks.length) return "No tasks.";
-    const names = tasks.map((task) => {
-      let i = 1;
-      while (this.registry.has(`Agent${i}`)) i++;
-      const name = `Agent${i}`;
-      const agent: Agent = { name, entries: [], effort, session: null, state: { phase: "idle" }, live: "" };
+    const names = tasks.map(({ name: wanted, task }) => {
+      const name = this.freeName(wanted);
+      const agent: Agent = { name, entries: [], state: { phase: "finished" }, live: "" };
       const fd = fs.openSync(path.join(this.dir, name + ".jsonl"), "wx", 0o600);
       fs.closeSync(fd);
       this.registry.set(name, agent);
       this.append(agent, "note", "subagent" + (effort ? " at effort " + effort : ""));
-      this.send(agent, task);
+      this.start(agent, task, effort);
       return name;
     });
     return "Started " + names.join(", ") + ". Each one's report will reach you as a message when it finishes.";
@@ -81,9 +95,9 @@ export class Agents implements AgentTools {
     const agent = this.registry.get(name);
     if (!agent) return "No agent " + name + " to tell.";
     if (agent.state.phase === "stopping") return name + " is stopping.";
-    const running = agent.state.phase === "running";
-    this.send(agent, message);
-    return running ? "Sent. " + name + " reads it between its tool calls, and its report answers it." : "Sent. " + name + "'s reply will reach you as a message.";
+    if (agent.state.phase === "finished") return name + " has finished. Spawn a new agent with the context it needs.";
+    this.send(agent, agent.state, message, "next");
+    return "Sent. " + name + " reads it between its tool calls, and its report answers it.";
   }
 
   stop(name: string | null): void {
@@ -92,9 +106,9 @@ export class Agents implements AgentTools {
       const run = agent.state;
       run.phase = "stopping";
       run.halt.abort();
-      void agent.session?.interrupt().then(() => {
+      void run.session.interrupt().then(() => {
         if (agent.state === run) this.finish(agent, run, "Stopped.");
-      }).catch((error) => { if (agent.state === run) this.failed(agent, error); });
+      }).catch((error) => this.failed(agent, run, error));
     }
     this.change();
   }
@@ -102,36 +116,47 @@ export class Agents implements AgentTools {
   close(): void {
     this.closed = true;
     for (const agent of this.registry.values()) {
-      if (agent.state.phase === "running" || agent.state.phase === "stopping") agent.state.halt.abort();
-      agent.state = { phase: "closed" };
-      agent.session?.close();
+      if (agent.state.phase === "finished") continue;
+      agent.state.halt.abort();
+      agent.state.session.close();
+      agent.state = { phase: "finished" };
     }
   }
 
-  private send(agent: Agent, text: string): void {
-    if (agent.failure) throw agent.failure;
-    const history = agent.entries.map((entry) => `${entry.i}|${entry.kind}: ${entry.text}`).join("\n\n");
-    this.append(agent, "user", text);
-    const running = agent.state.phase === "running";
-    const run: Run = agent.state.phase === "running" ? agent.state : { phase: "running", sent: 0, replies: [], halt: new AbortController() };
-    agent.state = run;
-    try {
-      if (!agent.session) {
-        const { agents: _, ...options } = this.options();
-        agent.session = this.engine.open(this.view() + `\n\nYou are subagent ${agent.name}.\n` + history, { ...options, append: options.append + "\n\n" + SUB_HEAD, pick: { ...options.pick, effort: agent.effort ?? options.pick.effort }, ask: (tool, input, signal) => {
-          if (agent.state.phase !== "running") return Promise.resolve(false);
-          return this.ask(tool, input, signal ? AbortSignal.any([signal, agent.state.halt.signal]) : agent.state.halt.signal);
-        } });
-        void this.listen(agent, agent.session);
-      }
-      run.sent = agent.session.send(text, running ? "next" : "now", "membr");
-      this.change();
-    } catch (error) { this.failed(agent, error); }
+  // Lowercases the name the model gave into a file-safe slug, and adds -2, -3, … when an earlier agent has it.
+  // Taken names compare without case, because older logs such as Agent1.jsonl share a case-blind file system.
+  private freeName(wanted: string): string {
+    const base = wanted.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[^a-z]+/, "").replace(/-+$/, "").slice(0, 56) || "agent";
+    const taken = new Set([...this.registry.keys()].map((name) => name.toLowerCase()));
+    let name = base;
+    for (let i = 2; taken.has(name); i++) name = `${base}-${i}`;
+    return name;
   }
 
-  private listen(agent: Agent, session: Epoch): Promise<void> {
-    return pump(session, "agent", {
-      guard: () => this.closed || agent.session !== session ? "stop" : agent.state.phase === "running" || agent.state.phase === "stopping" ? "take" : "skip",
+  private start(agent: Agent, task: string, effort: Effort | undefined): void {
+    const halt = new AbortController();
+    const { agents: _, ...options } = this.options();
+    const session = this.engine.open(this.view() + `\n\nYou are subagent ${agent.name}.`, { ...options, append: options.append + "\n\n" + SUB_HEAD, pick: { ...options.pick, effort: effort ?? options.pick.effort }, ask: (tool, input, signal) => {
+      if (agent.state.phase !== "running") return Promise.resolve(false);
+      return this.ask(tool, input, signal ? AbortSignal.any([signal, halt.signal]) : halt.signal);
+    } });
+    const run: Run = { phase: "running", session, sent: 0, replies: [], halt };
+    agent.state = run;
+    void this.listen(agent, run);
+    this.send(agent, run, task, "now");
+  }
+
+  private send(agent: Agent, run: Run, text: string, priority: "now" | "next"): void {
+    try {
+      this.append(agent, "user", text);
+      run.sent = run.session.send(text, priority, "membr");
+      this.change();
+    } catch (error) { this.failed(agent, run, error); }
+  }
+
+  private listen(agent: Agent, run: Run): Promise<void> {
+    return pump(run.session, "agent", {
+      guard: () => this.closed || agent.state !== run ? "stop" : "take",
       session: () => {},
       live: (text) => { agent.live += text; this.emit({ type: "live", agent: agent.name, text }); },
       entry: (kind, text) => {
@@ -139,34 +164,37 @@ export class Agents implements AgentTools {
         if (kind === "unii") agent.live = "";
       },
       end: (event) => {
-        const run = agent.state;
-        if (run.phase !== "running" && run.phase !== "stopping") return;
         run.replies.push(event.error === null ? event.reply : "failed: " + event.error);
         if (run.phase === "running" && event.through >= run.sent) this.finish(agent, run);
       },
       expectsEvents: () => true,
-      fail: (error) => this.failed(agent, error),
+      fail: (error) => this.failed(agent, run, error),
     });
   }
 
   private finish(agent: Agent, run: Run, note?: string): void {
-    if (note) { this.append(agent, "note", note); run.replies.push(note); }
-    const stopped = run.phase === "stopping";
-    run.halt.abort();
-    agent.state = { phase: "idle" };
-    agent.live = "";
-    this.change();
-    this.report(`[${agent.name}] report\n${run.replies.filter(Boolean).join("\n\n")}\nFull chat: zoom("${agent.name}")`, stopped);
+    this.append(agent, "note", note ?? "Finished.");
+    if (note) run.replies.push(note);
+    this.end(agent, run);
+    this.report(`[${agent.name}] report\n${run.replies.filter(Boolean).join("\n\n")}\nFull chat: zoom("${agent.name}")`, run.phase === "stopping");
   }
 
-  private failed(agent: Agent, error: unknown): void {
-    const run = agent.state;
-    agent.session?.close();
-    agent.session = null;
-    if (run.phase === "running" || run.phase === "stopping") {
-      try { this.finish(agent, run, "failed: " + (error instanceof Error ? error.message : String(error))); }
-      catch (failure) { agent.failure = failure; run.halt.abort(); agent.state = { phase: "idle" }; this.emit({ type: "error", id: null, reason: String(failure) }); this.change(); }
+  private failed(agent: Agent, run: Run, error: unknown): void {
+    if (agent.state !== run) return;
+    try { this.finish(agent, run, "failed: " + (error instanceof Error ? error.message : String(error))); }
+    catch (failure) {
+      agent.failure = failure;
+      this.end(agent, run);
+      this.emit({ type: "error", id: null, reason: String(failure) });
     }
+  }
+
+  private end(agent: Agent, run: Run): void {
+    run.halt.abort();
+    run.session.close();
+    agent.state = { phase: "finished" };
+    agent.live = "";
+    this.change();
   }
 
   private append(agent: Agent, kind: Entry["kind"], text: string): void {

@@ -54,6 +54,7 @@ export class Chat {
     this.knownImports = log.count;
     this.session = this.open();
     void this.read(this.session);
+    this.agents.reportRestarted();
   }
 
   get live() { return this.streaming; }

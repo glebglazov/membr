@@ -83,8 +83,8 @@ test("main MCP registers spawn and tell while child input stays synthetic", asyn
   expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
   const wire = JSON.parse(stdout);
   expect(wire.calls[0].tools.slice(2)).toEqual([
-    { name: "spawn", description: "Start one subagent per task, in parallel, and return their names at once. Each one's report reaches you as a message \"[Name] report\" when it finishes. A subagent sees the view and the user's instructions, but knows what you want only from its task." },
-    { name: "tell", description: "Send a message to an agent (a subagent or a computer task), by name. One at work reads it between its tool calls, and its report answers it; an idle one goes on from its chat, and its reply reaches you as a message \"[Name] reply\"." },
+    { name: "spawn", description: "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task." },
+    { name: "tell", description: "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it." },
   ]);
   expect(wire.calls[0].allowed ?? []).toEqual([]);
   expect(wire.requests).toEqual(["mcp__memory__spawn", "mcp__memory__tell"]);
@@ -93,8 +93,8 @@ test("main MCP registers spawn and tell while child input stays synthetic", asyn
     { behavior: "allow", updatedInput: {} },
   ]);
   expect(wire.calls[1].tools.map((tool: { name: string }) => tool.name)).toEqual(["zoom", "date"]);
-  expect(wire.delegated).toEqual([{ tasks: ["Task"], effort: "high" }, { name: "Agent1", message: "More" }]);
-  expect(wire.answers).toEqual([{ content: [{ type: "text", text: "Started Agent1." }] }, { content: [{ type: "text", text: "Sent." }] }]);
+  expect(wire.delegated).toEqual([{ tasks: [{ name: "reader", task: "Task" }], effort: "high" }, { name: "reader", message: "More" }]);
+  expect(wire.answers).toEqual([{ content: [{ type: "text", text: "Started reader." }] }, { content: [{ type: "text", text: "Sent." }] }]);
   expect(wire.calls[1].messages.map((message: { isSynthetic: boolean; message: { content: string } }) => [message.isSynthetic, message.message.content])).toEqual([
     [true, "[membr]\nview and saved agent chat"], [true, "[membr]\nAgent task"], [true, "[membr]\nAgent correction"],
   ]);
