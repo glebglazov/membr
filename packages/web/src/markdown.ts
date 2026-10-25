@@ -2,6 +2,7 @@ import { h } from "preact";
 import { useEffect, useMemo, useRef } from "preact/hooks";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
+import { diagramZoom } from "./diagram-zoom.ts";
 
 const marked = new Marked({ gfm: true, breaks: true, async: false });
 
@@ -22,7 +23,7 @@ const MERMAID_URL = "/mermaid.js";
 let mermaid: Promise<Mermaid> | undefined;
 let rendered = 0;
 const dark = matchMedia("(prefers-color-scheme: dark)");
-const diagrams = new Set<HTMLElement>();
+const diagrams = new Map<HTMLElement, () => void>();
 
 function themed(api: Mermaid): Mermaid {
   const css = getComputedStyle(document.documentElement);
@@ -41,9 +42,16 @@ async function draw(figure: HTMLElement): Promise<void> {
   try {
     const api = await (mermaid ??= (import(MERMAID_URL) as Promise<{ default: Mermaid }>).then((module) => themed(module.default)));
     const { svg } = await api.render(`mermaid-${++rendered}`, source);
+    if (!diagrams.has(figure)) return;
+    diagrams.get(figure)?.();
     canvas.innerHTML = svg;
+    const drawing = canvas.querySelector("svg");
+    if (drawing) diagrams.set(figure, diagramZoom(canvas, drawing, figure.querySelector<HTMLElement>(".diagram-bar")!));
     figure.classList.remove("failed");
   } catch (error) {
+    if (!diagrams.has(figure)) return;
+    diagrams.get(figure)?.();
+    diagrams.set(figure, () => {});
     canvas.textContent = "This diagram did not render: " + (error instanceof Error ? error.message : String(error));
     figure.classList.add("failed", "source");
   }
@@ -51,11 +59,12 @@ async function draw(figure: HTMLElement): Promise<void> {
 
 dark.addEventListener("change", () => {
   if (!mermaid) return;
-  void mermaid.then((api) => { themed(api); for (const figure of diagrams) void draw(figure); });
+  void mermaid.then((api) => { themed(api); for (const figure of diagrams.keys()) void draw(figure); });
 });
 
 // Wraps each ```mermaid block in a figure that shows the diagram, with a button to see its source.
-function upgrade(root: HTMLElement): void {
+function upgrade(root: HTMLElement): () => void {
+  const figures: HTMLElement[] = [];
   for (const code of root.querySelectorAll<HTMLElement>("pre > code.language-mermaid")) {
     const pre = code.parentElement!;
     const figure = document.createElement("figure");
@@ -72,9 +81,11 @@ function upgrade(root: HTMLElement): void {
     canvas.className = "diagram-canvas";
     pre.replaceWith(figure);
     figure.append(bar, canvas, pre);
-    diagrams.add(figure);
+    diagrams.set(figure, () => {});
+    figures.push(figure);
     void draw(figure);
   }
+  return () => { for (const figure of figures) { diagrams.get(figure)?.(); diagrams.delete(figure); } };
 }
 
 // Renders a message as Markdown. A streaming message passes diagrams = false, because its last
@@ -85,8 +96,7 @@ export function Markdown({ text, diagrams: draws = true }: { text: string; diagr
   useEffect(() => {
     const node = root.current;
     if (!draws || !node) return;
-    upgrade(node);
-    return () => { for (const figure of node.querySelectorAll<HTMLElement>("figure.diagram")) diagrams.delete(figure); };
+    return upgrade(node);
   }, [body, draws]);
   return h("div", { class: "text markdown", ref: root, dangerouslySetInnerHTML: { __html: body } });
 }

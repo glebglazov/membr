@@ -14,7 +14,7 @@ async function withChat(options: {
   try {
     const hub = serveHub({ dir, port: 0, engine: options.engine });
     try {
-      const context = await options.browser.newContext({ viewport: { width: 1200, height: 900 } });
+      const context = await options.browser.newContext({ viewport: { width: 1200, height: 900 }, hasTouch: true });
       try {
         const errors: string[] = [];
         context.on("page", (page) => page.on("pageerror", (error) => errors.push(error.message)));
@@ -151,6 +151,81 @@ async function markdownReply(browser: Browser): Promise<void> {
   } });
 }
 
+async function diagramZoom(browser: Browser): Promise<void> {
+  const engine = new FakeEngine((epoch) => epoch.emit({ kind: "text", text: "```mermaid\nflowchart LR\n  A[Browser] --> B[Hub]\n```\n\n" + "More details below the diagram.\n\n".repeat(30) }, END));
+  await withChat({ browser, engine, check: async (context, url) => {
+    const page = await openChat(context, url);
+    await send(page, "Draw a diagram.");
+    const diagram = page.locator("figure.diagram");
+    const svg = diagram.locator("svg");
+    await expect(svg).toBeVisible();
+    const original = await svg.getAttribute("viewBox");
+    const node = svg.locator("g.node").first();
+    const initialWidth = (await node.boundingBox())!.width;
+    await svg.hover();
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -250);
+    await page.keyboard.up("Control");
+    await expect(svg, "A trackpad pinch zooms the diagram.").not.toHaveAttribute("viewBox", original!);
+    expect((await node.boundingBox())!.width).toBeGreaterThan(initialWidth);
+    const zoomed = await svg.getAttribute("viewBox");
+    const desktopBox = (await svg.boundingBox())!;
+    await page.mouse.move(desktopBox.x + desktopBox.width / 2, desktopBox.y + desktopBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(desktopBox.x + desktopBox.width / 2 + 30, desktopBox.y + desktopBox.height / 2);
+    await page.mouse.up();
+    await expect(svg, "Mouse drag moves a zoomed diagram.").not.toHaveAttribute("viewBox", zoomed!);
+    await diagram.getByRole("button", { name: "Reset diagram zoom", exact: true }).click();
+    await expect(svg).toHaveAttribute("viewBox", original!);
+    await svg.hover();
+    const beforeWheel = await page.evaluate(() => scrollY);
+    await page.mouse.wheel(0, 120);
+    await expect.poll(() => page.evaluate(() => scrollY), { message: "An ordinary wheel scrolls the page over a diagram." }).toBeGreaterThan(beforeWheel);
+    await expect(svg).toHaveAttribute("viewBox", original!);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await svg.scrollIntoViewIfNeeded();
+    const box = await svg.boundingBox();
+    if (!box) throw new Error("The diagram has no bounds.");
+    const client = await context.newCDPSession(page);
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    const points = (distance: number) => [{ x: x - distance, y, id: 1 }, { x: x + distance, y, id: 2 }];
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: points(25) });
+    for (const distance of [35, 45, 55, 65]) await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: points(distance) });
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(svg, "A two-finger pinch zooms the diagram on a touch screen.").not.toHaveAttribute("viewBox", original!);
+    expect(await page.evaluate(() => visualViewport?.scale)).toBe(1);
+    const pinched = await svg.getAttribute("viewBox");
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: points(25) });
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: points(25).map((point) => ({ ...point, x: point.x + 20 })) });
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(svg, "Two fingers move a zoomed diagram.").not.toHaveAttribute("viewBox", pinched!);
+    await diagram.getByRole("button", { name: "Reset diagram zoom", exact: true }).click();
+    await expect(svg).toHaveAttribute("viewBox", original!);
+    await svg.scrollIntoViewIfNeeded();
+    const touchBox = (await svg.boundingBox())!;
+    const beforeSwipe = await page.evaluate(() => scrollY);
+    const touchX = touchBox.x + touchBox.width / 2, touchY = touchBox.y + touchBox.height / 2;
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: touchX, y: touchY, id: 1 }] });
+    for (const delta of [15, 30, 45, 60]) await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: touchX, y: touchY - delta, id: 1 }] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(() => page.evaluate(() => scrollY), { message: "A one-finger swipe scrolls the page over a diagram." }).toBeGreaterThan(beforeSwipe);
+    await expect(svg).toHaveAttribute("viewBox", original!);
+    for (const colorScheme of ["light", "dark"] as const) {
+      const previous = await svg.getAttribute("id");
+      const changed = await page.evaluate((scheme) => matchMedia(`(prefers-color-scheme: ${scheme})`).matches === false, colorScheme);
+      await page.emulateMedia({ colorScheme });
+      if (changed) await expect(svg).not.toHaveAttribute("id", previous!);
+      await expect(diagram.getByRole("button", { name: "Reset diagram zoom", exact: true })).toHaveCount(1);
+      await diagram.getByRole("button", { name: "Zoom in diagram", exact: true }).click();
+      const enlarged = (await node.boundingBox())!.width;
+      await diagram.getByRole("button", { name: "Zoom out diagram", exact: true }).click();
+      expect((await node.boundingBox())!.width).toBeLessThan(enlarged);
+      await expect(svg).toHaveAttribute("viewBox", original!);
+    }
+    await client.detach();
+  } });
+}
+
 async function briefsAndAgents(browser: Browser): Promise<void> {
   const engine = new FakeEngine((epoch, message) => {
     const agents = epoch.options.agents;
@@ -196,9 +271,11 @@ try {
   console.log("PASS Light and dark layouts fit desktop and 390 px widths.");
   await markdownReply(browser);
   console.log("PASS A reply renders Markdown and draws its Mermaid diagram.");
+  await diagramZoom(browser);
+  console.log("PASS Diagram zoom responds to trackpad and touch pinch.");
   await briefsAndAgents(browser);
   console.log("PASS Tool calls, an agent start and its report fold into briefs that open the agent's chat.");
-  console.log("5 browser checks passed.");
+  console.log("6 browser checks passed.");
 } finally {
   await browser?.close();
 }
