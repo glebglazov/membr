@@ -21,6 +21,10 @@ Local connections need no token. For access from another device, use
 sign-in link that the server prints. It sets an HttpOnly cookie and removes
 the token from the address bar. The page follows your OS light or dark setting.
 
+`make run` installs the packages when they changed and serves on the
+machine's Tailscale address. Set `HOST=127.0.0.1` to serve locally only, and
+pass more options in `ARGS`, for example `make run ARGS="--port 9000"`.
+
 It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
 One server at a time can use a data directory. A second server on the same
 directory exits with status 1 and names the process that holds the lock.
