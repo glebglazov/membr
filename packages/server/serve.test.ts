@@ -23,9 +23,9 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function serve(dir: string, command = ["bun", MAIN]) {
-  const proc = Bun.spawn([...command, "serve", "--port", "0"], {
-    env: { ...process.env, MEMBR_DIR: dir, MEMBR_CLAUDE_CLI: path.join(dir, "fake-claude") },
+function serve(dir: string, command = ["bun", MAIN], args: string[] = [], env: Record<string, string> = {}) {
+  const proc = Bun.spawn([...command, "serve", "--port", "0", ...args], {
+    env: { ...process.env, MEMBR_DIR: dir, MEMBR_CLAUDE_CLI: path.join(dir, "fake-claude"), ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -66,6 +66,46 @@ test("serve listens on loopback", async () => {
   const url = await listening(serve(directory()));
   expect(new URL(url).hostname).toBe("127.0.0.1");
   expect((await fetch(url)).ok).toBe(true);
+});
+
+// A fake `tailscale` on PATH: it logs its arguments, and fails `serve` with the message in $FAIL.
+function fakeTailscale(dir: string): Record<string, string> {
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "tailscale"), `#!/bin/sh
+echo "$*" >> "$MEMBR_DIR/tailscale-calls"
+if [ "$1" = serve ] && [ -n "$FAIL" ]; then echo "$FAIL" >&2; exit 1; fi
+if [ "$1" = status ]; then echo '{"Self":{"DNSName":"box.tail0.ts.net."}}'; fi
+`, { mode: 0o755 });
+  return { PATH: bin + path.delimiter + process.env.PATH };
+}
+
+test("serve --tailscale puts the loopback port on the tailnet", async () => {
+  const dir = directory();
+  const proc = serve(dir, undefined, ["--tailscale"], fakeTailscale(dir));
+  let out = "";
+  for await (const chunk of proc.stdout.pipeThrough(new TextDecoderStream())) {
+    out += chunk;
+    if (out.includes("on the tailnet")) break;
+  }
+  const url = new URL(out.match(/serving .* at (\S+)/)![1]);
+  expect(url.hostname).toBe("127.0.0.1");
+  expect(out).toContain(`on the tailnet at https://box.tail0.ts.net:${url.port}/`);
+  expect(fs.readFileSync(path.join(dir, "tailscale-calls"), "utf8")).toContain(`serve --bg --https=${url.port} http://127.0.0.1:${url.port}`);
+});
+
+test("serve --tailscale exits and frees the data directory when tailscale fails", async () => {
+  const dir = directory();
+  const proc = serve(dir, undefined, ["--tailscale"], { ...fakeTailscale(dir), FAIL: "Serve is not enabled on your tailnet." });
+  expect(await proc.exited).toBe(1);
+  expect(await new Response(proc.stderr).text()).toContain("Serve is not enabled on your tailnet.");
+  await listening(serve(dir));
+});
+
+test("serve --tailscale refuses --host", async () => {
+  const proc = serve(directory(), undefined, ["--tailscale", "--host", "0.0.0.0"]);
+  expect(await proc.exited).toBe(2);
+  expect(await new Response(proc.stderr).text()).toContain("takes no --host");
 });
 
 test("a second serve on the same data directory exits and names the holder", async () => {
