@@ -16,6 +16,14 @@ _Avoid_: request, round
 One engine session. It starts from the current view, and a new epoch replaces it after a summary batch.
 _Avoid_: session, conversation
 
+**Harness**:
+The Claude Code settings, skills, plugins and MCP servers that the Engine loads from the server's working directory and the user's settings.
+_Avoid_: config, environment
+
+**Skill**:
+A `/name` command from the harness. The agent runs it when the user's message starts with it. A skill with the name of a membr command is hidden behind that command. Built-in Claude Code commands are not skills, because they act on the session, which is an epoch.
+_Avoid_: slash command, plugin
+
 **Summary wait**:
 The phase of a turn in which membr summarizes old messages before it starts a new epoch.
 

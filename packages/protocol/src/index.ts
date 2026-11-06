@@ -39,6 +39,8 @@ export type Answer = { type: "answer"; id: string } & (
   | { ok: true; entry: number | null }
   | { ok: false; reason: string }
 );
+// a /name command from the harness that the agent runs when a user message starts with it
+export type Skill = { name: string; description: string; argumentHint: string };
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
 export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; agents: string[]; agentNames?: string[]; usage: Usage | null; epoch?: Usage };
 export type Event =
@@ -56,6 +58,7 @@ export type Event =
   | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; live?: string; error?: string }
   | { type: "import-estimate"; id: string; estimate: ImportEstimate }
   | { type: "imports"; imports: ImportStatus[] }
+  | { type: "skills"; skills: Skill[] }
   | { type: "error"; id: string | null; reason: string };
 export type ClientMessage = Hello | Act | Read;
 
@@ -189,6 +192,7 @@ export function parseEvent(value: unknown): Event {
     case "import-estimate": return { type: "import-estimate", id: id(v.id), estimate: importEstimate(v.estimate) };
     case "imports": return { type: "imports", imports: list(v.imports, (item) => { const run = object(item); return { ...importEstimate(run), id: id(run.id), phase: oneOf(run.phase, ["running", "paused", "complete"]) }; }) };
     case "error": return { type: "error", id: nullable(v.id, id), reason: string(v.reason) };
+    case "skills": return { type: "skills", skills: list(v.skills, (item) => { const k = object(item); return { name: id(k.name), description: string(k.description), argumentHint: string(k.argumentHint) }; }) };
     case "state": {
       const s = object(v.state);
       const usage = (value: unknown): Usage => {

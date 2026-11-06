@@ -6,7 +6,7 @@
   "bin": { "membr": "packages/server/src/main.ts" },
   "scripts": {
     "test": "bun test",
-    "test:web": "bun packages/web/test/browser.e2e.ts && bun packages/web/test/diagrams.e2e.ts && bun packages/web/test/scrolling.e2e.ts && bun packages/web/test/history.e2e.ts && bun packages/web/test/import.e2e.ts",
+    "test:web": "bun packages/web/test/browser.e2e.ts && bun packages/web/test/diagrams.e2e.ts && bun packages/web/test/scrolling.e2e.ts && bun packages/web/test/history.e2e.ts && bun packages/web/test/import.e2e.ts && bun packages/web/test/skills.e2e.ts",
     "serve": "bun packages/server/src/main.ts serve",
     "build:web": "rm -rf packages/web/dist && bun build packages/web/src/index.html packages/web/src/mermaid.ts --target browser --minify --outdir packages/web/dist",
     "build": "bun run build:web && bun scripts/build.ts"

@@ -1,7 +1,7 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, State, Usage } from "@membr/protocol";
+import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, Skill, State, Usage } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
@@ -30,6 +30,7 @@ export type Model = {
   error: string | null;
   info: string | null;
   approvals: ReadonlyMap<string, Extract<Event, { type: "ask" }>>;
+  skills: Skill[];
 };
 export type Input =
   | { type: "import-plan"; id: string; input: ImportInput }
@@ -67,7 +68,7 @@ export function createModel(): Model {
     importPlan: null, imports: [],
     agent: null, agents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
-    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(),
+    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [],
     state: { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null },
   };
 }
@@ -95,6 +96,7 @@ function requestRoots(model: Model): Model {
 export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
     case "imports": return { ...model, imports: event.imports };
+    case "skills": return { ...model, skills: event.skills };
     case "import-estimate": {
       if (!model.importPlan || model.importPlan.id !== event.id) return model;
       const reads = new Map(model.reads); reads.delete(event.id);
@@ -259,17 +261,33 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
 
 export const MODELS = ["opus", "sonnet", "haiku"];
 export const EFFORTS: Pick["effort"][] = ["low", "medium", "high", "xhigh", "max"];
-export const HELP = [
-  "/goal <message>  Set a goal and send the message.",
-  "/halt  Clear the goal. The current turn continues.",
-  "/stop [name]  Stop all work, or one named agent.",
-  "/model [name]  Show models, or select one.",
-  "/effort [level]  Show effort levels, or select one.",
-  "/speed [normal|fast]  Show speeds, or select one.",
-  "/fold  Fold or unfold the chat.",
-  "/tree  Open the memory tree.",
-  "/help  Show these commands.",
-].join("\n");
+export type Command = { name: string; hint: string; description: string };
+// membr's own commands. A skill with the same name is hidden behind them.
+export const COMMANDS: Command[] = [
+  { name: "/goal", hint: "<message>", description: "Set a goal and send the message." },
+  { name: "/halt", hint: "", description: "Clear the goal. The current turn continues." },
+  { name: "/stop", hint: "[name]", description: "Stop all work, or one named agent." },
+  { name: "/model", hint: "[name]", description: "Show models, or select one." },
+  { name: "/effort", hint: "[level]", description: "Show effort levels, or select one." },
+  { name: "/speed", hint: "[normal|fast]", description: "Show speeds, or select one." },
+  { name: "/fold", hint: "", description: "Fold or unfold the chat." },
+  { name: "/tree", hint: "", description: "Open the memory tree." },
+  { name: "/help", hint: "", description: "Show these commands." },
+];
+export const HELP = COMMANDS.map((command) => `${command.name}${command.hint ? " " + command.hint : ""}  ${command.description}`).join("\n");
+
+function skill(model: Model, name: string): Skill | undefined {
+  return COMMANDS.some((command) => command.name === name) ? undefined : model.skills.find((skill) => "/" + skill.name === name);
+}
+
+// The commands and skills that the composer can offer for its text: names
+// that start with the typed word first, then names that contain it.
+export function complete(model: Model, text: string): Command[] {
+  if (!/^\/\S*$/.test(text)) return [];
+  const all = [...COMMANDS, ...model.skills.filter((s) => skill(model, "/" + s.name)).map((s) => ({ name: "/" + s.name, hint: s.argumentHint, description: s.description }))];
+  const word = text.toLowerCase();
+  return [...all.filter((c) => c.name.toLowerCase().startsWith(word)), ...all.filter((c) => !c.name.toLowerCase().startsWith(word) && c.name.toLowerCase().includes(word.slice(1)))];
+}
 
 function post(model: Model, messages: Act[]): ReturnType<typeof act> {
   const fresh = messages.filter((message) => !model.pending.has(message.id));
@@ -324,8 +342,8 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
       return argument === "normal" || argument === "fast" ? act(model, { type: "pick", id: input.id, change: { fast: argument === "fast" } }) : fail("Choose a speed: normal, fast.");
     case "/fold": return argument ? fail("Use /fold without an argument.") : act(model, { type: "fold" });
     case "/tree": return argument ? fail("Use /tree without an argument.") : act(model, { type: "page", page: "tree" });
-    case "/help": return argument ? fail("Use /help without an argument.") : info(HELP);
-    default: return fail(`Unknown command ${name}. Use /help.`);
+    case "/help": return argument ? fail("Use /help without an argument.") : info(model.skills.length ? `${HELP}\n\nSkills: ${model.skills.length}. Type / and a name to find one.` : HELP);
+    default: return skill(model, name) ? post(model, [{ type: "act", act: "say", id: input.id, text }]) : fail(`Unknown command ${name}. Use /help.`);
   }
 }
 

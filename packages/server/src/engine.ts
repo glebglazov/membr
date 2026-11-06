@@ -6,11 +6,12 @@
 // and each later message goes in at its end, so every turn reads the same
 // growing prefix from the prompt cache. A compaction is a separate one-turn
 // call on Haiku, with no tools and none of the user's settings.
-import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SlashCommand, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentTools } from "./agents.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
+import type { Skill } from "@membr/protocol";
 
 declare const MEMBR_STANDALONE: boolean | undefined;
 
@@ -54,6 +55,8 @@ export type EngineEvent =
   | { kind: "tool"; id: string; name: string; input: unknown }
   | { kind: "echo"; id: string; text: string; error: boolean }
   | { kind: "compacted" }
+  // the harness's skills, in full: each event replaces the earlier list
+  | { kind: "skills"; skills: Skill[] }
   | { kind: "end"; reply: string; error: string | null; usage: Usage; fast: Fast | null; through: number };
 
 // whether fast mode serves the session, and why not: "preference" means the
@@ -241,11 +244,22 @@ function open(view: string, options: EpochOptions): Epoch {
     if (interruptAccepted && pending.size === 0) stopped?.resolve();
   }
 
+  let listed = false;
   async function* stream(): AsyncGenerator<EngineEvent> {
     try {
       for await (const sdk of session) {
         if (sdk.type === "system" && sdk.subtype === "init") {
           yield { kind: "session", id: sdk.session_id };
+          // init can come again in one session, and the list does not change with it
+          if (!listed) {
+            listed = true;
+            // a skill list that cannot load must not end the chat
+            const commands = await session.supportedCommands().catch(() => null);
+            if (commands) yield { kind: "skills", skills: skills(commands) };
+          }
+        }
+        if (sdk.type === "system" && sdk.subtype === "commands_changed") {
+          yield { kind: "skills", skills: skills(sdk.commands) };
         }
         if (sdk.type === "result") {
           if (viewing) {
@@ -312,6 +326,12 @@ function open(view: string, options: EpochOptions): Epoch {
       session.close();
     },
   };
+}
+
+// Built-in commands such as /compact and /clear act on the Claude Code session,
+// which in membr is an epoch, so running one would cut it from membr's memory.
+function skills(commands: SlashCommand[]): Skill[] {
+  return commands.filter((command) => !command.builtin).map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
 }
 
 function* translate(sdk: SDKMessage, through: number): Generator<EngineEvent> {

@@ -126,6 +126,17 @@ its act id and the entry index. The server writes the entry and answer together
 before it sends either event. A repeat act returns the first answer, including
 after a restart. It never writes a second message for that id.
 
+Before `ready`, the server sends a `skills` event. It lists the skills of the
+server's harness, each with `name`, `description` and `argumentHint`:
+
+```json
+{"type":"skills","skills":[{"name":"review","description":"Review a change","argumentHint":"<file>"}]}
+```
+
+The server sends the event again when the list changes. Each event replaces the
+earlier list. To run a skill, send a `say` act whose text starts with `/name`.
+The server sends that text to the agent as it is, with no notes added.
+
 Reads use their own request ids:
 
 ```json

@@ -1,7 +1,7 @@
 // Prompt and after hook adapted from UniiChat at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import PROMPT from "./prompt.txt" with { type: "text" };
-import { type Act, type Answer, type Entry, type Event, type Pick, type State, type Usage } from "@membr/protocol";
+import { type Act, type Answer, type Entry, type Event, type Pick, type Skill, type State, type Usage } from "@membr/protocol";
 import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
@@ -30,6 +30,7 @@ export class Chat {
   private sent = 0;
   private knownImports = 0;
   private streaming = "";
+  private skillList: Skill[] = [];
   private options: EpochOptions;
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
@@ -58,6 +59,7 @@ export class Chat {
   }
 
   get live() { return this.streaming; }
+  get skills(): Extract<Event, { type: "skills" }> { return { type: "skills", skills: this.skillList }; }
   get activeEpoch() { return this.session.id; }
 
   export() {
@@ -161,6 +163,9 @@ export class Chat {
   }
 
   private inputText(text: string): string {
+    // Claude Code runs a skill only when the message starts with it, and what follows is its arguments.
+    // The notes wait for the next message.
+    if (text.startsWith("/")) return text;
     const imported: string[] = [];
     for (let i = this.knownImports; i < this.log.count; i++) {
       if (!this.log.importAt(i)) continue;
@@ -189,6 +194,11 @@ export class Chat {
     return pump(session.epoch, "epoch", {
       guard: () => session !== this.session || this.closed ? "stop" : "take",
       session: (id) => this.epochs.record(session.id, id),
+      skills: (skills) => {
+        if (JSON.stringify(skills) === JSON.stringify(this.skillList)) return;
+        this.skillList = skills;
+        this.emit(this.skills);
+      },
       live: (text) => { this.streaming += text; this.emit({ type: "live", text, agent: null }); },
       entry: (kind, text) => {
         if (kind === "unii") this.streaming = "";

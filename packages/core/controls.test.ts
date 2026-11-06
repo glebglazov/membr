@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { act, answering, cacheShare, createModel, effectivePick, hear, HELP } from "./src/index.ts";
+import { act, answering, cacheShare, complete, createModel, effectivePick, hear, HELP } from "./src/index.ts";
 import { parseClientMessage, type Act, type Pick, type State } from "@membr/protocol";
 
 const pick: Pick = { model: "sonnet", effort: "high", fast: false };
@@ -124,4 +124,20 @@ test("S2 cache share uses the latest completed turn and includes cache writes", 
   expect(cacheShare(model.state.usage)).toBe(0);
   expect(cacheShare(null)).toBeNull();
   expect(cacheShare({ input: 0, cacheRead: 0, cacheWrite: 0, output: 5 })).toBeNull();
+});
+
+test("a skill command goes to the agent as typed, and membr commands keep their names", () => {
+  const skills = [
+    { name: "pdf", description: "Read a PDF.", argumentHint: "<file>" },
+    { name: "help", description: "A skill that membr's /help hides.", argumentHint: "" },
+    { name: "pstack:poteto-mode", description: "Work in poteto's style.", argumentHint: "" },
+  ];
+  const model = hear(ready(), { type: "skills", skills });
+  expect(act(model, { type: "send", id: "s", text: "  /pdf report.pdf  " }).acts).toEqual([{ type: "act", act: "say", id: "s", text: "/pdf report.pdf" }]);
+  expect(act(model, { type: "send", id: "h", text: "/help" }).acts).toEqual([]);
+  expect(act(model, { type: "send", id: "u", text: "/nope" }).model.error).toBe("Unknown command /nope. Use /help.");
+  expect(complete(model, "/p").map((c) => c.name)).toEqual(["/pdf", "/pstack:poteto-mode", "/stop", "/speed", "/help"]);
+  expect(complete(model, "/poteto").map((c) => c.name)).toEqual(["/pstack:poteto-mode"]);
+  expect(complete(model, "/pdf x")).toEqual([]);
+  expect(complete(model, "/").filter((c) => c.name === "/help")).toHaveLength(1);
 });

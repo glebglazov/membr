@@ -22,3 +22,10 @@ test("state events parse optional epoch usage and reject invalid counts", async 
   expect(parseEvent({ type: "state", state: { ...state, epoch: usage } })).toEqual({ type: "state", state: { ...state, epoch: usage } });
   expect(() => parseEvent({ type: "state", state: { ...state, epoch: { ...usage, input: -1 } } })).toThrow("Expected a nonnegative integer");
 });
+
+test("skills events parse each skill and reject a nameless one", async () => {
+  const { parseEvent } = await import("./src/index.ts");
+  const skills = [{ name: "pdf", description: "Read a PDF.", argumentHint: "<file>" }];
+  expect(parseEvent({ type: "skills", skills })).toEqual({ type: "skills", skills });
+  expect(() => parseEvent({ type: "skills", skills: [{ ...skills[0], name: "" }] })).toThrow();
+});

@@ -1,3 +1,4 @@
+import type { Skill } from "@membr/protocol";
 import type { Account, Engine, EngineEvent, Epoch, EpochOptions, From, Pick, Priority } from "../src/engine.ts";
 
 export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, fast: null, through: 0 };
@@ -45,12 +46,14 @@ export class FakeEpoch implements Epoch {
 export class FakeEngine implements Engine {
   readonly epochs: FakeEpoch[] = [];
   readonly checks: Array<{ goal: string; chat: string; signal: AbortSignal }> = [];
+  skills: Skill[] = [];
   onCheck: (goal: string, chat: string, signal: AbortSignal) => Promise<boolean> = async () => true;
   constructor(private readonly script: (epoch: FakeEpoch, message: Message) => void = () => {}) {}
   open(view: string, options: EpochOptions): Epoch {
     const epoch = new FakeEpoch(view, options, this.script);
     this.epochs.push(epoch);
     epoch.emit({ kind: "session", id: `fake-session-${this.epochs.length}` });
+    if (this.skills.length) epoch.emit({ kind: "skills", skills: this.skills });
     return epoch;
   }
   async compact(_prompt: string): Promise<string | null> { return "A compacted message."; }

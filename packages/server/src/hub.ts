@@ -139,6 +139,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
             send(socket, { type: "state", state: chat!.state });
             if (chat!.live) send(socket, { type: "live", text: chat!.live, agent: null });
             send(socket, { type: "imports", imports: imports!.status });
+            send(socket, chat!.skills);
             send(socket, { type: "ready", version: VERSION });
             return;
           }

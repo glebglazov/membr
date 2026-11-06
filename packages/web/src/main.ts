@@ -1,6 +1,6 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { act, brief, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row } from "@membr/core";
+import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
 import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
@@ -232,9 +232,22 @@ function ImportPanel() {
         run.phase !== "complete" && h("button", { type: "button", disabled: model.connection !== "ready" || [...model.pending.values()].some((request) => request.act === "go" && request.import === run.id), onClick: () => input({ type: "import-go", id: id(), run: run.id, paused: run.phase !== "paused" }) }, run.phase === "paused" ? "Resume import" : "Pause import")))));
 }
 
+function CommandMenu({ commands, selected, choose }: { commands: Command[]; selected: number; choose: (command: Command) => void }) {
+  const list = useRef<HTMLUListElement>(null);
+  useEffect(() => { list.current?.children[selected]?.scrollIntoView({ block: "nearest" }); }, [selected, commands]);
+  return h("ul", { class: "command-menu", role: "listbox", "aria-label": "Commands", ref: list }, commands.map((command, index) => h("li", {
+    key: command.name, role: "option", "aria-selected": index === selected, class: index === selected ? "selected" : undefined,
+    onPointerDown: (event: Event) => event.preventDefault(), onClick: () => choose(command),
+  }, h("span", { class: "command-name" }, command.name, command.hint && h("span", { class: "command-hint" }, " " + command.hint)),
+  h("span", { class: "command-description" }, command.description))));
+}
+
 function App() {
   const [, update] = useState(0);
   const [draft, setDraft] = useState("");
+  const [selected, setSelected] = useState(0);
+  const [menuClosed, setMenuClosed] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
   const [readingImages, setReadingImages] = useState(false);
   const files = useRef<HTMLInputElement>(null);
   const agent = model.agent === null ? null : model.agents.get(model.agent);
@@ -264,10 +277,14 @@ function App() {
       changed();
     } finally { setReadingImages(false); }
   }
+  const commands = menuClosed ? [] : complete(model, draft);
+  const current = Math.min(selected, commands.length - 1);
+  function edit(text: string) { setDraft(text); setSelected(0); setMenuClosed(false); }
+  function insert(command: Command) { edit(command.name + " "); field.current?.focus(); }
   function send() {
     if ((!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused") return;
     input({ type: "send", id: id(), text: draft });
-    if (!model.error) { setDraft(""); scroll.followLatest(); }
+    if (!model.error) { edit(""); scroll.followLatest(); }
   }
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
   const tone = model.connection === "ready" ? model.state.busy ? "busy" : "ready" : model.connection === "refused" ? "refused" : "offline";
@@ -311,9 +328,16 @@ function App() {
       model.page === "chat" && model.agent !== null && h("div", { class: "agent-bar" }, h("button", { type: "button", class: "ghost", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`)),
       chatting && h("form", { class: "composer", onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
         model.attachments.length > 0 && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", class: "ghost small", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
-        h("textarea", { "aria-label": "Message", placeholder: "Message membr", value: draft, rows: 2,
-          onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) setDraft(event.currentTarget.value); },
-          onKeyDown: (event: KeyboardEvent) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) { event.preventDefault(); send(); } } }),
+        commands.length > 0 && h(CommandMenu, { commands, selected: current, choose: insert }),
+        h("textarea", { "aria-label": "Message", placeholder: "Message membr", value: draft, rows: 2, ref: field,
+          onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) edit(event.currentTarget.value); },
+          onKeyDown: (event: KeyboardEvent) => {
+            if (commands.length > 0 && !event.isComposing) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setSelected((current + (event.key === "ArrowDown" ? 1 : commands.length - 1)) % commands.length); return; }
+              if (event.key === "Tab" && !event.shiftKey) { event.preventDefault(); insert(commands[current]); return; }
+              if (event.key === "Escape") { event.preventDefault(); setMenuClosed(true); return; }
+            }
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) { event.preventDefault(); send(); } } }),
         h("input", { type: "file", multiple: true, accept: "image/png,image/jpeg,image/gif,image/webp", hidden: true, ref: files, "aria-label": "Attach images", onChange: (event: Event) => {
           if (!(event.currentTarget instanceof HTMLInputElement)) return;
           const selected = [...event.currentTarget.files ?? []];
