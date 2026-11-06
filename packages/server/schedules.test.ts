@@ -25,7 +25,7 @@ const hourly = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({ text: TEXT
 async function serve(dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-schedules-")), clock = new FakeClock(T0)) {
   if (!dirs.includes(dir)) dirs.push(dir);
   const engine = new FakeEngine();
-  const hub = serveHub({ dir, port: 0, engine, clock, config: () => ({ home: null, rulesText: "", afterCommand: "", approvalTimeout: 600_000 }) });
+  const hub = serveHub({ dir, port: 0, engine, clock, config: () => ({ home: null, rulesText: "", afterCommand: "", approvalTimeout: 600_000, listen: { port: 0, host: "127.0.0.1", tailscale: false } }) });
   hubs.push(hub);
   const client = await TestClient.connect(hub.server.url.href.replace("http:", "ws:") + "ws", { token: hub.token });
   clients.push(client);

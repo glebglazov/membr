@@ -5,7 +5,7 @@ import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { END, FakeEngine } from "./test/engine.ts";
-import { readConfig, type ChatConfig } from "./src/config.ts";
+import type { Config } from "./src/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.close()));
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
-function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-")), config?: () => ChatConfig) {
+function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-")), config?: () => Config) {
   if (!dirs.includes(dir)) dirs.push(dir);
   const hub = serveHub({ dir, port: 0, engine, config });
   hubs.push(hub);
@@ -102,35 +102,6 @@ test("closing the server waits for a running after command", async () => {
   await client.wait("state", mark, (event) => !event.state.busy);
   await hub.close();
   expect(fs.readFileSync(output, "utf8")).toBe("done");
-});
-
-test("MEMBR_AFTER and MEMBR_RULES replace the config file values", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-"));
-  const fileRules = path.join(dir, "file-rules.txt");
-  const envRules = path.join(dir, "env-rules.txt");
-  const fileOutput = path.join(dir, "file-after.txt");
-  const envOutput = path.join(dir, "env-after.txt");
-  fs.writeFileSync(fileRules, "File rule.");
-  fs.writeFileSync(envRules, "Environment rule.");
-  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({
-    rules: fileRules,
-    after: `printf file >> '${fileOutput}'`,
-  }));
-  const config = () => readConfig(dir, {
-    MEMBR_RULES: envRules,
-    MEMBR_AFTER: `printf env >> '${envOutput}'`,
-  });
-  const hub = serve(new FakeEngine((epoch) => epoch.emit(END)), dir, config);
-  expect(hub.engine.epochs[0].options.append.endsWith("\n\nEnvironment rule.")).toBe(true);
-  expect(hub.engine.epochs[0].options.append).not.toContain("File rule.");
-  const client = await connect(hub);
-  const mark = client.events.length;
-  client.act({ type: "act", act: "say", id: "env-turn", text: "Work" });
-  await client.wait("answer", mark);
-  await client.wait("state", mark, (event) => !event.state.busy);
-  await until(() => fs.existsSync(envOutput));
-  expect(fs.readFileSync(envOutput, "utf8")).toBe("env");
-  expect(fs.existsSync(fileOutput)).toBe(false);
 });
 
 test("input during a turn uses next and an older result cannot finish it", async () => {

@@ -15,7 +15,8 @@ const errno = "__error" in native.symbols ? native.symbols.__error : native.symb
 const LOCK_EX = 2;
 const LOCK_NB = 4;
 
-export type Holder = { pid: number; url: string };
+// url is empty while the server starts, and tailnet is set when tailscale serve forwards to it.
+export type Holder = { pid: number; url: string; tailnet?: string };
 
 export type Lock = { update(): void; release(): void };
 
@@ -57,10 +58,15 @@ export async function lock(dir: string, holder: () => Holder): Promise<Taken> {
   }
 }
 
+// The live server of a data directory, read without taking the lock.
+export function holder(dir: string): Holder | null {
+  return owner(path.join(dir, "lock"));
+}
+
 function owner(file: string): Holder | null {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.url !== "string") throw new Error(`Invalid lock holder in ${file}`);
+    if (!Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.url !== "string" || (value.tailnet !== undefined && typeof value.tailnet !== "string")) throw new Error(`Invalid lock holder in ${file}`);
     process.kill(value.pid, 0);
     return value;
   } catch (error) {

@@ -3,37 +3,86 @@
 One chat with an agent that never ends: UniiChat's memory design, with Claude
 Code as the engine through the Claude Agent SDK, on your own `claude` login.
 
-## Run the server
+## Start membr
 
 Install [Bun](https://bun.sh), then:
 
 ```sh
 bun install
-bun run serve              # same as: bun packages/server/src/main.ts serve
+bun packages/server/src/main.ts      # or: membr, after you install the binary
 ```
 
-`membr serve` listens on `127.0.0.1:8788`. Open that address to chat in your
-browser. Use `--port N` to change the port. The server builds the Preact assets
-on the first page request. `bun run build:web` also builds them in `packages/web/dist`.
+`membr` opens the chat in this terminal. If no server runs, membr starts one
+and waits until it listens. On macOS, launchd runs the server, so the server
+also starts at login and after a crash, and schedules fire when no terminal is
+open. On other systems, run `membr serve` in a terminal, then
+`membr ws://127.0.0.1:8788/ws` in another one.
 
-Local connections need no token. For access from another device, use
-`--host ADDRESS` with the server's Tailscale or network address. Open the
-sign-in link that the server prints. It sets an HttpOnly cookie and removes
-the token from the address bar. The page follows your OS light or dark setting.
+The server listens on `127.0.0.1:8788`. Open that address to chat in your
+browser. The page follows your OS light or dark setting. The server builds the
+Preact assets on the first page request. `bun run build:web` also builds them
+in `packages/web/dist`. To change the address, set `port`, `host` or
+`tailscale` in `config.json` (see [Configure the server](#configure-the-server)).
 
-`membr serve --tailscale` also puts the server on your tailnet. It runs
+Local connections need no token. For access from another device, set `host` to
+the server's Tailscale or network address. Open the sign-in link that
+`membr status` prints. It sets an HttpOnly cookie and removes the token from
+the address bar.
+
+With `"tailscale": true`, the server is also on your tailnet. It runs
 `tailscale serve` to forward HTTPS on the machine's `ts.net` name and the same
-port to `127.0.0.1`, and prints that address. Tailnet requests through it need
-no sign-in. The `tailscale serve` setting stays after membr stops, and the next
-run uses it again. Turn it off with `tailscale serve --https=PORT off`.
+port to `127.0.0.1`. `membr status` shows that address. Tailnet requests
+through it need no sign-in. The `tailscale serve` setting stays after membr
+stops, and the next run uses it again. Turn it off with
+`tailscale serve --https=PORT off`.
 
-`make run` installs the packages when they changed and runs
-`membr serve --tailscale`. Pass more options in `ARGS`, for example
-`make run ARGS="--port 9000"`.
+These are the commands:
 
-It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
-One server at a time can use a data directory. A second server on the same
-directory exits with status 1 and names the process that holds the lock.
+- `membr` opens the chat, and starts the server first if it does not run.
+- `membr URL [--token TOKEN]` connects to another server and starts nothing.
+  The URL is the server's `ws://` or `http://` address, or the sign-in link
+  that `membr status` prints on that machine.
+- `membr reload` reads `config.json` again. It prints the result. If the file
+  has an error, it prints the error and exits with status 1.
+- `membr status` shows the PID, the address, the tailnet address, the sign-in
+  link, the launchd agent and the path of the log.
+- `membr stop` stops the server and removes the launchd agent. Then nothing
+  starts the server until the next `membr`, also not a login. It also stops a
+  server that `make run` started.
+- `membr serve` runs the server in the foreground. launchd and `make run` use
+  this command. It takes no options.
+
+In the terminal chat, Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at
+the end of the line adds a new line. Type `/` to see the commands and skills,
+and use Tab to complete one. Press o, a or d to answer an approval. Esc stops
+the turn, and Ctrl+C quits. The memory tree, the agents view, imports and
+images are only in the web view.
+
+membr keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR`
+names. One server at a time can use a data directory. A second server on the
+same directory exits with status 1 and names the process that holds the lock.
+`membr` uses a server that runs already, also one that `make run` started.
+
+Each data directory has its own launchd agent: `dev.membr.serve` for
+`~/.membr`, and `dev.membr.serve.` with 8 hexadecimal characters for another
+directory. The agent's plist is in `~/Library/LaunchAgents`. It keeps your
+`PATH`, `MEMBR_DIR` and `MEMBR_CLAUDE_CLI` from the shell that runs `membr`,
+because launchd starts with a short `PATH` and the server needs `claude` (and
+`tailscale`) on it. When no server runs, `membr` writes the plist again if it
+changed, for example after you move the repository or use a shell with another
+`PATH`. membr never stops a server that runs to do this. To use a new build,
+run `membr stop`, then `membr`.
+
+The server writes its output to `serve.log` in the data directory. If the
+server does not start within 15 seconds, `membr` prints the end of that log.
+launchd starts the server again after an exit that is not a clean exit, and
+waits 10 seconds between starts. That includes a crash and a start that fails,
+for example when Tailscale is not up yet after login.
+
+`make run` installs the packages when they changed and runs `membr serve` in
+the terminal. It cannot run beside a launchd server on the same data
+directory, because the lock stops the second server. Run `membr stop` first,
+or set another `MEMBR_DIR`.
 
 ## Configure the server
 
@@ -42,16 +91,21 @@ The server reads `config.json` in the data directory. All keys are optional:
 ```json
 {
   "home": "~/Documents/vault",
-  "rules": "~/.membr/rules.md",
+  "rules": "rules.md",
   "after": "git -C ~/Documents/vault commit -qam membr || true",
-  "approvalTimeout": "10m"
+  "approvalTimeout": "10m",
+  "port": 8788,
+  "host": "127.0.0.1",
+  "tailscale": true
 }
 ```
 
 - `home` is the directory that the agent works in. Claude Code loads the
   harness from it: `CLAUDE.md`, the `.claude/` settings, skills, plugins and
   `.mcp.json`. A relative path starts at the data directory. If you do not set
-  `home`, the agent works in the directory that you start the server in.
+  `home`, the agent works in the directory that the server starts in. For a
+  server that launchd runs, that is the data directory. If `home` is not a
+  directory, the server does not start.
 - `rules` is a file. The server adds its text after the system prompt. A
   relative path starts at the data directory.
 - `after` is a shell command. The server runs it after each turn.
@@ -60,26 +114,26 @@ The server reads `config.json` in the data directory. All keys are optional:
   number and a unit: `90s`, `10m` or `2h`. The default is `10m`, and the
   maximum is `24h`. An approval in a turn that you started waits until you
   answer it.
+- `port` is the port that the server listens on. The default is `8788`.
+- `host` is the address that the server listens on. The default is
+  `127.0.0.1`.
+- `tailscale` puts the server on your tailnet when it is `true`. The default is
+  `false`. It needs `host` to be `127.0.0.1`.
 
-`membr serve --home PATH` and the `MEMBR_HOME` variable also set the home. The
-`--home` flag comes first, then `MEMBR_HOME`, then the file. `MEMBR_RULES` and
-`MEMBR_AFTER` replace `rules` and `after`. If the home is not a directory, the
-server does not start.
+To read `config.json` again while the server runs, run `membr reload`, or type
+`/reload` in a client. `SIGHUP` to the server also reads it again. Then all
+clients show an error in the file.
 
-To read `config.json` again while the server runs, type `/reload` in a client,
-or send `SIGHUP` to the server:
-
-```sh
-kill -HUP PID
-```
-
-The startup line and the `lock` file in the data directory give the PID. A new
+A new `port`, `host` or `tailscale` applies at once. The server moves to the
+new address, and a turn that runs continues. Open clients lose the connection,
+so open the chat again at the new address. If the server cannot listen on the
+new address, it keeps the old config and `membr reload` shows why. A new
 `after` command applies at once. A new `home` or new rules apply in a new
 epoch. If a turn runs, the new epoch starts when the turn ends. The server
 writes a note in the chat that tells the agent what changed. The first turn in
 the new epoch reads the full view without the prompt cache, so it costs more.
-If the file has an error, the server keeps the old config. `/reload` shows the
-error, and after `SIGHUP` all clients show it.
+If the file has an error, the server keeps the old config. `membr reload` and
+`/reload` show the error.
 
 Large tool output stays in the epoch until the next summary batch. When a turn
 ends with the epoch at 80% or more of the model's context window, the next
@@ -118,67 +172,8 @@ fire sends it as your message, word for word.
 - The agent can propose a schedule with its `schedule` tool. It does not run
   until you accept it, and its fires come as membr's messages, not as yours.
   The agent can cancel only its own schedules.
-- Fires happen only while the server runs. See the next section.
-
-## Run membr as a service
-
-Scheduled runs fire only while the server runs. On macOS, `membr service
-install` makes launchd start the server at login and start it again after a
-crash:
-
-```sh
-membr service install --tailscale
-```
-
-The command takes the same options as `membr serve` (`--port`, `--host`,
-`--tailscale`, `--home`) and checks them. It writes
-`~/Library/LaunchAgents/dev.membr.serve.plist` and loads it. The service keeps
-your `PATH`, `MEMBR_DIR` and `MEMBR_CLAUDE_CLI` from the shell that you run the
-command in, because launchd starts with a short `PATH` and the server needs
-`claude` (and `tailscale`) on it. A relative `--home` becomes an absolute path.
-Run the command again to change the options.
-
-The server writes its output to `serve.log` in the data directory. The "sign in
-at" line is in that file:
-
-```sh
-grep "sign in" ~/.membr/serve.log
-```
-
-Other commands:
-
-- `membr service status` shows if the service is loaded, its PID, and the paths
-  of the plist and the log.
-- `membr service reload` sends `SIGHUP`, which reads `config.json` again.
-- `membr service uninstall` stops the service and deletes the plist.
-
-launchd starts the server again after an exit that is not a clean exit. That
-includes a crash and a start that fails, and it waits 10 seconds between starts.
-A server that you stop with `SIGTERM` stays stopped.
-
-One server can use one data directory. `make run` cannot run beside the
-service on the same data directory, because the lock stops the second server.
-The service keeps trying, so it starts when `make run` ends. To use `make run`
-at once, run `membr service uninstall` first, or set another `MEMBR_DIR`.
-
-## Chat in the terminal
-
-```sh
-bun packages/server/src/main.ts term        # or: membr term
-```
-
-`membr term` connects to `ws://127.0.0.1:8788/ws`. To use a different
-server, give its address or the sign-in link that `membr serve` printed, or
-pass the token with `--token TOKEN`.
-
-- Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at the end of the
-  line adds a new line.
-- Type `/` to see the commands and skills, and use Tab to complete one.
-- Press o, a or d to answer an approval.
-- Esc stops the turn, and Ctrl+C quits.
-
-The memory tree, the agents view, imports and images are only in the web
-view.
+- Fires happen only while the server runs. On macOS, launchd keeps it running
+  (see [Start membr](#start-membr)).
 
 ## Install the standalone binary
 
@@ -189,7 +184,7 @@ bun run build
 ```
 
 The build writes one executable to `dist/membr`. Copy that file to a directory
-on your `PATH`, then run `membr serve`. The binary contains the web view and
+on your `PATH`, then run `membr`. The binary contains the web view and
 needs no other project files. It stores data in `~/.membr`, or in the directory
 that `MEMBR_DIR` names.
 
@@ -243,7 +238,7 @@ They write their measurements to `docs/p0-results.json`. The P0 report,
 
 ## WebSocket protocol
 
-Connect to `/ws`. The server prints a sign-in link with its bearer token.
+Connect to `/ws`. `membr status` prints a sign-in link with the bearer token.
 Supply that token in `Authorization: Bearer TOKEN`, the `token` query parameter,
 the `token` cookie, or the hello message. If you supply more than one token,
 all must match. The token stays in the data directory with mode `0600`.

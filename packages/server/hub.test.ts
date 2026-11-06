@@ -21,7 +21,8 @@ function directory() {
 }
 
 async function serve(dir = directory()) {
-  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve", "--port", "0"], {
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port: 0 }));
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve"], {
     env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe",
   });
   processes.push(proc);

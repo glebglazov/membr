@@ -119,7 +119,7 @@ test("composer keys: newline variants, backslash continuation, paste, and menu n
   expect(edit(composer, { input: "", tab: true }, menu).composer.text).toBe("/quest ");
 });
 
-test("membr term accepts the sign-in link that membr serve prints", async () => {
+test("membr accepts the sign-in link that membr status prints", async () => {
   const { socketUrl } = await import("../src/run.ts");
   expect(socketUrl("https://host.ts.net:8788/?token=abc")).toEqual({ url: "wss://host.ts.net:8788/ws", token: "abc" });
   expect(socketUrl("ws://127.0.0.1:8788/ws")).toEqual({ url: "ws://127.0.0.1:8788/ws", token: null });

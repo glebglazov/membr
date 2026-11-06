@@ -8,8 +8,14 @@ import path from "node:path";
 // approvalTimeout (ms) is how long an unattended approval waits before membr denies it.
 export type ChatConfig = Readonly<{ home: string | null; afterCommand: string; rulesText: string; approvalTimeout: number }>;
 
+// Where the hub listens. tailscale puts the loopback port on the tailnet, so it needs host 127.0.0.1.
+export type Listen = Readonly<{ port: number; host: string; tailscale: boolean }>;
+
+export type Config = ChatConfig & Readonly<{ listen: Listen }>;
+
 export const APPROVAL_TIMEOUT = 10 * 60_000;
 const DAY = 24 * 60 * 60_000;
+const LOOPBACK = "127.0.0.1";
 
 export function dataDir(env: Readonly<Record<string, string | undefined>> = process.env): string {
   return env.MEMBR_DIR || path.join(os.homedir(), ".membr");
@@ -27,30 +33,36 @@ function duration(value: unknown): number {
   return ms;
 }
 
-// The --home flag wins over MEMBR_HOME, which wins over the file. A relative path in the file is relative to the data
-// directory, because a launchd service starts in /.
-export function readConfig(dir: string, env: Readonly<Record<string, string | undefined>> = process.env, homeFlag?: string): ChatConfig {
+function listen(values: Record<string, unknown>): Listen {
+  const { port = 8788, host = LOOPBACK, tailscale = false } = values;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error("config.json: port must be a whole number from 0 to 65535");
+  if (typeof host !== "string" || host === "") throw new Error("config.json: host must be an address, such as \"127.0.0.1\"");
+  if (typeof tailscale !== "boolean") throw new Error("config.json: tailscale must be true or false");
+  if (tailscale && host !== LOOPBACK) throw new Error("config.json: tailscale serves on 127.0.0.1 behind tailscale serve, so remove host or set it to 127.0.0.1");
+  return { port, host, tailscale };
+}
+
+// Relative paths start at the data directory, because a launchd service starts there and not where the user typed membr.
+export function readConfig(dir: string): Config {
   const file = path.join(dir, "config.json");
   const raw: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("config.json must be an object");
   const values = raw as Record<string, unknown>;
   function get(key: "after" | "rules" | "home"): string {
-    const value = env["MEMBR_" + key.toUpperCase()] ?? values[key] ?? "";
+    const value = values[key] ?? "";
     if (typeof value !== "string") throw new Error(`config.json: ${key} must be a string`);
     return value;
   }
 
-  const [home, source, base] = homeFlag !== undefined ? [homeFlag, "--home", process.cwd()]
-    : env.MEMBR_HOME !== undefined ? [env.MEMBR_HOME, "MEMBR_HOME", process.cwd()]
-    : [get("home"), "config.json: home", dir];
-  const homePath = home ? path.resolve(base, expand(home)) : null;
-  if (homePath !== null && !fs.statSync(homePath, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${source}: ${homePath} is not a directory`);
+  const home = get("home");
+  const homePath = home ? path.resolve(dir, expand(home)) : null;
+  if (homePath !== null && !fs.statSync(homePath, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`config.json: home: ${homePath} is not a directory`);
   const rules = get("rules");
-  const rulesPath = rules ? path.resolve(env.MEMBR_RULES !== undefined ? process.cwd() : dir, expand(rules)) : "";
   return {
     home: homePath,
     afterCommand: get("after"),
-    rulesText: rulesPath ? fs.readFileSync(rulesPath, "utf8") : "",
+    rulesText: rules ? fs.readFileSync(path.resolve(dir, expand(rules)), "utf8") : "",
     approvalTimeout: duration(values.approvalTimeout),
+    listen: listen(values),
   };
 }

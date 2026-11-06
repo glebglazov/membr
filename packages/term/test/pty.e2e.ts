@@ -1,4 +1,4 @@
-// Drives the real `membr term` in a tmux pane against the real hub over a fake Engine, and asserts on the screen text.
+// Drives the real `membr URL` in a tmux pane against the real hub over a fake Engine, and asserts on the screen text.
 // MEMBR_BIN=dist/membr runs the compiled binary instead of the sources.
 import path from "node:path";
 import { END, FakeEngine } from "../../server/test/engine.ts";
@@ -36,7 +36,7 @@ engine.skills = [{ name: "review", description: "Review a change", argumentHint:
 const server = await startHub(engine);
 
 const command = process.env.MEMBR_BIN ? [path.resolve(process.env.MEMBR_BIN)] : ["bun", path.join(root, "packages/server/src/main.ts")];
-tmux("new-session", "-d", "-s", "e2e", "-x", "100", "-y", "30", "-c", root, [...command, "term", server.url].join(" "));
+tmux("new-session", "-d", "-s", "e2e", "-x", "100", "-y", "30", "-c", root, [...command, server.url].join(" "));
 try {
   show("connected", await waitFor("Ready", (t) => t.includes("Ready")));
 
@@ -71,7 +71,7 @@ try {
 
   keys("C-c");
   for (let i = 0; i < 100 && tmux("list-panes", "-a").trim() !== ""; i++) await Bun.sleep(50);
-  if (tmux("list-sessions").includes("e2e")) throw new Error("Ctrl-C did not quit membr term");
+  if (tmux("list-sessions").includes("e2e")) throw new Error("Ctrl-C did not quit membr");
   console.log("\nterm e2e passed");
 } finally {
   tmux("kill-server");

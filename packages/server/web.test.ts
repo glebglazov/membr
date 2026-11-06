@@ -29,7 +29,8 @@ function start(hostname = "127.0.0.1", engine = new FakeEngine()) {
 async function startCLI(hostname = "127.0.0.1") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-web-cli-"));
   dirs.push(dir);
-  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/web-serve.ts"), "serve", "--port", "0", "--host", hostname], {
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port: 0, host: hostname }));
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/web-serve.ts"), "serve"], {
     env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe",
   });
   processes.push(proc);

@@ -37,46 +37,66 @@ async function reload(client: TestClient, id: string = crypto.randomUUID()) {
 }
 const notes = (client: TestClient): Entry[] => client.events.flatMap((event) => event.type === "entry" && event.entry.text.startsWith("Config reloaded") ? [event.entry] : []);
 
-test("home comes from --home, then MEMBR_HOME, then the file, then the server's directory", () => {
-  const dir = directory(), flag = directory(), env = directory();
+test("home comes from the file, relative to the data directory, or is the server's directory", () => {
+  const dir = directory();
   fs.mkdirSync(path.join(dir, "vault"));
-  expect(readConfig(dir, {}).home).toBe(null);
+  expect(readConfig(dir).home).toBe(null);
   writeConfig(dir, { home: "vault" });
-  expect(readConfig(dir, {}).home).toBe(path.join(dir, "vault"));
-  expect(readConfig(dir, { MEMBR_HOME: env }).home).toBe(env);
-  expect(readConfig(dir, { MEMBR_HOME: env }, flag).home).toBe(flag);
+  expect(readConfig(dir).home).toBe(path.join(dir, "vault"));
   writeConfig(dir, { home: "~/" });
-  expect(readConfig(dir, {}).home).toBe(os.homedir());
+  expect(readConfig(dir).home).toBe(os.homedir());
+});
+
+test("port, host and tailscale default to 8788 on loopback, off the tailnet", () => {
+  const dir = directory();
+  expect(readConfig(dir).listen).toEqual({ port: 8788, host: "127.0.0.1", tailscale: false });
+  writeConfig(dir, { port: 9000, tailscale: true });
+  expect(readConfig(dir).listen).toEqual({ port: 9000, host: "127.0.0.1", tailscale: true });
+  writeConfig(dir, { host: "0.0.0.0" });
+  expect(readConfig(dir).listen).toEqual({ port: 8788, host: "0.0.0.0", tailscale: false });
+});
+
+test("a bad port, host or tailscale is refused, naming the key", () => {
+  const dir = directory();
+  for (const [config, reason] of [
+    [{ port: "8788" }, "port must be a whole number from 0 to 65535"],
+    [{ port: 70000 }, "port must be a whole number from 0 to 65535"],
+    [{ port: 1.5 }, "port must be a whole number from 0 to 65535"],
+    [{ host: "" }, "host must be an address"],
+    [{ tailscale: "yes" }, "tailscale must be true or false"],
+    [{ tailscale: true, host: "0.0.0.0" }, "tailscale serves on 127.0.0.1"],
+  ] as const) {
+    writeConfig(dir, config);
+    expect(() => readConfig(dir)).toThrow(`config.json: ${reason}`);
+  }
 });
 
 test("approvalTimeout reads seconds, minutes and hours from the file, and defaults to ten minutes", () => {
   const dir = directory();
-  expect(readConfig(dir, {}).approvalTimeout).toBe(600_000);
+  expect(readConfig(dir).approvalTimeout).toBe(600_000);
   for (const [text, ms] of [["90s", 90_000], ["10m", 600_000], ["2h", 7_200_000], ["24h", 86_400_000]] as const) {
     writeConfig(dir, { approvalTimeout: text });
-    expect(readConfig(dir, {}).approvalTimeout).toBe(ms);
+    expect(readConfig(dir).approvalTimeout).toBe(ms);
   }
-  writeConfig(dir, { approvalTimeout: "1m" });
-  expect(readConfig(dir, { MEMBR_APPROVALTIMEOUT: "2h", MEMBR_APPROVAL_TIMEOUT: "2h" }).approvalTimeout).toBe(60_000);
 });
 
 test("approvalTimeout refuses a bad format, zero and more than 24h, naming the key", () => {
   const dir = directory();
   for (const [value, reason] of [["10 min", "must be a number and a unit"], ["10", "must be a number and a unit"], [600, "must be a number and a unit"], ["1.5h", "must be a number and a unit"], ["0m", "must be more than 0"], ["25h", "must be 24h or less"], ["1441m", "must be 24h or less"]] as const) {
     writeConfig(dir, { approvalTimeout: value });
-    expect(() => readConfig(dir, {})).toThrow(`config.json: approvalTimeout ${reason}`);
+    expect(() => readConfig(dir)).toThrow(`config.json: approvalTimeout ${reason}`);
   }
 });
 
-test("a home that is not a directory is refused with the place it came from", () => {
+test("a home that is not a directory is refused", () => {
   const dir = directory();
   fs.writeFileSync(path.join(dir, "file"), "");
   writeConfig(dir, { home: "missing" });
-  expect(() => readConfig(dir, {})).toThrow(`config.json: home: ${path.join(dir, "missing")} is not a directory`);
-  expect(() => readConfig(dir, { MEMBR_HOME: path.join(dir, "file") })).toThrow(`MEMBR_HOME: ${path.join(dir, "file")} is not a directory`);
-  expect(() => readConfig(dir, {}, path.join(dir, "file"))).toThrow(`--home: ${path.join(dir, "file")} is not a directory`);
+  expect(() => readConfig(dir)).toThrow(`config.json: home: ${path.join(dir, "missing")} is not a directory`);
+  writeConfig(dir, { home: "file" });
+  expect(() => readConfig(dir)).toThrow(`config.json: home: ${path.join(dir, "file")} is not a directory`);
   writeConfig(dir, { home: 3 });
-  expect(() => readConfig(dir, {})).toThrow("config.json: home must be a string");
+  expect(() => readConfig(dir)).toThrow("config.json: home must be a string");
 });
 
 test("new rules during a turn open one new epoch after the turn ends, with the new rules and one note", async () => {
@@ -193,13 +213,14 @@ async function listening(proc: Bun.Subprocess<"ignore", "pipe", "pipe">): Promis
 
 test("SIGHUP to membr serve reloads the config, and a bad file reaches every client as an error", async () => {
   const dir = directory(), vault = directory();
-  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve", "--port", "0"], { env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe" });
+  writeConfig(dir, { port: 0 });
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve"], { env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe" });
   running.push(proc);
   const url = await listening(proc);
   const client = await TestClient.connect(url.replace("http:", "ws:") + "ws", { token: fs.readFileSync(path.join(dir, "token"), "utf8").trim() }); clients.push(client);
   await client.wait("ready");
 
-  writeConfig(dir, { home: vault });
+  writeConfig(dir, { port: 0, home: vault });
   proc.kill("SIGHUP");
   await client.wait("entry", 0, (event) => event.entry.text === `Config reloaded: home is now ${vault}.`);
   writeConfig(dir, "{ not json");
@@ -207,12 +228,50 @@ test("SIGHUP to membr serve reloads the config, and a bad file reaches every cli
   expect((await client.wait("error")).reason).toStartWith("The config was not reloaded: ");
 });
 
-test("membr serve refuses a --home that is not a directory", async () => {
+test("membr serve refuses a config.json home that is not a directory", async () => {
   const dir = directory();
-  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve", "--port", "0", "--home", path.join(dir, "missing")], { env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe" });
+  writeConfig(dir, { port: 0, home: "missing" });
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "test/serve.ts"), "serve"], { env: { ...process.env, MEMBR_DIR: dir }, stdout: "pipe", stderr: "pipe" });
   running.push(proc);
   expect(await proc.exited).toBe(1);
-  expect(await new Response(proc.stderr).text()).toContain(`--home: ${path.join(dir, "missing")} is not a directory`);
+  expect(await new Response(proc.stderr).text()).toContain(`config.json: home: ${path.join(dir, "missing")} is not a directory`);
+});
+
+test("a reload with a new port moves the hub there, and the client that asked gets its answer first", async () => {
+  const dir = directory();
+  writeConfig(dir, { port: 0 });
+  const moves: string[] = [];
+  const hub = serveHub({ dir, port: 0, engine: new FakeEngine(), onListen: (url) => moves.push(url) }); hubs.push(hub);
+  const before = hub.server.url.href;
+  const client = await TestClient.connect(before.replace("http:", "ws:") + "ws", { token: hub.token }); clients.push(client);
+  await client.wait("ready");
+
+  const free = Bun.serve({ port: 0, fetch: () => new Response() });
+  const port = free.port!;
+  free.stop(true);
+  writeConfig(dir, { port });
+  expect((await reload(client)).ok).toBe(true);
+  expect(hub.server.port).toBe(port);
+  expect(moves).toEqual([`http://127.0.0.1:${port}/`]);
+  expect((await fetch(`http://127.0.0.1:${port}/`)).ok).toBe(true);
+  expect(await fetch(before).then(() => "open", () => "closed")).toBe("closed");
+  expect((await client.closed).code).toBe(1012);
+});
+
+test("a reload whose port is taken changes nothing and says why", async () => {
+  const dir = directory();
+  writeConfig(dir, { port: 0, home: "" });
+  const { hub, client } = await serve(dir);
+  const before = hub.server.url.href;
+  const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("other") });
+  try {
+    writeConfig(dir, { port: taken.port });
+    const answer = await reload(client);
+    expect(answer.ok).toBe(false);
+    expect(answer.ok ? "" : answer.reason).toStartWith("The config was not reloaded: ");
+    expect(hub.server.url.href).toBe(before);
+    expect((await fetch(before)).ok).toBe(true);
+  } finally { taken.stop(true); }
 });
 
 test("a message sent during a goal check after a reload goes to the new epoch once, not also in its view", async () => {
@@ -239,5 +298,5 @@ test("a relative rules path in config.json starts at the data directory, so a se
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-rules-"));
   fs.writeFileSync(path.join(dir, "rules.md"), "Use British spelling.");
   fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ rules: "rules.md" }));
-  expect(readConfig(dir, {}).rulesText).toBe("Use British spelling.");
+  expect(readConfig(dir).rulesText).toBe("Use British spelling.");
 });

@@ -7,8 +7,8 @@ import { claude, type Engine, type EpochOptions } from "./engine.ts";
 import { Tree } from "./tree.ts";
 import { Imports } from "./import.ts";
 import { Memory } from "./memory.ts";
-import type { ChatConfig } from "./config.ts";
-import { readConfig } from "./config.ts";
+import { readConfig, type Config, type Listen } from "./config.ts";
+import { tailscaleServe } from "./tailscale.ts";
 import { web } from "./web.ts";
 import { imagePath, IMAGE_COUNT, storeImage } from "./images.ts";
 import { cleanupEpochs } from "./export-cleanup.ts";
@@ -18,8 +18,14 @@ import type { Clock } from "./clock.ts";
 type Connection = { phase: "hello"; access: Admitted } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
 
-// config is called at start and again on each reload.
-export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: () => ChatConfig; clock?: Clock }) {
+const same = (a: Listen, b: Listen) => a.port === b.port && a.host === b.host && a.tailscale === b.tailscale;
+
+// config is called at start and again on each reload. port, hostname and tailscale are where the hub starts; a reload whose
+// listen differs from the one the previous load gave moves it, and onListen hears where it went.
+export function serveHub(options: {
+  dir: string; port: number; hostname?: string; tailscale?: boolean; engine?: Engine; epoch?: Partial<EpochOptions>;
+  config?: () => Config; clock?: Clock; onListen?: (url: string, tailnet: string | null) => void;
+}) {
   const log = new Log(options.dir);
   const epochs = new Epochs(options.dir);
   let tree: Tree | undefined;
@@ -59,9 +65,9 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     const lines = opened.kind === "message" ? [] : opened.lines;
     send(socket, { type: "read", id: request.id, entries: opened.kind === "message" ? [opened.entry] : [], parts: lines.map(({ l, i }) => ({ l, i })), lines, ...(opened.kind === "missing" ? { error: opened.reason } : {}) });
   }
-  const server = Bun.serve<Connection>({
-    hostname: options.hostname ?? "127.0.0.1",
-    port: options.port,
+  const listen = (port: number, hostname: string) => Bun.serve<Connection>({
+    hostname,
+    port,
     maxRequestBodySize: 32 * 2 ** 20,
     async fetch(request, server) {
       const url = new URL(request.url);
@@ -161,6 +167,39 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
       close(socket) { sockets.delete(socket); },
     },
   });
+  // Nothing stays bound when tailscale serve fails, so the caller sees one error and no half-open hub.
+  function bind(where: Listen) {
+    const next = listen(where.port, where.host);
+    try { return { server: next, tailnet: where.tailscale ? tailscaleServe(next.port!) : null }; }
+    catch (error) { next.stop(true); throw error; }
+  }
+  let host = options.hostname ?? "127.0.0.1";
+  let { server, tailnet } = bind({ port: options.port, host, tailscale: options.tailscale ?? false });
+
+  // The old listener goes first, so a move to the same port with another host can bind. Open sockets stay until their
+  // answers are out, then close with 1012 so that clients connect again.
+  function move(where: Listen) {
+    const port = server.port!;
+    server.stop();
+    try { ({ server, tailnet } = bind(where)); }
+    catch (error) {
+      server = listen(port, host);
+      throw error;
+    }
+    host = where.host;
+    const moved = [...sockets];
+    setTimeout(() => { for (const socket of moved) socket.close(1012, "membr moved to " + server.url.href); }, 100);
+    options.onListen?.(server.url.href, tailnet);
+  }
+  const load = options.config ?? (() => readConfig(options.dir));
+  let known: Listen | undefined;
+  const config = () => {
+    const next = load();
+    if (known && !same(known, next.listen)) move(next.listen);
+    known = next.listen;
+    return next;
+  };
+
   let chat: Chat | undefined;
   try {
     tree = new Tree(options.dir, log, options.engine ?? claude);
@@ -168,7 +207,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     chat = new Chat(log, epochs, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
-    }, options.engine, options.epoch, options.config ?? (() => readConfig(options.dir)), options.clock);
+    }, options.engine, options.epoch, config, options.clock);
     imports = new Imports(log, tree, (event) => { for (const client of sockets) send(client, event); }, (entries) => chat!.imported(entries));
     tree.onChange = () => imports?.changed();
   } catch (error) {
@@ -181,7 +220,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   const purge = () => void cleanupEpochs(epochs, options.engine ?? claude, chat!.activeEpoch, Date.now(), options.epoch?.cwd ?? process.cwd()).catch((error) => console.error("membr: session cleanup failed", error));
   purge();
   const cleanupTimer = setInterval(purge, 86_400_000);
-  return { server, token, reload: () => chat!.reload(), close(): Promise<void> {
+  return { get server() { return server; }, get tailnet() { return tailnet; }, token, reload: () => chat!.reload(), close(): Promise<void> {
     if (shutdown) return shutdown;
     clearInterval(cleanupTimer);
     const importing = imports?.close() ?? Promise.resolve();
