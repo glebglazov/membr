@@ -25,6 +25,17 @@ test("S2 goal commands set and send the exact goal, halt clears it, and both act
   expect(act(ready(), { type: "send", id: "a".repeat(256), text: "/goal Work" }).model.error).not.toBeNull();
 });
 
+test("reload asks the server to read its config again, and resends once", () => {
+  const result = send("/reload");
+  expect(result.acts).toEqual([{ type: "act", act: "reload", id: "command" }]);
+  for (const message of result.acts) expect(parseClientMessage(message)).toEqual(message);
+  expect(act(result.model, { type: "send", id: "command", text: "/reload" }).acts).toEqual([]);
+  const refused = hear(result.model, { type: "answer", id: "command", ok: false, reason: "The config was not reloaded: config.json must be an object" });
+  expect(refused.error).toBe("The config was not reloaded: config.json must be an object");
+  expect(send("/reload now").model.error).toBe("Use /reload without an argument.");
+  expect(complete(ready(), "/rel").map((command) => command.name)).toEqual(["/reload"]);
+});
+
 test("S2 stop commands address all work or one named agent", () => {
   expect(send("/stop").acts).toEqual([{ type: "act", act: "stop", id: "command", agent: null }]);
   expect(send("/stop Scout").acts).toEqual([{ type: "act", act: "stop", id: "command", agent: "Scout" }]);
@@ -59,7 +70,7 @@ test("S2 bare pick commands and help show local information without sending a me
   }
   const help = send("/help");
   expect(help.model.info).toBe(HELP);
-  for (const command of ["/goal", "/halt", "/stop", "/model", "/effort", "/speed", "/fold", "/tree", "/help"]) expect(help.model.info).toContain(command);
+  for (const command of ["/goal", "/halt", "/stop", "/model", "/effort", "/speed", "/fold", "/tree", "/reload", "/help"]) expect(help.model.info).toContain(command);
   expect(act(help.model, { type: "dismiss-info" }).model.info).toBeNull();
 });
 
@@ -76,7 +87,7 @@ test("S2 fold and tree commands use memory reads without a chat act", () => {
 });
 
 test("S2 invalid commands show a dismissible error and never reach the model", () => {
-  for (const text of ["/unknown", "/goal", "/halt extra", "/stop two names", "/model bad", "/effort extreme", "/speed quick", "/fold extra", "/tree extra", "/help extra"]) {
+  for (const text of ["/unknown", "/goal", "/halt extra", "/stop two names", "/model bad", "/effort extreme", "/speed quick", "/fold extra", "/tree extra", "/reload extra", "/help extra"]) {
     const result = send(text);
     expect(result.acts).toEqual([]);
     expect(result.reads).toEqual([]);

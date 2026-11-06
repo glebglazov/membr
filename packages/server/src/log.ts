@@ -174,7 +174,7 @@ export class Log {
     const goal = !refusal && act.act === "goal" ? { revision: this.savedGoal.revision + 1, value: act.text } : undefined;
     const approved = !refusal && act.act === "answer" && approval !== undefined;
     const allow = approved && act.act === "answer" && act.choice === "always" ? approval : undefined;
-    const answer: Answer = entry || pick || goal || approved || !refusal && act.act === "stop"
+    const answer: Answer = entry || pick || goal || approved || !refusal && (act.act === "stop" || act.act === "reload")
       ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
       : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
     this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(goal ? { goal } : {}), ...(allow ? { allow } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });

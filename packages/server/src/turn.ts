@@ -4,7 +4,8 @@ import type { Image } from "./images.ts";
 import type { Log } from "./log.ts";
 
 export type PendingInput = { text: string; from: From; images?: Image[] };
-export type Turn = { attempt: number } & (
+// reopen marks a new home or new rules that the open epoch does not have yet.
+export type Turn = { attempt: number; reopen?: true } & (
   | { phase: "idle" }
   | { phase: "running" | "stopping"; id: number }
   | { phase: "summaries"; id: number; pending: PendingInput[] }
@@ -29,10 +30,11 @@ export type Input =
   | { kind: "report"; text: string; stopped: boolean }
   | { kind: "fail"; error: unknown }
   | { kind: "failed"; previous: Turn; reason: string }
+  | { kind: "reload" | "reopen" }
   | { kind: "idle" | "state" | "close" | "closing" | "closed" };
 export type Effect =
   | { kind: "halt" | "afterHook" | "cancelApprovals" | "closeAgents" | "closeEpoch" | "state" | "closedAfterHook" }
-  | { kind: "dispatch"; input: Input }
+  | { kind: "dispatch" | "defer"; input: Input }
   | { kind: "finish"; id: number; reason?: string; source: "ended" | "stopped" | "interrupted" | "failed" }
   | { kind: "send"; input: PendingInput; priority: Priority }
   | { kind: "batch"; id: number; attempt: number }
@@ -61,7 +63,19 @@ export function refusal(turn: Turn, act: Act): string | undefined {
   return closed(turn) ? "The chat is closed" : turn.phase === "failed" ? turn.reason : turn.phase === "stopping" && act.act === "say" ? "The turn is stopping. Send the message again with a new act id." : act.act === "pick" && !MODELS.includes(act.pick.model) ? `Model ${act.pick.model} is not offered` : undefined;
 }
 
+const reopen = (id: number): Effect[] => [{ kind: "closeEpoch" }, { kind: "openEpoch", id }];
+
+// The reopen mark stays through every phase until an epoch opens, which takes the new harness, or the chat ends.
+// An idle chat reopens one step later: some idle phases, such as the one before a message sent during a goal
+// check, lead at once to a start, and that start reopens before it sends, so its message is not in the view twice.
 export function next(turn: Turn, input: Input, facts: Facts): Transition {
+  const result = step(turn, input, facts);
+  const marked = (turn.reopen || result.turn.reopen) && !closed(result.turn) && result.turn.phase !== "failed" && !result.effects.some((effect) => effect.kind === "openEpoch");
+  if (!marked) return result.turn.reopen ? { turn: { ...result.turn, reopen: undefined }, effects: result.effects } : result;
+  return { turn: { ...result.turn, reopen: true }, effects: result.turn.phase === "idle" ? [...result.effects, { kind: "defer", input: { kind: "reopen" } }] : result.effects };
+}
+
+function step(turn: Turn, input: Input, facts: Facts): Transition {
   const idle: Turn = { phase: "idle", attempt: turn.attempt };
   switch (input.kind) {
     case "prepare":
@@ -81,7 +95,7 @@ export function next(turn: Turn, input: Input, facts: Facts): Transition {
         const attempt = turn.attempt + 1;
         return { turn: { phase: "summaries", id: input.id, pending: [input.input], attempt }, effects: [{ kind: "state" }, { kind: "batch", id: input.id, attempt }] };
       }
-      return { turn: { phase: "running", id: turn.phase === "running" ? turn.id : input.id, attempt: turn.attempt }, effects: [{ kind: "state" }, { kind: "send", input: input.input, priority: turn.phase === "running" ? "next" : "now" }] };
+      return { turn: { phase: "running", id: turn.phase === "running" ? turn.id : input.id, attempt: turn.attempt }, effects: [{ kind: "state" }, ...(turn.phase === "idle" && turn.reopen ? reopen(input.id) : []), { kind: "send", input: input.input, priority: turn.phase === "running" ? "next" : "now" }] };
     }
     case "stop":
       if (turn.phase === "summaries") return { turn, effects: [{ kind: "halt" }, { kind: "finish", id: input.id, source: "stopped" }] };
@@ -148,5 +162,7 @@ export function next(turn: Turn, input: Input, facts: Facts): Transition {
     case "closing":
       return { turn: { phase: "closing", attempt: turn.attempt }, effects: [{ kind: "closeAgents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }, { kind: "closedAfterHook" }] };
     case "closed": return { turn: { phase: "closed", attempt: turn.attempt }, effects: [] };
+    case "reload": return { turn: closed(turn) || turn.phase === "failed" ? turn : { ...turn, reopen: true }, effects: [] };
+    case "reopen": return { turn, effects: turn.phase === "idle" && turn.reopen ? [...reopen(facts.count), { kind: "state" }] : [] };
   }
 }

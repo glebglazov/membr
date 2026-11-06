@@ -18,7 +18,7 @@ afterEach(async () => {
 async function start(engine = new FakeEngine(), existing?: string) {
   const dir = existing ?? fs.mkdtempSync(path.join(os.tmpdir(), "membr-agents-"));
   if (!existing) dirs.push(dir);
-  const hub = serveHub({ dir, port: 0, engine, config: { rulesText: "Keep the project rules.", afterCommand: "" } });
+  const hub = serveHub({ dir, port: 0, engine, config: () => ({ home: null, rulesText: "Keep the project rules.", afterCommand: "" }) });
   hubs.push(hub);
   const client = await TestClient.connect(hub.server.url.href.replace("http:", "ws:") + "ws", { token: hub.token });
   clients.push(client);

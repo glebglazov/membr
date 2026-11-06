@@ -57,6 +57,14 @@ const transitions: Array<{ name: string; turn: Turn; input: Input; expected: Tra
   { name: "agent report joins the active turn", turn: running, input: { kind: "report", text: "Done", stopped: false }, expected: { turn: running, effects: [{ kind: "work", text: "Done", id: 7 }] } },
   { name: "closed chat ignores agent reports", turn: shut, input: { kind: "report", text: "Done", stopped: false }, expected: { turn: shut, effects: [] } },
   { name: "first failure is preserved", turn: failed, input: { kind: "fail", error: new Error("Later") }, expected: { turn: failed, effects: [] } },
+  { name: "a harness change during a turn waits for it", turn: running, input: { kind: "reload" }, expected: { turn: { ...running, reopen: true }, effects: [] } },
+  { name: "the wait for a new epoch outlives the turn's phases", turn: { ...running, reopen: true }, input: { kind: "finished", source: "ended", entry: null, error: false }, expected: { turn: { ...checking, reopen: true }, effects: [{ kind: "afterHook" }, { kind: "checkGoal", goal: "Finish", attempt: 3 }, { kind: "state" }] } },
+  { name: "an idle chat reopens after the current inputs", turn: idle, input: { kind: "reload" }, expected: { turn: { ...idle, reopen: true }, effects: [{ kind: "defer", input: { kind: "reopen" } }] } },
+  { name: "the deferred reopen opens the epoch from the whole view", turn: { ...idle, reopen: true }, input: { kind: "reopen" }, expected: { turn: idle, effects: [{ kind: "closeEpoch" }, { kind: "openEpoch", id: 12 }, { kind: "state" }] } },
+  { name: "a deferred reopen does nothing once the epoch is new", turn: running, input: { kind: "reopen" }, expected: { turn: running, effects: [] } },
+  { name: "input to a chat that waits to reopen opens the epoch before it sends", turn: { ...idle, reopen: true }, input: { kind: "start", input, id: 12 }, expected: { turn: { phase: "running", id: 12, attempt: 2 }, effects: [{ kind: "state" }, { kind: "closeEpoch" }, { kind: "openEpoch", id: 12 }, { kind: "send", input, priority: "now" }] } },
+  { name: "a summary batch's new epoch takes the new harness", turn: { ...summaries, reopen: true }, input: { kind: "batched", attempt: 3 }, expected: { turn: summaries, effects: [{ kind: "closeEpoch" }, { kind: "openEpoch", id: 7 }, { kind: "dispatch", input: { kind: "rotated", attempt: 3 } }] } },
+  { name: "a failed chat ignores a harness change", turn: failed, input: { kind: "reload" }, expected: { turn: failed, effects: [] } },
 ];
 for (const row of transitions) {
   test(row.name, () => {

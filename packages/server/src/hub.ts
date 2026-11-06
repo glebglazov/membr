@@ -17,8 +17,8 @@ import { access, admit, type Admitted } from "./access.ts";
 type Connection = { phase: "hello"; access: Admitted } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
 
-export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: ChatConfig }) {
-  const config = options.config ?? readConfig(options.dir);
+// config is called at start and again on each reload.
+export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: () => ChatConfig }) {
   const log = new Log(options.dir);
   const epochs = new Epochs(options.dir);
   let tree: Tree | undefined;
@@ -162,7 +162,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     chat = new Chat(log, epochs, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
-    }, options.engine, options.epoch, config);
+    }, options.engine, options.epoch, options.config ?? (() => readConfig(options.dir)));
     imports = new Imports(log, tree, (event) => { for (const client of sockets) send(client, event); }, (entries) => chat!.imported(entries));
     tree.onChange = () => imports?.changed();
   } catch (error) {
@@ -175,13 +175,13 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
   const purge = () => void cleanupEpochs(epochs, options.engine ?? claude, chat!.activeEpoch, Date.now(), options.epoch?.cwd ?? process.cwd()).catch((error) => console.error("membr: session cleanup failed", error));
   purge();
   const cleanupTimer = setInterval(purge, 86_400_000);
-  return { server, token, close(): Promise<void> {
+  return { server, token, reload: () => chat!.reload(), close(): Promise<void> {
     if (shutdown) return shutdown;
     clearInterval(cleanupTimer);
     const importing = imports?.close() ?? Promise.resolve();
     server.stop(true);
     const done = Promise.all([chat?.close(), importing]).then(() => {});
-    if (!config.afterCommand) {
+    if (!chat?.afterCommand) {
       tree?.close();
       shutdown = done;
     } else shutdown = done.then(() => { tree?.close(); });

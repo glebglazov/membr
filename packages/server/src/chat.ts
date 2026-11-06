@@ -15,7 +15,7 @@ import type { Memory } from "./memory.ts";
 import type { ChatConfig } from "./config.ts";
 import { IMAGE_COUNT, readImage, type Image } from "./images.ts";
 
-type Session = { id: string; epoch: Epoch };
+type Session = { id: string; epoch: Epoch; cwd: string };
 const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
 
 export class Chat {
@@ -34,10 +34,14 @@ export class Chat {
   private options: EpochOptions;
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
+  private config: ChatConfig;
+  private readonly defaults: { cwd: string; append: string };
 
-  constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly config: ChatConfig = { afterCommand: "", rulesText: "" }) {
+  constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly load: () => ChatConfig = () => ({ home: null, afterCommand: "", rulesText: "" })) {
     this.approvals = new Approvals(log, emit);
-    this.options = { pick: PICK, cwd: process.cwd(), ...options, append: (options.append ?? PROMPT) + (config.rulesText ? "\n\n" + config.rulesText : ""), memory, ask: (tool, input, signal) => {
+    this.config = load();
+    this.defaults = { cwd: options.cwd ?? process.cwd(), append: options.append ?? PROMPT };
+    this.options = { pick: PICK, ...options, ...this.harness(this.config), memory, ask: (tool, input, signal) => {
       if (!canAsk(this.turn)) return Promise.resolve(false);
       return this.approvals.ask(tool, input, signal);
     } };
@@ -61,6 +65,7 @@ export class Chat {
   get live() { return this.streaming; }
   get skills(): Extract<Event, { type: "skills" }> { return { type: "skills", skills: this.skillList }; }
   get activeEpoch() { return this.session.id; }
+  get afterCommand() { return this.config.afterCommand; }
 
   export() {
     return { messages: this.log.entries, lines: this.tree.dump(), view: this.view.text(), goal: this.view.goal, pick: this.view.pick };
@@ -95,6 +100,12 @@ export class Chat {
     const reason = imageError ?? refusal(this.turn, act);
     const id = turnId(this.turn, this.log.count);
     if (act.act === "answer") return this.approvals.answer(act, id, reason);
+    if (act.act === "reload") {
+      const loaded = reason ?? this.loadConfig();
+      const result = this.log.apply(act, id, typeof loaded === "string" ? loaded : undefined);
+      if (result.fresh && typeof loaded !== "string") this.reconfigure(loaded);
+      return result.answer;
+    }
     const result = this.log.apply(act, id, reason ?? (act.act === "stop" && act.agent !== null && !this.agents.has(act.agent) ? "No agent " + act.agent + "." : undefined));
     if (!result.fresh || !result.answer.ok) return result.answer;
     if (act.act === "stop") {
@@ -137,6 +148,14 @@ export class Chat {
     } catch (error) { this.fail(error); }
   }
 
+  // SIGHUP has no act to answer, so a config that fails to load reaches every client as an error.
+  reload(): void {
+    if (this.closed) return;
+    const loaded = this.loadConfig();
+    if (typeof loaded === "string") this.emit({ type: "error", id: null, reason: loaded });
+    else this.reconfigure(loaded);
+  }
+
   close(): Promise<void> {
     this.run({ kind: "close" });
     return this.afterQueue;
@@ -144,7 +163,27 @@ export class Chat {
 
   private open(upto = this.log.count): Session {
     this.epochUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
-    return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options) };
+    this.options = { ...this.options, ...this.harness(this.config) };
+    return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options), cwd: this.options.cwd };
+  }
+
+  private harness(config: ChatConfig): { cwd: string; append: string } {
+    return { cwd: config.home ?? this.defaults.cwd, append: this.defaults.append + (config.rulesText ? "\n\n" + config.rulesText : "") };
+  }
+
+  private loadConfig(): ChatConfig | string {
+    try { return this.load(); }
+    catch (error) { return "The config was not reloaded: " + (error instanceof Error ? error.message : String(error)); }
+  }
+
+  // after takes effect at once. A new home or new rules need a new epoch, because Claude Code reads both when a session starts.
+  private reconfigure(config: ChatConfig): void {
+    const before = this.harness(this.config), after = this.harness(config);
+    this.config = config;
+    const changes = [...before.cwd !== after.cwd ? [`home is now ${after.cwd}`] : [], ...before.append !== after.append ? ["the rules changed"] : []];
+    if (!changes.length) return;
+    this.record(this.log.append("note", `Config reloaded: ${changes.join(", and ")}.`));
+    this.run({ kind: "reload" });
   }
 
   private async rotate(id: number, attempt: number, signal: AbortSignal): Promise<void> {
@@ -193,7 +232,7 @@ export class Chat {
   private read(session: Session): Promise<void> {
     return pump(session.epoch, "epoch", {
       guard: () => session !== this.session || this.closed ? "stop" : "take",
-      session: (id) => this.epochs.record(session.id, id),
+      session: (id) => this.epochs.record(session.id, id, session.cwd),
       skills: (skills) => {
         if (JSON.stringify(skills) === JSON.stringify(this.skillList)) return;
         this.skillList = skills;
@@ -249,6 +288,9 @@ export class Chat {
     switch (effect.kind) {
       case "halt": halt.abort(); break;
       case "dispatch": this.run(effect.input); break;
+      case "defer":
+        queueMicrotask(() => { try { this.run(effect.input); } catch (error) { this.fail(error); } });
+        break;
       case "finish":
         try {
           const entry = this.log.finish(effect.id, effect.reason);

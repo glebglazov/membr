@@ -272,6 +272,7 @@ export const COMMANDS: Command[] = [
   { name: "/speed", hint: "[normal|fast]", description: "Show speeds, or select one." },
   { name: "/fold", hint: "", description: "Fold or unfold the chat." },
   { name: "/tree", hint: "", description: "Open the memory tree." },
+  { name: "/reload", hint: "", description: "Read the server's config.json again." },
   { name: "/help", hint: "", description: "Show these commands." },
 ];
 export const HELP = COMMANDS.map((command) => `${command.name}${command.hint ? " " + command.hint : ""}  ${command.description}`).join("\n");
@@ -342,6 +343,7 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
       return argument === "normal" || argument === "fast" ? act(model, { type: "pick", id: input.id, change: { fast: argument === "fast" } }) : fail("Choose a speed: normal, fast.");
     case "/fold": return argument ? fail("Use /fold without an argument.") : act(model, { type: "fold" });
     case "/tree": return argument ? fail("Use /tree without an argument.") : act(model, { type: "page", page: "tree" });
+    case "/reload": return argument ? fail("Use /reload without an argument.") : post(model, [{ type: "act", act: "reload", id: input.id }]);
     case "/help": return argument ? fail("Use /help without an argument.") : info(model.skills.length ? `${HELP}\n\nSkills: ${model.skills.length}. Type / and a name to find one.` : HELP);
     default: return skill(model, name) ? post(model, [{ type: "act", act: "say", id: input.id, text }]) : fail(`Unknown command ${name}. Use /help.`);
   }

@@ -24,6 +24,7 @@ export type Act = { type: "act"; id: string } & (
   | { act: "stop"; agent: string | null }
   | { act: "goal"; text: string | null }
   | { act: "pick"; pick: Pick }
+  | { act: "reload" }
   | { act: "answer"; approval: string; choice: "once" | "always" | "deny" }
   | ({ act: "import" } & ImportInput)
   | { act: "go"; import: string; paused: boolean }
@@ -153,6 +154,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "stop": return { ...base, act: "stop", agent: nullable(v.agent, id) };
       case "goal": return { ...base, act: "goal", text: nullable(v.text, string) };
       case "pick": return { ...base, act: "pick", pick: parsePick(v.pick) };
+      case "reload": return { ...base, act: "reload" };
       case "answer": return { ...base, act: "answer", approval: id(v.approval), choice: oneOf(v.choice, ["once", "always", "deny"]) };
       case "import": return { ...base, act: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       case "go": return { ...base, act: "go", import: id(v.import), paused: boolean(v.paused) };

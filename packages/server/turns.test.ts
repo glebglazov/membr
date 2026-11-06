@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.close()));
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
-function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-")), config?: ChatConfig) {
+function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-")), config?: () => ChatConfig) {
   if (!dirs.includes(dir)) dirs.push(dir);
   const hub = serveHub({ dir, port: 0, engine, config });
   hubs.push(hub);
@@ -116,7 +116,7 @@ test("MEMBR_AFTER and MEMBR_RULES replace the config file values", async () => {
     rules: fileRules,
     after: `printf file >> '${fileOutput}'`,
   }));
-  const config = readConfig(dir, {
+  const config = () => readConfig(dir, {
     MEMBR_RULES: envRules,
     MEMBR_AFTER: `printf env >> '${envOutput}'`,
   });

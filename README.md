@@ -35,6 +35,87 @@ It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
 One server at a time can use a data directory. A second server on the same
 directory exits with status 1 and names the process that holds the lock.
 
+## Configure the server
+
+The server reads `config.json` in the data directory. All keys are optional:
+
+```json
+{
+  "home": "~/Documents/vault",
+  "rules": "~/.membr/rules.md",
+  "after": "git -C ~/Documents/vault commit -qam membr || true"
+}
+```
+
+- `home` is the directory that the agent works in. Claude Code loads the
+  harness from it: `CLAUDE.md`, the `.claude/` settings, skills, plugins and
+  `.mcp.json`. A relative path starts at the data directory. If you do not set
+  `home`, the agent works in the directory that you start the server in.
+- `rules` is a file. The server adds its text after the system prompt. A
+  relative path starts at the data directory.
+- `after` is a shell command. The server runs it after each turn.
+
+`membr serve --home PATH` and the `MEMBR_HOME` variable also set the home. The
+`--home` flag comes first, then `MEMBR_HOME`, then the file. `MEMBR_RULES` and
+`MEMBR_AFTER` replace `rules` and `after`. If the home is not a directory, the
+server does not start.
+
+To read `config.json` again while the server runs, type `/reload` in a client,
+or send `SIGHUP` to the server:
+
+```sh
+kill -HUP PID
+```
+
+The startup line and the `lock` file in the data directory give the PID. A new
+`after` command applies at once. A new `home` or new rules apply in a new
+epoch. If a turn runs, the new epoch starts when the turn ends. The server
+writes a note in the chat that tells the agent what changed. The first turn in
+the new epoch reads the full view without the prompt cache, so it costs more.
+If the file has an error, the server keeps the old config. `/reload` shows the
+error, and after `SIGHUP` all clients show it.
+
+## Run membr as a service
+
+Scheduled runs fire only while the server runs. On macOS, `membr service
+install` makes launchd start the server at login and start it again after a
+crash:
+
+```sh
+membr service install --tailscale
+```
+
+The command takes the same options as `membr serve` (`--port`, `--host`,
+`--tailscale`, `--home`) and checks them. It writes
+`~/Library/LaunchAgents/dev.membr.serve.plist` and loads it. The service keeps
+your `PATH`, `MEMBR_DIR` and `MEMBR_CLAUDE_CLI` from the shell that you run the
+command in, because launchd starts with a short `PATH` and the server needs
+`claude` (and `tailscale`) on it. A relative `--home` becomes an absolute path.
+Run the command again to change the options.
+
+The server writes its output to `serve.log` in the data directory. The "sign in
+at" line is in that file:
+
+```sh
+grep "sign in" ~/.membr/serve.log
+```
+
+Other commands:
+
+- `membr service status` shows if the service is loaded, its PID, and the paths
+  of the plist and the log.
+- `membr service reload` sends `SIGHUP`, which reads `config.json` again.
+- `membr service uninstall` stops the service and deletes the plist.
+
+launchd starts the server again after an exit that is not a clean exit. That
+includes a crash and a start that fails, and it waits 10 seconds between starts.
+A server that you stop with `SIGTERM` stays stopped.
+
+One server can use one data directory. `make run` cannot run beside the
+service on the same data directory, because the lock stops the second server.
+The service keeps trying, so it starts when `make run` ends. To use `make run`
+at once, run `membr service uninstall` first, or set another `MEMBR_DIR`.
+
 ## Chat in the terminal
 
 ```sh
@@ -144,6 +225,14 @@ Every connected client gets the same `entry`. The sender gets an `answer` with
 its act id and the entry index. The server writes the entry and answer together
 before it sends either event. A repeat act returns the first answer, including
 after a restart. It never writes a second message for that id.
+
+To read `config.json` again, send a `reload` act:
+
+```json
+{"type":"act","id":"reload-1","act":"reload"}
+```
+
+If the file has an error, the answer has `"ok":false` and the reason.
 
 Before `ready`, the server sends a `skills` event. It lists the skills of the
 server's harness, each with `name`, `description` and `argumentHint`:

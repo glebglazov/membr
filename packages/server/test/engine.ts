@@ -62,5 +62,5 @@ export class FakeEngine implements Engine {
     return this.onCheck(goal, chat, signal);
   }
   async account(): Promise<Account> { throw new Error("No account was scripted"); }
-  async deleteSession(_session: string): Promise<void> {}
+  async deleteSession(_session: string, _cwd?: string): Promise<void> {}
 }

@@ -1,17 +1,16 @@
 #!/usr/bin/env bun
-import os from "node:os";
-import path from "node:path";
 import { parseArgs } from "node:util";
 import { lock } from "./lock.ts";
-import { readConfig } from "./config.ts";
+import { dataDir, readConfig } from "./config.ts";
+import { parseServeOptions } from "./serve-options.ts";
 import type { Engine } from "./engine.ts";
 
 export async function main(engine?: Engine) {
-  const USAGE = "usage: membr serve [--port N] [--host ADDRESS | --tailscale]\n       membr term [url] [--token TOKEN]";
+  const USAGE = "usage: membr serve [--port N] [--host ADDRESS | --tailscale] [--home PATH]\n       membr service install|uninstall|status|reload\n       membr term [url] [--token TOKEN]";
 
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { port: { type: "string", default: "8788" }, host: { type: "string" }, tailscale: { type: "boolean", default: false }, token: { type: "string" }, help: { type: "boolean", default: false } },
+    options: { port: { type: "string" }, host: { type: "string" }, tailscale: { type: "boolean", default: false }, token: { type: "string" }, home: { type: "string" }, help: { type: "boolean", default: false } },
   });
 
   if (positionals[0] === "term") {
@@ -24,24 +23,39 @@ export async function main(engine?: Engine) {
     process.exit(0);
   }
 
-  if (positionals[0] !== "serve") {
+  if (positionals[0] !== "serve" && positionals[0] !== "service") {
     console.error(USAGE);
     process.exit(2);
   }
 
-  const port = Number(values.port);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    console.error(`membr: --port must be a port number, not "${values.port}"`);
+  let options: ReturnType<typeof parseServeOptions>;
+  try { options = parseServeOptions(values); } catch (error) {
+    console.error("membr: " + (error instanceof Error ? error.message : String(error)));
     process.exit(2);
   }
 
-  if (values.tailscale && values.host !== undefined) {
-    console.error("membr: --tailscale serves on 127.0.0.1 behind tailscale serve, so it takes no --host");
-    process.exit(2);
+  const dir = dataDir();
+
+  if (positionals[0] === "service") {
+    const { runService, realHost, SERVICE_USAGE } = await import("./service.ts");
+    if (values.help || positionals[1] === undefined) { console.log(SERVICE_USAGE); return; }
+    if (process.platform !== "darwin") {
+      console.error("membr: membr service needs macOS, because it writes a launchd agent");
+      process.exit(2);
+    }
+    try {
+      process.exit(runService(positionals[1], options, { env: process.env, dir, host: realHost(), log: console.log }));
+    } catch (error) {
+      console.error("membr: " + (error instanceof Error ? error.message : String(error)));
+      process.exit(1);
+    }
   }
 
-  const dir = process.env.MEMBR_DIR || path.join(os.homedir(), ".membr");
-  const config = readConfig(dir);
+  const config = () => readConfig(dir, process.env, values.home);
+  try { config(); } catch (error) {
+    console.error("membr: " + (error instanceof Error ? error.message : String(error)));
+    process.exit(1);
+  }
   let url = "";
   const taken = await lock(dir, () => ({ pid: process.pid, url }));
   if ("heldBy" in taken) {
@@ -50,13 +64,14 @@ export async function main(engine?: Engine) {
   }
 
   const { serveHub } = await import("./hub.ts");
-  const { server, token, close } = serveHub({ dir, port, hostname: values.host ?? "127.0.0.1", engine, config });
+  const hub = serveHub({ dir, port: options.port ?? 8788, hostname: options.host ?? "127.0.0.1", engine, config });
+  const { server, token, close } = hub;
   url = server.url.href;
   taken.lock.update();
-  console.log(`membr: serving ${dir} at ${url}`);
+  console.log(`membr: serving ${dir} at ${url} (pid ${process.pid})`);
   console.log(`membr: sign in at ${url}?token=${encodeURIComponent(token)}`);
 
-  if (values.tailscale) {
+  if (options.tailscale) {
     const { tailscaleServe } = await import("./tailscale.ts");
     try {
       console.log(`membr: on the tailnet at ${tailscaleServe(Number(new URL(url).port))} with no sign-in`);
@@ -67,6 +82,8 @@ export async function main(engine?: Engine) {
       process.exit(1);
     }
   }
+
+  process.on("SIGHUP", () => hub.reload());
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
