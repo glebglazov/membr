@@ -48,6 +48,12 @@ export type From = "user" | "membr";
 // the tokens of one turn: `input` is the part not read from the cache
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
 
+// How full the epoch is at the end of a turn. `used` is the input of the
+// turn's last model call, so it is the size of the session as the model saw
+// it; a turn's Usage adds up all its calls and is larger. "overflow" means
+// Claude Code refused the turn because the session no longer fits the model.
+export type Context = { used: number; window: number } | "overflow" | null;
+
 export type EngineEvent =
   | { kind: "session"; id: string }
   | { kind: "delta"; text: string }
@@ -57,7 +63,7 @@ export type EngineEvent =
   | { kind: "compacted" }
   // the harness's skills, in full: each event replaces the earlier list
   | { kind: "skills"; skills: Skill[] }
-  | { kind: "end"; reply: string; error: string | null; usage: Usage; fast: Fast | null; through: number };
+  | { kind: "end"; reply: string; error: string | null; usage: Usage; context: Context; fast: Fast | null; through: number };
 
 // whether fast mode serves the session, and why not: "preference" means the
 // organization turned it off
@@ -245,6 +251,7 @@ function open(view: string, options: EpochOptions): Epoch {
   }
 
   let listed = false;
+  let last: { model: string; used: number } | null = null;
   async function* stream(): AsyncGenerator<EngineEvent> {
     try {
       for await (const sdk of session) {
@@ -274,7 +281,12 @@ function open(view: string, options: EpochOptions): Epoch {
           if (ids.length === 0 && pending.size > 0) throw new Error("The SDK result did not identify the input it completed");
           settleStop();
         }
-        if (!viewing) yield* translate(sdk, through);
+        // a refused turn ends with a stand-in message from model "<synthetic>" and no usage
+        if (sdk.type === "assistant" && sdk.parent_tool_use_id === null && sdk.message.model !== "<synthetic>") {
+          const usage = sdk.message.usage;
+          last = { model: sdk.message.model, used: usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) };
+        }
+        if (!viewing) yield* translate(sdk, through, last);
       }
       stopped?.reject(new Error("The Engine closed during stop"));
     } catch (error) {
@@ -334,7 +346,7 @@ function skills(commands: SlashCommand[]): Skill[] {
   return commands.filter((command) => !command.builtin).map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
 }
 
-function* translate(sdk: SDKMessage, through: number): Generator<EngineEvent> {
+function* translate(sdk: SDKMessage, through: number, last: { model: string; used: number } | null): Generator<EngineEvent> {
   if ("parent_tool_use_id" in sdk && sdk.parent_tool_use_id !== null) {
     return;
   }
@@ -378,11 +390,20 @@ function* translate(sdk: SDKMessage, through: number): Generator<EngineEvent> {
           cacheWrite: sdk.usage.cache_creation_input_tokens,
           output: sdk.usage.output_tokens,
         },
+        context: context(sdk, last),
         through,
         fast: sdk.fast_mode_state ? { state: sdk.fast_mode_state, blocked: sdk.fast_mode_disabled_reason ?? null } : null,
       };
       return;
   }
+}
+
+// "blocking_limit" is Claude Code's own refusal before the call, which it
+// makes when compaction is off; "prompt_too_long" is the API's
+function context(result: Extract<SDKMessage, { type: "result" }>, last: { model: string; used: number } | null): Context {
+  if (result.terminal_reason === "blocking_limit" || result.terminal_reason === "prompt_too_long") return "overflow";
+  const window = last && result.modelUsage[last.model]?.contextWindow;
+  return last && window ? { used: last.used, window } : null;
 }
 
 function textOf(content: unknown): string {

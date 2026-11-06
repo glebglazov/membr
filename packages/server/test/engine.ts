@@ -1,7 +1,7 @@
 import type { Skill } from "@membr/protocol";
 import type { Account, Engine, EngineEvent, Epoch, EpochOptions, From, Pick, Priority } from "../src/engine.ts";
 
-export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, fast: null, through: 0 };
+export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, context: null, fast: null, through: 0 };
 type Message = { text: string; priority: Priority; from: From; images?: import("../src/images.ts").Image[] };
 
 export class FakeEpoch implements Epoch {

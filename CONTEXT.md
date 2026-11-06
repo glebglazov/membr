@@ -13,7 +13,7 @@ One input from the user or from membr, and the agent work that answers it, up to
 _Avoid_: request, round
 
 **Epoch**:
-One engine session. It starts from the current view, and a new epoch replaces it after a summary batch.
+One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of home or rules, and when a turn ends with the session at 80% or more of the model's context window or over it.
 _Avoid_: session, conversation
 
 **Harness**:

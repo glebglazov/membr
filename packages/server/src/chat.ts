@@ -243,7 +243,7 @@ export class Chat {
         if (kind === "unii") this.streaming = "";
         this.record(this.log.append(kind, text));
       },
-      end: (event) => this.run({ kind: "ended", done: event.through >= this.sent, error: event.error, usage: event.usage }),
+      end: (event) => this.run({ kind: "ended", done: event.through >= this.sent, error: event.error, usage: event.usage, context: event.context }),
       expectsEvents: () => this.turn.phase !== "stopping" && this.turn.phase !== "failed",
       fail: (error) => this.fail(error),
     });

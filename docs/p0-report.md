@@ -15,6 +15,7 @@ and it wrote the raw numbers to `docs/p0-results.json`.
 | 6 | auto mode works with each model of the pick | pass |
 | 7 | an `isSynthetic` message is not consent for auto mode | pass |
 | 8 | the start time of one compaction, the plan use of 200 | pass: 3.9 s; 2 points of the 5-hour window |
+| 9 | an epoch at the context window | fail: "Prompt is too long", and every later turn fails |
 
 ## 1. The login
 
@@ -58,8 +59,9 @@ task with Bash calls.
 - Epoch, `autoCompactEnabled: false`: no compaction. Its second turn read
   144,526 tokens, above the window.
 
-An epoch that grows past the model's own context window gets the API's
-error, not a compaction. The batch merge must start a new epoch before that.
+An epoch that grows past the model's own context window gets an error,
+not a compaction. Section 9 measures it: the error is "Prompt is too long",
+and the epoch cannot answer after it.
 
 ## 4. A `next` message during a tool call
 
@@ -136,3 +138,67 @@ thousands of compactions and many points, so its estimate must show plan
 use, as the spec says.
 
 Epoch design: go
+
+## 9. An epoch at the context window
+
+This check ran on 2026-11-06, after the S3 suite. It is a one-off script,
+not part of `engine.contract.test.ts`. The script opened an epoch with
+`claude.open`, with the options that membr gives: `autoCompactEnabled: false`,
+auto mode, and the user's settings. The pick was `haiku` at effort `low`.
+The session file shows that `haiku` gave `claude-haiku-5-5`. Each turn told
+the model to read the next part of a large text file with the Read tool, and
+to reply with one word from the last line. When a turn failed, the script
+sent one more turn: "Reply with only the word ok." Each variant ran one time.
+
+The numbers below are from the usage of each model call in the session file.
+The `usage` of an `end` event is the sum of all calls in the turn, so it is
+too large to be the size of the context.
+
+- Context window: larger than 200,000 tokens for this model. A run with one
+  11,300-token read in each turn did 40 turns with no error. Its last call
+  had 477,696 tokens of context. The model replied correctly in each turn,
+  and the context grew by the full read in each call, so Claude Code did not
+  drop old tool results.
+- The limit: a run with four parallel reads in each turn (about 89,000
+  tokens for each turn) did 10 turns with no error. The last call that
+  worked had 916,001 tokens of context. In turn 11, the four reads worked,
+  and by addition the next call would have had about 1,005,000 tokens. The turn ended
+  with the error "Prompt is too long", at 131 s.
+- After the error: the next turn ended at once with the same error and zero
+  usage. The session file shows that no model call ran (the model is
+  `<synthetic>`). The epoch cannot answer again.
+- The Read tool has its own limit, and it is not the context window. A run
+  with 44,000-token reads got "File content (44101 tokens) exceeds maximum
+  allowed tokens (28333)". The limit changed from turn to turn: 25,000 in
+  the first turn, 28,333 in turn 4, then down to 26,543 by turn 8. After some
+  refused reads, at 162,000 tokens of context, the model stopped calling
+  tools. In each turn after that it asked for "smaller 500-line reads or a
+  fresh" session, with no error. That is model behavior, not a limit of
+  the session.
+
+What limits the result: the Read limit of about 25,000 tokens for each
+call, so a turn must make many reads to fill a window of about 1,000,000
+tokens. The script did four for each turn to reach the limit in 11 turns.
+The run did not try Bash or MCP output, which have their own limits.
+
+What this means for membr (from the code, not measured end to end):
+
+- The turn ends with `error: "Prompt is too long"`. The turn machine
+  finishes it as "The turn failed: Prompt is too long" and goes idle. The
+  epoch stays open.
+- The next turn goes to the same epoch, because the batch trigger
+  (`View.over`, 128,000 bytes) counts the summary lines of the view, not
+  the context of the epoch. That turn fails at once, and so does each turn
+  after it, until a batch or a restart opens a new epoch.
+- The SDK gives what a fix needs: the usage of each call on each assistant
+  message, and `modelUsage[model].contextWindow` on each result.
+
+The fix: the `end` event of the Engine now gives the context of the turn,
+`{ used, window }` from the last model call, or `"overflow"` when Claude Code
+refused the turn for size. From 80% of the window, or after an overflow, the
+turn machine marks the epoch for a new one, and the next turn starts in it.
+Check, with the real Engine and Haiku, through the hub: a message of 3.3 MB
+got "Prompt is too long" (`terminal_reason: "blocking_limit"`). Without the
+fix, the next turn "Reply with only the word ok." also got "Prompt is too
+long", in the same epoch. With the fix, membr opened a second epoch, wrote the
+note, and the next turn replied "ok".

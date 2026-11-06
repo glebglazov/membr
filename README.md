@@ -75,6 +75,13 @@ the new epoch reads the full view without the prompt cache, so it costs more.
 If the file has an error, the server keeps the old config. `/reload` shows the
 error, and after `SIGHUP` all clients show it.
 
+Large tool output stays in the epoch until the next summary batch. When a turn
+ends with the epoch at 80% or more of the model's context window, the next
+turn starts in a new epoch. If a turn makes the epoch too large for the model,
+the turn fails with "Prompt is too long". membr then starts a new epoch and
+writes a note in the chat. Send the message again. membr does not send it
+again for you, because the turn's tool calls would run a second time.
+
 ## Run membr as a service
 
 Scheduled runs fire only while the server runs. On macOS, `membr service

@@ -1,10 +1,10 @@
 import type { Act, Entry, State, Usage } from "@membr/protocol";
-import type { From, Priority } from "./engine.ts";
+import type { Context, From, Priority } from "./engine.ts";
 import type { Image } from "./images.ts";
 import type { Log } from "./log.ts";
 
 export type PendingInput = { text: string; from: From; images?: Image[] };
-// reopen marks a new home or new rules that the open epoch does not have yet.
+// reopen marks a new home or new rules that the open epoch does not have yet, or an epoch too full for more turns.
 export type Turn = { attempt: number; reopen?: true } & (
   | { phase: "idle" }
   | { phase: "running" | "stopping"; id: number }
@@ -20,7 +20,7 @@ export type Input =
   | { kind: "start"; input: PendingInput; id: number }
   | { kind: "stop"; id: number }
   | { kind: "interrupted"; id: number }
-  | { kind: "ended"; done: boolean; error: string | null; usage: Usage }
+  | { kind: "ended"; done: boolean; error: string | null; usage: Usage; context: Context }
   | { kind: "finished"; source: "ended" | "stopped" | "interrupted" | "failed"; entry: Entry | null; error: boolean }
   | { kind: "batched" | "rotated"; attempt: number }
   | { kind: "checked"; attempt: number; met: boolean }
@@ -52,6 +52,11 @@ export type Effect =
 export type Transition = { turn: Turn; effects: Effect[] };
 const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
 const GOAL_NO = "The goal isn't satisfied yet: keep working.";
+const FULL = "The epoch was full, so membr opened a new one. Send your message again.";
+
+// The summary batch counts the view, not the raw tool output inside the epoch, so an epoch can fill before a batch.
+// From 80% of the window it gets a new epoch while the next turn still fits; a turn that overflows gets one too.
+function full(context: Context): boolean { return context === "overflow" || (context !== null && context.used >= 0.8 * context.window); }
 
 export function closed(turn: Turn): boolean { return turn.phase === "closing" || turn.phase === "closed"; }
 export function turnId(turn: Turn, count: number): number { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" ? turn.id : count; }
@@ -104,7 +109,14 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
     case "interrupted":
       return { turn, effects: turn.phase === "stopping" && turn.id === input.id ? [{ kind: "finish", id: input.id, source: "interrupted" }] : [] };
     case "ended":
-      return { turn, effects: [{ kind: "usage", usage: input.usage }, ...(turn.phase === "running" && input.done ? [{ kind: "finish", id: turn.id, reason: input.error === null ? undefined : `The turn failed: ${input.error}`, source: "ended" } satisfies Effect] : [{ kind: "state" } satisfies Effect])] };
+      return {
+        turn: full(input.context) ? { ...turn, reopen: true } : turn,
+        effects: [
+          { kind: "usage", usage: input.usage },
+          ...(turn.phase === "running" && input.done ? [{ kind: "finish", id: turn.id, reason: input.error === null ? undefined : `The turn failed: ${input.error}`, source: "ended" } satisfies Effect] : [{ kind: "state" } satisfies Effect]),
+          ...(input.context === "overflow" ? [{ kind: "note", text: FULL } satisfies Effect] : []),
+        ],
+      };
     case "finished": {
       if (input.source === "stopped" || input.source === "interrupted") return { turn: idle, effects: [{ kind: "afterHook" }, { kind: "state" }] };
       const effects: Effect[] = [{ kind: "afterHook" }];
