@@ -1,7 +1,7 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
-import { VERSION, parseEvent, type Entry, type ImportSource } from "@membr/protocol";
+import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
+import { VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
 import { Markdown } from "./markdown.ts";
@@ -232,6 +232,71 @@ function ImportPanel() {
         run.phase !== "complete" && h("button", { type: "button", disabled: model.connection !== "ready" || [...model.pending.values()].some((request) => request.act === "go" && request.import === run.id), onClick: () => input({ type: "import-go", id: id(), run: run.id, paused: run.phase !== "paused" }) }, run.phase === "paused" ? "Resume import" : "Pause import")))));
 }
 
+function SchedulePreview() {
+  const [run, setRun] = useState<ScheduleSpec["run"]>("agent");
+  const [missed, setMissed] = useState<ScheduleSpec["missed"]>("once");
+  const preview = model.preview;
+  if (!preview) return null;
+  const { proposal } = preview;
+  const zone = proposal?.when.kind === "cron" ? proposal.when.zone : undefined;
+  const saving = [...model.pending.values()].some((request) => request.act === "schedule");
+  const discard = h("button", { type: "button", class: "ghost", onClick: () => input({ type: "schedule-discard" }) }, "Discard");
+  if (!proposal) return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" }, h("p", { role: "status" }, "Reading the time..."), h("div", { class: "schedule-actions" }, discard));
+  return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" },
+    h("p", { class: "schedule-when" }, describeWhen(proposal.when)),
+    h("p", { class: "schedule-text" }, proposal.text),
+    h("p", { class: "label" }, proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}` : "It does not fire again."),
+    h("div", { class: "schedule-actions" },
+      h("label", null, "Run as", h("select", { "aria-label": "Run as", value: run, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setRun(event.currentTarget.value === "turn" ? "turn" : "agent"); } },
+        h("option", { value: "agent" }, "A subagent"), h("option", { value: "turn" }, "A turn in the chat"))),
+      h("label", null, "If missed", h("select", { "aria-label": "If missed", value: missed, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setMissed(event.currentTarget.value === "skip" ? "skip" : "once"); } },
+        h("option", { value: "once" }, "Run once when back"), h("option", { value: "skip" }, "Skip"))),
+      h("span", { class: "grow" }),
+      discard,
+      h("button", { type: "button", class: "primary", disabled: saving || model.connection !== "ready", onClick: () => input({ type: "schedule-accept", id: id(), run, missed }) }, "Accept")));
+}
+
+function ScheduleCard({ schedule }: { schedule: ScheduleView }) {
+  const zone = schedule.when.kind === "cron" ? schedule.when.zone : undefined;
+  const busy = [...model.pending.values()].some((request) => "schedule" in request && request.schedule === schedule.id);
+  const change = (kind: "accept" | "pause" | "resume" | "unschedule") => input({ type: "schedule-act", id: id(), schedule: schedule.id, change: kind });
+  const button = (label: string, kind: Parameters<typeof change>[0], primary = false) => h("button", { type: "button", class: primary ? "primary small" : "ghost small", disabled: busy || model.connection !== "ready", onClick: () => change(kind) }, label);
+  return h("article", { class: `schedule ${schedule.phase}`, "aria-label": `Schedule ${schedule.id}` },
+    h("div", { class: "schedule-head" },
+      h("span", { class: "schedule-when" }, describeWhen(schedule.when)),
+      h("span", { class: `phase ${schedule.phase}` }, schedule.phase === "proposed" && schedule.author === "membr" ? "proposed by membr" : schedule.phase)),
+    h("p", { class: "schedule-text" }, schedule.text),
+    h("p", { class: "label" }, [
+      schedule.next.length ? `Next: ${schedule.next.map((time) => fireTime(time, zone)).join(", ")}` : null,
+      runLabel(schedule.run),
+      schedule.last ? `Last: ${schedule.last.result}, ${fireTime(schedule.last.at, zone)}` : null,
+      schedule.author === "membr" && schedule.phase !== "proposed" ? "set by membr" : null,
+    ].filter(Boolean).join(" · ")),
+    h("div", { class: "schedule-actions" },
+      schedule.phase === "proposed" && button("Accept", "accept", true),
+      schedule.phase === "active" && button("Pause", "pause"),
+      schedule.phase === "paused" && button("Resume", "resume"),
+      button("Delete", "unschedule")));
+}
+
+function SchedulesPage() {
+  const [text, setText] = useState("");
+  const schedules = model.schedules.filter((schedule) => schedule.phase !== "cancelled");
+  const reading = model.preview !== null;
+  function preview() {
+    if (!text.trim() || model.connection !== "ready") return;
+    input({ type: "schedule-preview", id: id(), text: text.trim(), zone: clientZone() });
+    setText("");
+  }
+  return h("div", { class: "schedules" },
+    h("form", { class: "schedule-form", onSubmit: (event: SubmitEvent) => { event.preventDefault(); preview(); } },
+      h("input", { "aria-label": "When and what", placeholder: "every weekday 8:30 read the inbox notes", value: text, onInput: (event: Event) => { if (event.currentTarget instanceof HTMLInputElement) setText(event.currentTarget.value); } }),
+      h("button", { type: "submit", class: "primary", disabled: !text.trim() || model.connection !== "ready" }, reading ? "Preview again" : "Preview")),
+    h(SchedulePreview, null),
+    schedules.length === 0 && h("p", { class: "empty" }, "No schedules yet."),
+    schedules.map((schedule) => h(ScheduleCard, { schedule, key: schedule.id })));
+}
+
 function CommandMenu({ commands, selected, choose }: { commands: Command[]; selected: number; choose: (command: Command) => void }) {
   const list = useRef<HTMLUListElement>(null);
   useEffect(() => { list.current?.children[selected]?.scrollIntoView({ block: "nearest" }); }, [selected, commands]);
@@ -254,7 +319,7 @@ function App() {
   const scroll = useChatScroll(model.page === "chat" && (model.agent !== null || !model.folded), { log: model.agent ?? "", entries: agent?.entries ?? model.entries, live: agent?.live ?? model.live, ready: model.connection === "ready" && (model.agent === null || agent?.loaded === true) });
   changed = () => update((value) => value + 1);
   useEffect(() => {
-    const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : "chat" });
+    const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : location.hash === "#schedules" ? "schedules" : "chat" });
     page();
     window.addEventListener("hashchange", page);
     return () => { window.removeEventListener("hashchange", page); };
@@ -293,7 +358,7 @@ function App() {
   return h("div", { class: "app" },
     h("header", { ref: scroll.header },
       h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
-      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory")),
+      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory"), h("a", { href: "#schedules", "aria-current": model.page === "schedules" ? "page" : undefined }, "Schedules")),
       h("div", { class: "meta" },
         h("span", { class: `pulse ${tone}`, "aria-hidden": "true" }),
         h("span", { role: "status" }, status),
@@ -301,13 +366,14 @@ function App() {
         model.state.agents.length > 0 && h("span", { class: "at-work" }, `${model.state.agents.length} agent${model.state.agents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.agent === null ? "Chat" : `${model.agent} log` },
+    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.agent === null ? "Chat" : `${model.agent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
+      model.page === "schedules" && h("h2", null, "Schedules"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
       chatting && body.length > 0 && h("div", { class: "fold-bar" },
         model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
         h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
-      agent ? [
+      model.page === "schedules" ? h(SchedulesPage, null) : agent ? [
         h("div", { key: "title", class: "agent-title" },
           h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "agent", name: null }) }, "← Main chat"),
           h("h2", null, model.agent),
@@ -325,6 +391,7 @@ function App() {
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),
+      chatting && h(SchedulePreview, null),
       model.page === "chat" && model.agent !== null && h("div", { class: "agent-bar" }, h("button", { type: "button", class: "ghost", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`)),
       chatting && h("form", { class: "composer", onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
         model.attachments.length > 0 && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", class: "ghost small", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),

@@ -1,11 +1,13 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, Skill, State, Usage } from "@membr/protocol";
+import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, ScheduleSpec, ScheduleView, Skill, State, Usage, When } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
 export type AgentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
+export type Proposal = { when: When; text: string; next: string[] };
+export type Page = "chat" | "tree" | "schedules";
 export type Model = {
   importPlan: { id: string; input: ImportInput; estimate: ImportEstimate | null } | null;
   imports: ImportStatus[];
@@ -22,7 +24,7 @@ export type Model = {
   nodes: ReadonlyMap<string, MemoryLine>;
   open: ReadonlySet<string>;
   roots: Part[] | null;
-  page: "chat" | "tree";
+  page: Page;
   folded: boolean;
   reads: ReadonlyMap<string, Read>;
   readSequence: number;
@@ -31,6 +33,9 @@ export type Model = {
   info: string | null;
   approvals: ReadonlyMap<string, Extract<Event, { type: "ask" }>>;
   skills: Skill[];
+  schedules: ScheduleView[];
+  // One /schedule request: the read in flight, then what the server understood.
+  preview: { id: string; text: string; proposal: Proposal | null } | null;
 };
 export type Input =
   | { type: "import-plan"; id: string; input: ImportInput }
@@ -48,7 +53,11 @@ export type Input =
   | { type: "open"; id: string; part: Part }
   | { type: "close"; part: Part }
   | { type: "fold" }
-  | { type: "page"; page: "chat" | "tree" }
+  | { type: "page"; page: Page }
+  | { type: "schedule-preview"; id: string; text: string; zone: string }
+  | { type: "schedule-accept"; id: string; run?: ScheduleSpec["run"]; missed?: ScheduleSpec["missed"] }
+  | { type: "schedule-discard" }
+  | { type: "schedule-act"; id: string; schedule: string; change: "accept" | "pause" | "resume" | "unschedule" }
   | { type: "flush" }
   | { type: "reads" };
 export type ConnectionEvent = { type: "connecting" | "offline" };
@@ -68,7 +77,7 @@ export function createModel(): Model {
     importPlan: null, imports: [],
     agent: null, agents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
-    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [],
+    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], schedules: [], preview: null,
     state: { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null },
   };
 }
@@ -97,6 +106,12 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
     case "imports": return { ...model, imports: event.imports };
     case "skills": return { ...model, skills: event.skills };
+    case "schedules": return { ...model, schedules: event.schedules };
+    case "when": {
+      if (model.preview?.id !== event.id) return model;
+      const reads = new Map(model.reads); reads.delete(event.id);
+      return { ...model, reads, preview: { ...model.preview, proposal: { when: event.when, text: event.text, next: event.next } } };
+    }
     case "import-estimate": {
       if (!model.importPlan || model.importPlan.id !== event.id) return model;
       const reads = new Map(model.reads); reads.delete(event.id);
@@ -170,7 +185,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       pending.delete(event.id);
       const uploads = new Map(model.uploads);
       uploads.delete(event.id);
-      return { ...model, pending, uploads, importPlan: event.ok && model.pending.get(event.id)?.act === "import" ? null : model.importPlan, error: event.ok ? model.error : event.reason };
+      return { ...model, pending, uploads, importPlan: event.ok && model.pending.get(event.id)?.act === "import" ? null : model.importPlan, preview: event.ok && model.pending.get(event.id)?.act === "schedule" ? null : model.preview, error: event.ok ? model.error : event.reason };
     }
     case "error": {
       const request = event.id === null ? undefined : model.reads.get(event.id);
@@ -186,7 +201,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
 function readFailure(model: Model, request: Read, reason: string): Model {
   const open = new Set(model.open);
   if (request.read === "zoom") open.delete(partKey(request.part));
-  return { ...model, open, importPlan: request.read === "import" ? null : model.importPlan, error: reason };
+  return { ...model, open, importPlan: request.read === "import" ? null : model.importPlan, preview: request.read === "when" ? null : model.preview, error: reason };
 }
 
 export function act(model: Model, input: Input): { model: Model; acts: Act[]; reads: Read[]; uploads: Upload[] } {
@@ -216,13 +231,32 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
   if (input.type === "detach") return output({ ...model, attachments: model.attachments.filter((image) => image.id !== input.id) });
   if (input.type === "reads") return output(model, [], [...model.reads.values()]);
   if (input.type === "dismiss-error") return output({ ...model, error: null });
+  if (input.type === "schedule-preview") {
+    const reads = new Map([...model.reads].filter(([, request]) => request.read !== "when"));
+    const request: Read = { type: "read", read: "when", id: input.id, text: input.text, zone: input.zone };
+    reads.set(request.id, request);
+    return output({ ...model, reads, preview: { id: input.id, text: input.text, proposal: null }, error: null }, [], [request]);
+  }
+  if (input.type === "schedule-discard") return output({ ...model, preview: null, reads: new Map([...model.reads].filter(([, request]) => request.read !== "when")) });
+  if (input.type === "schedule-accept") {
+    const proposal = model.preview?.proposal;
+    if (!proposal) return output(model);
+    const schedule = { text: proposal.text, when: proposal.when, run: input.run ?? "agent", missed: input.missed ?? "once" };
+    return post(model, [{ type: "act", act: "schedule", id: input.id, schedule }]);
+  }
+  if (input.type === "schedule-act") {
+    const { id, schedule } = input;
+    return post(model, [input.change === "accept" ? { type: "act", act: "accept", id, schedule }
+      : input.change === "unschedule" ? { type: "act", act: "unschedule", id, schedule }
+      : { type: "act", act: "pause", id, schedule, paused: input.change === "pause" }]);
+  }
   if (input.type === "dismiss-info") return output({ ...model, info: null });
   if (input.type === "send" && input.text.trim().startsWith("/")) return model.attachments.length
     ? output({ ...model, error: "Remove images before you use a command." }) : command(model, input);
   if (input.type === "fold" || input.type === "page") {
-    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "agent")), error: null };
+    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "agent" || request.read === "when")), error: null };
     if (input.type === "fold") next.folded = !model.folded;
-    else { next.page = input.page; if (input.page === "tree") next.agent = null; }
+    else { next.page = input.page; if (input.page !== "chat") next.agent = null; }
     const refreshed = next.folded || next.page === "tree" ? requestRoots(next) : next;
     return output(refreshed, [], [...refreshed.reads.values()]);
   }
@@ -272,10 +306,32 @@ export const COMMANDS: Command[] = [
   { name: "/speed", hint: "[normal|fast]", description: "Show speeds, or select one." },
   { name: "/fold", hint: "", description: "Fold or unfold the chat." },
   { name: "/tree", hint: "", description: "Open the memory tree." },
+  { name: "/schedule", hint: "<when and task>", description: "Preview a schedule, then accept it." },
+  { name: "/schedules", hint: "", description: "List the schedules." },
+  { name: "/unschedule", hint: "<id>", description: "Delete a schedule." },
+  { name: "/pause", hint: "<id>", description: "Pause a schedule." },
+  { name: "/resume", hint: "<id>", description: "Resume a paused schedule." },
+  { name: "/accept", hint: "<id>", description: "Accept a proposed schedule." },
   { name: "/reload", hint: "", description: "Read the server's config.json again." },
   { name: "/help", hint: "", description: "Show these commands." },
 ];
 export const HELP = COMMANDS.map((command) => `${command.name}${command.hint ? " " + command.hint : ""}  ${command.description}`).join("\n");
+
+export function clientZone(): string { return Intl.DateTimeFormat().resolvedOptions().timeZone; }
+
+// "Mon 08:30" in the zone, with the date when the time is more than a week away.
+export function fireTime(iso: string, zone: string = clientZone(), now: number = Date.now()): string {
+  const at = new Date(iso);
+  const far = Math.abs(at.getTime() - now) > 6 * 864e5;
+  const part = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, ...options }).format(at);
+  return `${far ? part({ day: "numeric", month: "short" }) : part({ weekday: "short" })} ${part({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`;
+}
+
+export function describeWhen(when: When): string {
+  return when.kind === "cron" ? `cron "${when.expr}" ${when.zone}` : `once ${fireTime(when.at)}`;
+}
+
+export function runLabel(run: ScheduleSpec["run"]): string { return run === "turn" ? "turn" : "subagent"; }
 
 function skill(model: Model, name: string): Skill | undefined {
   return COMMANDS.some((command) => command.name === name) ? undefined : model.skills.find((skill) => "/" + skill.name === name);
@@ -315,6 +371,26 @@ export function cacheShare(usage: Usage | null): number | null {
   return usage && inputTokens(usage) > 0 ? usage.cacheRead / inputTokens(usage) : null;
 }
 
+// A schedule named by its id, or by its number in /schedules.
+function scheduleFor(model: Model, name: string): ScheduleView | undefined {
+  const listed = liveSchedules(model);
+  return listed.find((schedule) => schedule.id === name) ?? listed[Number(name) - 1];
+}
+
+function liveSchedules(model: Model): ScheduleView[] { return model.schedules.filter((schedule) => schedule.phase !== "cancelled"); }
+
+export function scheduleLine(schedule: ScheduleView): string {
+  const zone = schedule.when.kind === "cron" ? schedule.when.zone : undefined;
+  const next = schedule.next[0] ? `, next ${fireTime(schedule.next[0], zone)}` : "";
+  const by = schedule.author === "membr" ? ", by membr" : "";
+  return `${describeWhen(schedule.when)}  ${schedule.phase}, ${runLabel(schedule.run)}${by}${next}  ${schedule.text}`;
+}
+
+function listSchedules(model: Model): string {
+  const listed = liveSchedules(model);
+  return listed.length ? listed.map((schedule, index) => `${index + 1}. ${schedule.id}  ${scheduleLine(schedule)}`).join("\n") : "No schedules.";
+}
+
 function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnType<typeof act> {
   const text = input.text.trim();
   const name = text.split(/\s+/, 1)[0];
@@ -343,6 +419,16 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
       return argument === "normal" || argument === "fast" ? act(model, { type: "pick", id: input.id, change: { fast: argument === "fast" } }) : fail("Choose a speed: normal, fast.");
     case "/fold": return argument ? fail("Use /fold without an argument.") : act(model, { type: "fold" });
     case "/tree": return argument ? fail("Use /tree without an argument.") : act(model, { type: "page", page: "tree" });
+    case "/schedule": return argument ? act(model, { type: "schedule-preview", id: input.id, text: argument, zone: clientZone() }) : fail("Use /schedule <when and task>.");
+    case "/schedules": return argument ? fail("Use /schedules without an argument.") : info(listSchedules(model));
+    case "/unschedule":
+    case "/pause":
+    case "/resume":
+    case "/accept": {
+      const target = scheduleFor(model, argument);
+      if (!target) return fail(`Use ${name} <id>. Use /schedules to see the ids.`);
+      return act(model, { type: "schedule-act", id: input.id, schedule: target.id, change: name === "/unschedule" ? "unschedule" : name.slice(1) as "accept" | "pause" | "resume" });
+    }
     case "/reload": return argument ? fail("Use /reload without an argument.") : post(model, [{ type: "act", act: "reload", id: input.id }]);
     case "/help": return argument ? fail("Use /help without an argument.") : info(model.skills.length ? `${HELP}\n\nSkills: ${model.skills.length}. Type / and a name to find one.` : HELP);
     default: return skill(model, name) ? post(model, [{ type: "act", act: "say", id: input.id, text }]) : fail(`Unknown command ${name}. Use /help.`);

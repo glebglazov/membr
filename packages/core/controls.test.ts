@@ -147,7 +147,7 @@ test("a skill command goes to the agent as typed, and membr commands keep their 
   expect(act(model, { type: "send", id: "s", text: "  /pdf report.pdf  " }).acts).toEqual([{ type: "act", act: "say", id: "s", text: "/pdf report.pdf" }]);
   expect(act(model, { type: "send", id: "h", text: "/help" }).acts).toEqual([]);
   expect(act(model, { type: "send", id: "u", text: "/nope" }).model.error).toBe("Unknown command /nope. Use /help.");
-  expect(complete(model, "/p").map((c) => c.name)).toEqual(["/pdf", "/pstack:poteto-mode", "/stop", "/speed", "/help"]);
+  expect(complete(model, "/p").map((c) => c.name)).toEqual(["/pause", "/pdf", "/pstack:poteto-mode", "/stop", "/speed", "/accept", "/help"]);
   expect(complete(model, "/poteto").map((c) => c.name)).toEqual(["/pstack:poteto-mode"]);
   expect(complete(model, "/pdf x")).toEqual([]);
   expect(complete(model, "/").filter((c) => c.name === "/help")).toHaveLength(1);

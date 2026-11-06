@@ -43,7 +43,8 @@ The server reads `config.json` in the data directory. All keys are optional:
 {
   "home": "~/Documents/vault",
   "rules": "~/.membr/rules.md",
-  "after": "git -C ~/Documents/vault commit -qam membr || true"
+  "after": "git -C ~/Documents/vault commit -qam membr || true",
+  "approvalTimeout": "10m"
 }
 ```
 
@@ -54,6 +55,11 @@ The server reads `config.json` in the data directory. All keys are optional:
 - `rules` is a file. The server adds its text after the system prompt. A
   relative path starts at the data directory.
 - `after` is a shell command. The server runs it after each turn.
+- `approvalTimeout` is how long a scheduled run waits for an approval. After
+  that time, membr denies the tool call and writes a note in the chat. Write a
+  number and a unit: `90s`, `10m` or `2h`. The default is `10m`, and the
+  maximum is `24h`. An approval in a turn that you started waits until you
+  answer it.
 
 `membr serve --home PATH` and the `MEMBR_HOME` variable also set the home. The
 `--home` flag comes first, then `MEMBR_HOME`, then the file. `MEMBR_RULES` and
@@ -81,6 +87,38 @@ turn starts in a new epoch. If a turn makes the epoch too large for the model,
 the turn fails with "Prompt is too long". membr then starts a new epoch and
 writes a note in the chat. Send the message again. membr does not send it
 again for you, because the turn's tool calls would run a second time.
+
+## Schedule runs
+
+A schedule starts a run at a set time, one time or again and again, when
+nobody is at the screen. Type `/schedule` and the time and the task in plain
+words:
+
+```
+/schedule every weekday 8:30 read the inbox notes and write a summary
+```
+
+membr finds the time words, and shows the cron and the time zone of your client
+and the next three fire times. Press `a` in the terminal, or Accept on the web,
+to keep the schedule. The task is your own words without the time words. A
+fire sends it as your message, word for word.
+
+- The web client has a Schedules page next to Chat and Memory. It can preview,
+  accept, pause, resume and delete schedules. You can also set two options on
+  it. "Run as" is a subagent (the default) or a turn in the main chat. "If
+  missed" is "once" (the default) or "skip".
+- `/schedules` lists the schedules. `/pause`, `/resume`, `/unschedule` and
+  `/accept` take an id or a number from that list.
+- A subagent run sends its report to the chat. A turn waits until the current
+  turn ends. Fires of one schedule that come while the chat is busy become one
+  run.
+- If the server did not run at a fire time, or the Mac was asleep, "once" runs
+  the newest missed fire one time, and a note says that it is late. "skip"
+  writes a note and does not run it.
+- The agent can propose a schedule with its `schedule` tool. It does not run
+  until you accept it, and its fires come as membr's messages, not as yours.
+  The agent can cancel only its own schedules.
+- Fires happen only while the server runs. See the next section.
 
 ## Run membr as a service
 
@@ -251,6 +289,29 @@ server's harness, each with `name`, `description` and `argumentHint`:
 The server sends the event again when the list changes. Each event replaces the
 earlier list. To run a skill, send a `say` act whose text starts with `/name`.
 The server sends that text to the agent as it is, with no notes added.
+
+Before `ready`, the server also sends a `schedules` event, and it sends the
+event again after each change and each fire. Each event replaces the earlier
+list. A schedule has `id`, `text`, `when` (`{"kind":"once","at":ISO}` or
+`{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"}`), `run`,
+`missed`, `author`, `phase`, `since`, `next` (up to three ISO times) and
+`last`. To turn plain words into a `when`, send a `when` read with the
+client's time zone:
+
+```json
+{"type":"read","id":"when-1","read":"when","text":"every weekday 8:30 read the notes","zone":"Europe/London"}
+```
+
+The answer is a `when` event with the same id, the `when`, the task `text`
+without the time words, and `next`. A text that membr cannot read gets an
+`error` event with that id. Four acts change schedules:
+
+```json
+{"type":"act","id":"s-1","act":"schedule","schedule":{"text":"read the notes","when":{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"},"run":"agent","missed":"once"}}
+{"type":"act","id":"s-2","act":"accept","schedule":"k3x9q2"}
+{"type":"act","id":"s-3","act":"pause","schedule":"k3x9q2","paused":true}
+{"type":"act","id":"s-4","act":"unschedule","schedule":"k3x9q2"}
+```
 
 Reads use their own request ids:
 

@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Box, Text, useInput, usePaste, useWindowSize } from "ink";
-import { answering, complete, type Model } from "@membr/core";
+import { answering, complete, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
 import { EMPTY_COMPOSER, edit, insert, layout, type Composer } from "./composer.ts";
 import { newId, type Session } from "./session.ts";
 import { status, transcript, wrap, type Line, type Tone } from "./transcript.ts";
@@ -24,6 +24,19 @@ function approvalLines(model: Model, width: number): Line[] {
   ];
 }
 
+function previewLines(model: Model, width: number): Line[] {
+  const proposal = model.preview?.proposal;
+  if (!model.preview) return [];
+  if (!proposal) return [{ text: "Reading the time...", tone: "dim" }];
+  const zone = proposal.when.kind === "cron" ? proposal.when.zone : undefined;
+  const next = proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}.` : "It does not fire again.";
+  const waiting = [...model.pending.values()].some((request) => request.act === "schedule");
+  return [
+    ...wrap(`Proposed: ${describeWhen(proposal.when)}, as a ${runLabel("agent")}.`, width).map((text): Line => ({ text, tone: "warn" })),
+    ...wrap(`${next}${waiting ? "" : "  [a] accept  [d] delete"}`, width).map((text): Line => ({ text, tone: waiting ? "dim" : "warn" })),
+  ];
+}
+
 export function App({ session }: { session: Session }): ReactElement {
   const model = useSyncExternalStore(session.subscribe, session.model);
   const size = useWindowSize();
@@ -39,14 +52,15 @@ export function App({ session }: { session: Session }): ReactElement {
     ...model.info ? wrap(model.info, columns).map((text): Line => ({ text, tone: "info" })) : [],
     ...model.error ? wrap(model.error, columns).map((text): Line => ({ text, tone: "error" })) : [],
   ];
-  const approvals = approvalLines(model, columns);
-  const composerLines = approval ? [] : layout(composer, columns - 2);
+  const proposal = model.preview?.proposal ?? null;
+  const approvals = [...approvalLines(model, columns), ...previewLines(model, columns)];
+  const composerLines = approval || proposal ? [] : layout(composer, columns - 2);
   const cursorRow = composerLines.findIndex((line) => line.cursor);
   const firstRow = Math.max(0, Math.min(cursorRow - COMPOSER_ROWS + 1, composerLines.length - COMPOSER_ROWS));
   const shownComposer = composerLines.slice(firstRow, firstRow + COMPOSER_ROWS);
   const menuFirst = Math.max(0, Math.min(composer.pick - MENU_ROWS + 1, menu.length - MENU_ROWS));
   const shownMenu = menu.slice(menuFirst, menuFirst + MENU_ROWS);
-  const bottom = notices.length + approvals.length + (approval ? 1 : 0) + 1 + shownMenu.length + shownComposer.length;
+  const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 1 + shownMenu.length + shownComposer.length;
   const height = Math.max(3, rowsHigh - 1 - bottom);
   const lines = transcript(model, columns);
   const maxScroll = Math.max(0, lines.length - height);
@@ -77,11 +91,16 @@ export function App({ session }: { session: Session }): ReactElement {
       if (choice) session.input({ type: "answer", id: newId(), approval: first.id, choice });
       return;
     }
+    if (current.preview?.proposal) {
+      if (input === "a") session.input({ type: "schedule-accept", id: newId() });
+      else if (input === "d") session.input({ type: "schedule-discard" });
+      return;
+    }
     const result = edit(composer, { input, ...key }, complete(current, composer.text));
     if (result.submit === null) return setComposer(result.composer);
     if (!send(result.submit)) setComposer(result.composer);
   });
-  usePaste((text) => { if (!approval) setComposer((previous) => insert(previous, text)); });
+  usePaste((text) => { if (!approval && !proposal) setComposer((previous) => insert(previous, text)); });
 
   const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] }, line.text || " ");
   return h(Box, { flexDirection: "column" },
@@ -93,5 +112,5 @@ export function App({ session }: { session: Session }): ReactElement {
       `${command.name}${command.hint ? " " + command.hint : ""}`.padEnd(24) + " " + command.description)),
     ...shownComposer.map((line, index) => h(Text, { key: index }, index + firstRow === 0 ? "> " : "  ", line.before,
       line.cursor ? h(Text, { inverse: true }, line.at) : null, line.after)),
-    approval ? h(Text, { dimColor: true }, "Answer the approval above. Esc stops the turn.") : null);
+    approval || proposal ? h(Text, { dimColor: true }, approval ? "Answer the approval above. Esc stops the turn." : "Accept or delete the schedule above.") : null);
 }

@@ -192,6 +192,23 @@ button.send { width: 34px; height: 34px; padding: 0; border-radius: 50%; backgro
 .attachments > div { flex: 0 0 110px; display: grid; gap: 4px; }
 .attachments img { width: 110px; height: 82px; margin: 0; object-fit: cover; }
 
+/* Schedules */
+.schedules { display: flex; flex-direction: column; gap: 14px; }
+.schedule-form { display: flex; gap: 8px; }
+.schedule-form input { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; }
+.schedule, .schedule-preview { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.schedule-preview { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+footer > .schedule-preview { margin-bottom: 10px; }
+.schedule p, .schedule-preview p { margin: 0; overflow-wrap: anywhere; }
+.schedule-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.schedule-when { font: 600 13px/1.4 var(--mono); }
+.phase { flex: none; padding: 2px 8px; border-radius: 999px; background: var(--block); color: var(--mid); font-size: 12px; }
+.phase.active { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ink); }
+.phase.proposed { background: color-mix(in srgb, var(--busy) 20%, transparent); color: var(--ink); }
+.schedule.paused, .schedule.done { opacity: .75; }
+.schedule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.schedule-actions label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--mid); }
+
 @media (max-width: 600px) {
   header { gap: 10px; padding-top: 10px; padding-bottom: 10px; }
   h1 { font-size: 20px; }

@@ -103,7 +103,7 @@ test("a lost connection shows offline, then reconnects and resends the pending a
 });
 
 test("composer keys: newline variants, backslash continuation, paste, and menu navigation", () => {
-  const model = hear(createModel(), { type: "skills", skills: [{ name: "plan", description: "Plan", argumentHint: "" }] });
+  const model = hear(createModel(), { type: "skills", skills: [{ name: "quest", description: "Quest", argumentHint: "" }] });
   let composer = insert(EMPTY_COMPOSER, "a");
   composer = edit(composer, { input: "", return: true, shift: true }, []).composer;
   composer = edit(composer, { input: "b" }, []).composer;
@@ -113,14 +113,58 @@ test("composer keys: newline variants, backslash continuation, paste, and menu n
   expect(composer.text).toBe("a\nb\nc\n");
   expect(edit(composer, { input: "", return: true }, []).submit).toBe("a\nb\nc\n");
 
-  composer = insert(EMPTY_COMPOSER, "/p");
+  composer = insert(EMPTY_COMPOSER, "/qu");
   const menu = complete(model, composer.text);
-  expect(menu[0].name).toBe("/plan");
-  expect(edit(composer, { input: "", tab: true }, menu).composer.text).toBe("/plan ");
+  expect(menu[0].name).toBe("/quest");
+  expect(edit(composer, { input: "", tab: true }, menu).composer.text).toBe("/quest ");
 });
 
 test("membr term accepts the sign-in link that membr serve prints", async () => {
   const { socketUrl } = await import("../src/run.ts");
   expect(socketUrl("https://host.ts.net:8788/?token=abc")).toEqual({ url: "wss://host.ts.net:8788/ws", token: "abc" });
   expect(socketUrl("ws://127.0.0.1:8788/ws")).toEqual({ url: "ws://127.0.0.1:8788/ws", token: null });
+});
+
+
+test("/schedule shows the proposal in words, a accepts it, and /schedules lists it", async () => {
+  const engine = new FakeEngine();
+  engine.onWhen = async () => ({ when: { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" }, phrase: "every weekday 8:30" });
+  const { session, screen } = await open(engine);
+  await until(() => frame(screen).includes("Ready"), "ready");
+  await type(screen, "/schedule every weekday 8:30 read the inbox notes");
+  screen.stdin.write("\r");
+  await until(() => frame(screen).includes('Proposed: cron "30 8 * * 1-5" Europe/London, as a subagent.') && frame(screen).includes("[a] accept  [d] delete"), "the proposal");
+  expect(frame(screen)).toMatch(/Next: \w{3} 08:30, \w{3} 08:30, \w{3} 08:30\./);
+  expect(engine.whens[0].text).toBe("every weekday 8:30 read the inbox notes");
+  screen.stdin.write("a");
+  await until(() => !frame(screen).includes("[a] accept"), "the proposal to close");
+  await type(screen, "/schedules");
+  screen.stdin.write("\r");
+  await until(() => frame(screen).includes("1. "), "the numbered list");
+  expect(session.model().info).toMatch(/^1\. \w+  cron "30 8 \* \* 1-5" Europe\/London  active, subagent/);
+});
+
+test("d drops a proposal and nothing is scheduled; /pause and /resume act on a listed schedule", async () => {
+  const engine = new FakeEngine();
+  engine.onWhen = async () => ({ when: { kind: "cron", expr: "0 9 * * *", zone: "UTC" }, phrase: "daily at 9" });
+  const { session, screen } = await open(engine);
+  await until(() => frame(screen).includes("Ready"), "ready");
+  await type(screen, "/schedule daily at 9 check mail");
+  screen.stdin.write("\r");
+  await until(() => frame(screen).includes("[d] delete"), "the proposal");
+  screen.stdin.write("d");
+  await until(() => !frame(screen).includes("[d] delete"), "the proposal to close");
+  expect(session.model().schedules).toEqual([]);
+
+  await type(screen, "/schedule daily at 9 check mail");
+  screen.stdin.write("\r");
+  await until(() => frame(screen).includes("[a] accept"), "the proposal");
+  screen.stdin.write("a");
+  await until(() => session.model().schedules.length === 1, "the schedule");
+  await type(screen, "/pause 1");
+  screen.stdin.write("\r");
+  await until(() => session.model().schedules[0].phase === "paused", "the pause");
+  await type(screen, "/resume 1");
+  screen.stdin.write("\r");
+  await until(() => session.model().schedules[0].phase === "active", "the resume");
 });
