@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { VERSION, parseClientMessage, type ClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
+import { VERSION, isScheduleAct, parseClientMessage, type ClientMessage, type Event, type Hello, type Read } from "@membr/protocol";
 import { Log, identity } from "./log.ts";
 import { Epochs } from "./epochs.ts";
 import { Chat } from "./chat.ts";
@@ -13,12 +13,13 @@ import { web } from "./web.ts";
 import { imagePath, IMAGE_COUNT, storeImage } from "./images.ts";
 import { cleanupEpochs } from "./export-cleanup.ts";
 import { access, admit, type Admitted } from "./access.ts";
+import type { Clock } from "./clock.ts";
 
 type Connection = { phase: "hello"; access: Admitted } | { phase: "ready"; hello: Hello };
 type Socket = ServerWebSocket<Connection>;
 
 // config is called at start and again on each reload.
-export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: () => ChatConfig }) {
+export function serveHub(options: { dir: string; port: number; hostname?: string; engine?: Engine; epoch?: Partial<EpochOptions>; config?: () => ChatConfig; clock?: Clock }) {
   const log = new Log(options.dir);
   const epochs = new Epochs(options.dir);
   let tree: Tree | undefined;
@@ -48,6 +49,10 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     if (request.read === "roots" || request.read === "root") {
       const lines = memory.roots();
       send(socket, { type: "read", id: request.id, entries: [], parts: lines.map(({ l, i }) => ({ l, i })), lines });
+      return;
+    }
+    if (request.read === "when") {
+      send(socket, await chat!.schedules.preview(request));
       return;
     }
     const opened = memory.browse(request.part);
@@ -140,12 +145,13 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
             if (chat!.live) send(socket, { type: "live", text: chat!.live, agent: null });
             send(socket, { type: "imports", imports: imports!.status });
             send(socket, chat!.skills);
+            send(socket, chat!.schedules.event);
             send(socket, { type: "ready", version: VERSION });
             return;
           }
           if (message.type === "hello") return refuse(socket, "Hello was already received");
           if (message.type === "read") return await read(socket, message);
-          send(socket, message.act === "import" || message.act === "go" ? await imports!.act(message) : chat!.act(message));
+          send(socket, isScheduleAct(message) ? chat!.schedules.act(message) : message.act === "import" || message.act === "go" ? await imports!.act(message) : chat!.act(message));
         } catch (error) {
           const reason = error instanceof Error ? error.message : "Request failed";
           if (socket.data.phase === "hello") refuse(socket, reason);
@@ -162,7 +168,7 @@ export function serveHub(options: { dir: string; port: number; hostname?: string
     chat = new Chat(log, epochs, tree, memory, options.dir, (event) => {
       if (event.type === "entry") tree?.sync();
       for (const client of sockets) send(client, event);
-    }, options.engine, options.epoch, options.config ?? (() => readConfig(options.dir)));
+    }, options.engine, options.epoch, options.config ?? (() => readConfig(options.dir)), options.clock);
     imports = new Imports(log, tree, (event) => { for (const client of sockets) send(client, event); }, (entries) => chat!.imported(entries));
     tree.onChange = () => imports?.changed();
   } catch (error) {

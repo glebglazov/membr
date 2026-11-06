@@ -296,6 +296,14 @@ describe.skipIf(!REAL)("S3 engine contract", () => {
     expect(one).toBeTruthy();
     expect(errors).toEqual([]);
   }, 60 * MINUTE);
+
+  test("9. when reads a weekday cron and its time words", async () => {
+    const text = "every weekday 8:30 read the inbox notes";
+    const guess = await claude.when(text, "Europe/London", new Date("2026-11-06T12:00:00Z"));
+    console.log(JSON.stringify(guess));
+    expect(guess.when).toEqual({ kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" });
+    expect(guess.phrase).toBe("every weekday 8:30");
+  }, MINUTE);
 });
 
 // the Claude Code binary the SDK runs, for the control in check 3

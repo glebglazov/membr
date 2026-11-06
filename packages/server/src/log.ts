@@ -3,17 +3,19 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import { parseEntry, parseEvent, parsePick, type Act, type Answer, type Entry, type Pick, type ImportEstimate, type ImportMark } from "@membr/protocol";
+import { parseEntry, parseEvent, parseFired, parsePick, parseSchedule, type Act, type Answer, type Entry, type Fired, type Pick, type ImportEstimate, type ImportMark, type Schedule, type ScheduleAct } from "@membr/protocol";
 import { syncDirectory } from "./durable.ts";
 import { Journal } from "./journal.ts";
 
 type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
 type SavedGoal = { revision: number; value: string | null };
+type SavedSchedule = { revision: number; value: Schedule };
+export type FireRecord = { schedule: string; at: string; result: Fired["result"] };
 export type AllowRule = { tool: string; input: Record<string, unknown> };
 type ImportRun = { paused: boolean; estimate: ImportEstimate };
 type ImportControl = { id: string; value: ImportRun };
-type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl };
+type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl; schedule?: SavedSchedule; fire?: FireRecord };
 
 export function identity(dir: string, name: string): string {
   const file = path.join(dir, name);
@@ -49,6 +51,9 @@ export class Log {
   private readonly allowed: AllowRule[] = [];
   private savedPick: SavedPick | null = null;
   private savedGoal: SavedGoal = { revision: 0, value: null };
+  private readonly revisions = new Map<string, number>();
+  private readonly saved = new Map<string, Schedule>();
+  private readonly fired = new Map<string, Fired>();
 
   constructor(dir: string) {
     fs.mkdirSync(dir, { recursive: true });
@@ -93,6 +98,17 @@ export class Log {
         const parsed = parseEvent({ type: "import-estimate", id: control.id, estimate: run.estimate });
         if (parsed.type === "import-estimate") this.importRuns.set(control.id, { paused: run.paused, estimate: parsed.estimate });
       }
+      if ("schedule" in raw) {
+        const saved = raw.schedule;
+        if (saved === null || typeof saved !== "object" || !("revision" in saved) || typeof saved.revision !== "number" || !Number.isSafeInteger(saved.revision) || saved.revision < 1 || !("value" in saved)) throw new Error(`Invalid schedule in ${file}`);
+        if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid schedule in ${file}`);
+        this.rememberSchedule({ revision: saved.revision, value: parseSchedule(saved.value) });
+      }
+      if ("fire" in raw) {
+        const fire = raw.fire;
+        if (!("act" in raw) || fire === null || typeof fire !== "object" || !("schedule" in fire) || typeof fire.schedule !== "string" || !fire.schedule || !("at" in fire) || !("result" in fire)) throw new Error(`Invalid fire in ${file}`);
+        this.rememberFire(fire.schedule, parseFired({ at: fire.at, result: fire.result, entry: "i" in raw ? raw.i : null }));
+      }
       if ("i" in raw) {
         const entry = parseEntry(raw);
         this.rememberImport(entry);
@@ -132,6 +148,17 @@ export class Log {
     return answer;
   }
 
+  private rememberSchedule({ revision, value }: SavedSchedule): void {
+    if (revision <= (this.revisions.get(value.id) ?? 0)) return;
+    this.revisions.set(value.id, revision);
+    this.saved.set(value.id, value);
+  }
+
+  private rememberFire(schedule: string, fired: Fired): void {
+    const last = this.fired.get(schedule);
+    if (!last || Date.parse(fired.at) >= Date.parse(last.at)) this.fired.set(schedule, fired);
+  }
+
   private rememberImport(entry: Entry): void {
     const mark = entry.imported;
     if (!mark) return;
@@ -149,6 +176,8 @@ export class Log {
   get allows(): readonly AllowRule[] { return this.allowed; }
   get pick(): Pick | null { return this.savedPick?.value ?? null; }
   get goal(): SavedGoal { return this.savedGoal; }
+  get schedules(): ReadonlyMap<string, Schedule> { return this.saved; }
+  lastFire(schedule: string): Fired | undefined { return this.fired.get(schedule); }
 
   read(i: number): Entry | null {
     const raw = this.journal.read(i);
@@ -179,6 +208,31 @@ export class Log {
       : { type: "answer", id: act.id, ok: false, reason: refusal ?? `Act ${act.act} is not available yet` };
     this.write({ ...entry, act: act.id, ans: answer, ...(pick ? { pick } : {}), ...(goal ? { goal } : {}), ...(allow ? { allow } : {}), ...(entry && act.act === "say" ? { turn: { id: turn, phase: "running" } } : {}) });
     return { answer, entry, fresh: true };
+  }
+
+  // value is the schedule after the change. A refused act records its refusal and saves nothing, so a retry gets the same answer.
+  saveSchedule(value: Schedule | null, act: ScheduleAct | null, options: { refusal?: string; note?: string } = {}): { answer: Answer | null; entry: Entry | null; fresh: boolean } {
+    this.journal.check();
+    const previous = act && this.answers.get(act.id);
+    if (previous) return { answer: previous, entry: null, fresh: false };
+    const saved = value && !options.refusal ? { revision: (this.revisions.get(value.id) ?? 0) + 1, value } : undefined;
+    const entry = saved && options.note !== undefined ? this.entry("note", options.note) : null;
+    const answer: Answer | null = act === null ? null : saved
+      ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
+      : { type: "answer", id: act.id, ok: false, reason: options.refusal ?? `Act ${act.act} saved no schedule` };
+    this.write({ ...entry, ...(act && answer ? { act: act.id, ans: answer } : { event: crypto.randomUUID() }), ...(saved ? { schedule: saved } : {}) });
+    return { answer, entry, fresh: true };
+  }
+
+  // The act id schedule-<id>-<at ms> makes a fire answer once, so answers dedupes it, also after a restart. A turn the entry opens is finished by the interrupted sweep.
+  fire(record: FireRecord, entry: { kind: "user" | "note"; text: string } | null, opensTurn: boolean): Entry | null {
+    this.journal.check();
+    const id = `schedule-${record.schedule}-${Date.parse(record.at)}`;
+    if (this.answers.has(id)) return null;
+    const written = entry && { ...this.entry(entry.kind, entry.text), ...(opensTurn ? { scheduled: { schedule: record.schedule, late: record.result === "late" } } : {}) };
+    const answer: Answer = { type: "answer", id, ok: true, entry: written?.i ?? null };
+    this.write({ ...written, act: id, ans: answer, fire: record, ...(written && opensTurn ? { turn: { id: written.i, phase: "running" } } : {}) });
+    return written;
   }
 
   append(kind: Entry["kind"], text: string): Entry {
@@ -232,6 +286,8 @@ export class Log {
     if (record.pick) this.savedPick = record.pick;
     if (record.goal) this.savedGoal = record.goal;
     if (record.importRun) this.importRuns.set(record.importRun.id, record.importRun.value);
+    if (record.schedule) this.rememberSchedule(record.schedule);
+    if (record.fire) this.rememberFire(record.fire.schedule, { at: record.fire.at, result: record.fire.result, entry: entry?.i ?? null });
     if (entry) {
       this.rememberImport(entry);
       this.seq++;

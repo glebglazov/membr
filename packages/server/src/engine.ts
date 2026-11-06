@@ -9,9 +9,10 @@
 import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SlashCommand, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentTools } from "./agents.ts";
+import type { ScheduleTools } from "./schedules.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
-import type { Skill } from "@membr/protocol";
+import { parseScheduleSpec, parseWhen, type Skill, type When } from "@membr/protocol";
 
 declare const MEMBR_STANDALONE: boolean | undefined;
 
@@ -34,6 +35,7 @@ export type EpochOptions = {
   ask?: Ask;
   memory?: MemoryTools;
   agents?: AgentTools;
+  schedules?: ScheduleTools;
 };
 
 // `now` interrupts the running turn; `next` reaches it between tool calls
@@ -93,12 +95,24 @@ export interface Engine {
   // one line, or null when the model gives none
   compact(prompt: string): Promise<string | null>;
   checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean>;
+  // the time words of a text as a When, and those exact words; throws on an answer it cannot read
+  when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }>;
   account(): Promise<Account>;
   deleteSession(session: string, cwd?: string): Promise<void>;
 }
 
 // Ported from UniiChat Server.ts at 0500bf6 (Apache-2.0).
 const GOAL = "You check a goal. Below is a chat between a user and Unii, an AI agent: its older messages as summary lines (id+n|text), then its latest messages whole, then the goal the user set with /goal. Answer yes if the chat shows the goal fully satisfied now, else no. Write that one word, nothing else.";
+
+const WHEN = `You read a time out of a user's words. The text holds a time phrase and a task. Answer with JSON only, with no other text and no code fence:
+
+{"phrase": "<the exact time words, copied from the text>", "when": {"kind": "cron", "expr": "<5-field cron>", "zone": "<zone>"} | {"kind": "once", "at": "<ISO instant, written with Z>"}}
+
+Use "cron" for a time that repeats and "once" for one time. Read every time in the zone you are given, and write the cron in that zone. Work out a once time from the current time you are given. The phrase holds only the words that name the time, never the task.`;
+
+// Cron and Schedule tools of Claude Code keep their jobs in the session or in a file membr never reads,
+// so membr's own schedule tool is the only one.
+export const DISALLOWED_TOOLS = ["Agent", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger"];
 
 // ported from UniiChat (commit 0500bf6, Apache-2.0): the compaction part of
 // UniiChat's prompt.txt, word for word
@@ -199,10 +213,34 @@ function message(text: string, priority: Priority, from: From, images: Image[] =
   };
 }
 
+const whenShape = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("once"), at: z.string().describe("an ISO instant, written with Z") }),
+  z.object({ kind: z.literal("cron"), expr: z.string().describe("5 fields: minute hour day-of-month month day-of-week"), zone: z.string().describe("an IANA zone name, such as Europe/Madrid") }),
+]);
+
+// The boundary of the model's input: create needs text and when, and the protocol parser is the one validator.
+// An error comes back as text, so the model can correct itself.
+export function scheduleTool(schedules: ScheduleTools) {
+  return tool("schedule", "Create, list or cancel the user's schedules. create only proposes one: it runs after the user accepts it in a client. Its fires come to you as [membr] messages, not as the user. Give when as a 5-field cron with an IANA zone, or as a one-time ISO instant. run \"agent\" (the default) starts a subagent at that time, and \"turn\" starts a turn of yours. missed says what to do if membr was not running then: \"once\" runs it late, \"skip\" drops it. cancel works only on schedules you proposed: for the user's own, ask the user to run /unschedule.",
+    { action: z.enum(["create", "list", "cancel"]), text: z.string().optional().describe("the task, for create"), when: whenShape.optional().describe("for create"), run: z.enum(["turn", "agent"]).optional(), missed: z.enum(["skip", "once"]).optional(), id: z.string().optional().describe("for cancel") },
+    async ({ action, text, when, run, missed, id }) => {
+      try {
+        if (action === "cancel" && !id) throw new Error("cancel needs an id.");
+        const answer = action === "list" ? schedules.list()
+          : action === "cancel" ? schedules.cancel(id!)
+          : schedules.create(parseScheduleSpec({ text, when, run: run ?? "agent", missed: missed ?? "once" }));
+        return { content: [{ type: "text" as const, text: answer }] };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
+      }
+    });
+}
+
 function open(view: string, options: EpochOptions): Epoch {
   const inbox = new Inbox();
   const memory = options.memory;
   const agents = options.agents;
+  const schedules = options.schedules;
   const mcpServers = memory ? { memory: createSdkMcpServer({ name: "memory", version: "1", tools: [
     tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
       const answer = memory.zoom(id, n, at);
@@ -213,6 +251,7 @@ function open(view: string, options: EpochOptions): Epoch {
       tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.object({ name: z.string(), task: z.string() })), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: agents.spawn(tasks, effort) }] })),
       tool("tell", "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it.", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: agents.tell(name, message) }] })),
     ] : []),
+    ...(schedules ? [scheduleTool(schedules)] : []),
   ] }) } : undefined;
   const readTools = memory ? ["mcp__memory__zoom", "mcp__memory__date"] : [];
   const session = query({
@@ -227,7 +266,7 @@ function open(view: string, options: EpochOptions): Epoch {
       settingSources: ["user", "project", "local"],
       settings: { autoCompactEnabled: false, fastMode: options.pick.fast },
       permissionMode: "auto",
-      disallowedTools: ["Agent"],
+      disallowedTools: DISALLOWED_TOOLS,
       mcpServers,
       includePartialMessages: true,
       persistSession: true,
@@ -480,6 +519,45 @@ async function checkGoal(goal: string, chat: string, signal: AbortSignal): Promi
   }
 }
 
+async function when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }> {
+  const inbox = new Inbox();
+  inbox.push(message(`Zone: ${zone}\nNow: ${now.toISOString()}\nText: ${text}`, "next", "membr"));
+  inbox.end();
+  const session = query({
+    prompt: inbox,
+    options: {
+      pathToClaudeCodeExecutable: CLI_PATH,
+      env: env(),
+      model: "haiku",
+      systemPrompt: WHEN,
+      tools: [],
+      settingSources: [],
+      persistSession: false,
+      maxTurns: 1,
+    },
+  });
+  try {
+    for await (const sdk of session) {
+      if (sdk.type !== "result") continue;
+      if (sdk.subtype !== "success" || sdk.is_error) throw new Error(`time reading failed: ${sdk.subtype === "success" ? sdk.result : sdk.errors.join("; ") || sdk.subtype}`);
+      return readWhen(sdk.result);
+    }
+    throw new Error("time reading ended with no result");
+  } finally {
+    session.close();
+  }
+}
+
+function readWhen(answer: string): { when: When; phrase: string } {
+  let json: unknown;
+  try { json = JSON.parse(answer.trim()); } catch { throw new Error(`The model did not answer with JSON: ${answer.slice(0, 200)}`); }
+  try {
+    const { phrase, when } = json as { phrase?: unknown; when?: unknown };
+    if (typeof phrase !== "string" || !phrase) throw new Error("no phrase");
+    return { phrase, when: parseWhen(when) };
+  } catch (error) { throw new Error(`The model's time reading is not usable: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
 // a session that sends no message, so it asks Claude Code about the login
 // without a model call
 async function account(): Promise<Account> {
@@ -500,7 +578,7 @@ async function account(): Promise<Account> {
   }
 }
 
-export const claude: Engine = { open, compact, checkGoal, account, async deleteSession(session, cwd) {
+export const claude: Engine = { open, compact, checkGoal, when, account, async deleteSession(session, cwd) {
   const sdk = await import("@anthropic-ai/claude-agent-sdk/core");
   await sdk.deleteSession(session, cwd ? { dir: cwd } : undefined);
 } };

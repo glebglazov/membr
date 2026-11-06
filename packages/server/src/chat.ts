@@ -10,9 +10,11 @@ import type { Epochs } from "./epochs.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import { pump } from "./pump.ts";
-import { next, turnId, busy, wait, refusal, canDelegate, canAsk, closed, type Turn, type Input, type Effect } from "./turn.ts";
+import { next, turnId, busy, wait, refusal, canDelegate, canAsk, closed, unattended, type Turn, type Input, type Effect } from "./turn.ts";
+import { Schedules, type Fire } from "./schedules.ts";
+import { type Clock, systemClock } from "./clock.ts";
 import type { Memory } from "./memory.ts";
-import type { ChatConfig } from "./config.ts";
+import { APPROVAL_TIMEOUT, type ChatConfig } from "./config.ts";
 import { IMAGE_COUNT, readImage, type Image } from "./images.ts";
 
 type Session = { id: string; epoch: Epoch; cwd: string };
@@ -21,6 +23,7 @@ const PICK: Pick = { model: "sonnet", effort: "high", fast: false };
 export class Chat {
   private readonly approvals: Approvals;
   readonly agents: Agents;
+  readonly schedules: Schedules;
   private readonly view: View;
   private turn: Turn = { phase: "idle", attempt: 0 };
   private halt = new AbortController();
@@ -37,24 +40,26 @@ export class Chat {
   private config: ChatConfig;
   private readonly defaults: { cwd: string; append: string };
 
-  constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly load: () => ChatConfig = () => ({ home: null, afterCommand: "", rulesText: "" })) {
-    this.approvals = new Approvals(log, emit);
+  constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private readonly load: () => ChatConfig = () => ({ home: null, afterCommand: "", rulesText: "", approvalTimeout: APPROVAL_TIMEOUT }), clock: Clock = systemClock) {
+    this.approvals = new Approvals(log, emit, () => this.config.approvalTimeout, (text) => this.record(this.log.append("note", text)), clock);
     this.config = load();
     this.defaults = { cwd: options.cwd ?? process.cwd(), append: options.append ?? PROMPT };
     this.options = { pick: PICK, ...options, ...this.harness(this.config), memory, ask: (tool, input, signal) => {
       if (!canAsk(this.turn)) return Promise.resolve(false);
-      return this.approvals.ask(tool, input, signal);
+      return this.approvals.ask(tool, input, signal, unattended(this.turn));
     } };
     if (log.pick) this.options.pick = log.pick;
     for (const turn of log.interrupted) log.finish(turn, "The server restarted before the turn ended.");
     this.view = new View(dir, log, tree, this.options.pick);
     this.options.pick = this.view.pick;
-    this.agents = new Agents(dir, engine, () => this.options, () => this.view.text(), this.approvals.ask, emit, () => this.change(), (text, stopped) => this.report(text, stopped));
+    this.agents = new Agents(dir, engine, () => this.options, () => this.view.text(), this.approvals.ask, emit, () => this.change(), (text, stopped, schedule) => this.report(text, stopped, schedule));
     memory.agents = this.agents;
     this.options.agents = {
-      spawn: (tasks, effort) => { this.canDelegate(); return this.agents.spawn(tasks, effort); },
+      spawn: (tasks, effort) => { this.canDelegate(); return this.agents.spawn(tasks, effort, unattended(this.turn)); },
       tell: (name, message) => { this.canDelegate(); return this.agents.tell(name, message); },
     };
+    this.schedules = new Schedules(log, engine, { fire: (fire) => this.fire(fire), record: (entry) => this.record(entry) }, emit, clock);
+    this.options.schedules = this.schedules.tools;
     tree.sync();
     this.knownImports = log.count;
     this.session = this.open();
@@ -157,6 +162,7 @@ export class Chat {
   }
 
   close(): Promise<void> {
+    this.schedules.close();
     this.run({ kind: "close" });
     return this.afterQueue;
   }
@@ -180,6 +186,7 @@ export class Chat {
   private reconfigure(config: ChatConfig): void {
     const before = this.harness(this.config), after = this.harness(config);
     this.config = config;
+    this.approvals.rearm();
     const changes = [...before.cwd !== after.cwd ? [`home is now ${after.cwd}`] : [], ...before.append !== after.append ? ["the rules changed"] : []];
     if (!changes.length) return;
     this.record(this.log.append("note", `Config reloaded: ${changes.join(", and ")}.`));
@@ -218,8 +225,30 @@ export class Chat {
     return names.length ? text + "\n\nAgents at work now: " + names.join(", ") + "." : text;
   }
 
-  private report(text: string, stopped: boolean): void {
-    try { this.run({ kind: "report", text, stopped }); }
+  // A run "turn" fire starts only from idle. A run "agent" fire waits while this schedule's last subagent works.
+  // The fire record and the entry that starts the run are one log line, so a fire is never written twice.
+  private fire(fire: Fire): "started" | "wait" {
+    const s = fire.schedule, at = new Date(fire.at).toISOString();
+    if (s.run === "turn" ? this.turn.phase !== "idle" : !canDelegate(this.turn) || this.agents.scheduled(s.id)) return "wait";
+    if (fire.late) this.record(this.log.append("note", `Schedule ${s.id} was due at ${at} and runs late.`));
+    const record = { schedule: s.id, at, result: fire.late ? "late" : "ran" } as const;
+    if (s.run === "agent") {
+      const entry = this.log.fire(record, { kind: "note", text: `Schedule ${s.id} started a subagent.` }, false);
+      if (entry) {
+        this.record(entry);
+        this.agents.spawn([{ name: "schedule-" + s.id, task: s.text, from: s.author, schedule: s.id }]);
+      }
+      return "started";
+    }
+    const entry = this.log.fire(record, { kind: s.author === "user" ? "user" : "note", text: s.text }, true);
+    if (!entry) return "started";
+    this.record(entry);
+    try { this.run({ kind: "start", input: { text: s.text, from: s.author, fire: { schedule: s.id } }, id: entry.i }); } catch (error) { this.fail(error); }
+    return "started";
+  }
+
+  private report(text: string, stopped: boolean, schedule?: string): void {
+    try { this.run({ kind: "report", text, stopped, ...schedule === undefined ? {} : { schedule } }); }
     catch (error) { this.fail(error); }
   }
 
@@ -334,7 +363,7 @@ export class Chat {
       case "continueGoal": this.run({ kind: "continued", entry: this.log.continueGoal(effect.text) }); break;
       case "work":
         this.record(this.log.work(effect.text, effect.id));
-        if (effect.id !== null) this.run({ kind: "start", input: { text: effect.text, from: "membr" }, id: effect.id });
+        if (effect.id !== null) this.run({ kind: "start", input: { text: effect.text, from: "membr", ...effect.fire ? { fire: effect.fire } : {} }, id: effect.id });
         break;
       case "closedAfterHook": this.afterQueue = this.afterQueue.then(() => this.run({ kind: "closed" })); break;
     }
@@ -351,5 +380,9 @@ export class Chat {
     }).catch((error) => console.error("after: " + (error instanceof Error ? error.message : String(error))));
   }
 
-  private change(): void { if (!this.state.busy) this.streaming = ""; this.emit({ type: "state", state: this.state }); }
+  private change(): void {
+    if (!this.state.busy) this.streaming = "";
+    this.emit({ type: "state", state: this.state });
+    this.schedules.poke();
+  }
 }

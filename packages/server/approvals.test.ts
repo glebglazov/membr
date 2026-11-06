@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Event } from "@membr/protocol";
+import { Approvals } from "./src/approvals.ts";
+import type { Clock } from "./src/clock.ts";
 import { serveHub } from "./src/hub.ts";
+import { Log } from "./src/log.ts";
 import { TestClient } from "./test/client.ts";
 import { FakeEngine } from "./test/engine.ts";
 
@@ -144,4 +148,99 @@ test("an already aborted request sends no ask", async () => {
   const late = await connect(hub);
   expect(client.events.filter((event) => event.type === "ask")).toHaveLength(0);
   expect(late.events.filter((event) => event.type === "ask")).toHaveLength(0);
+});
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+class FakeClock implements Clock {
+  time = 0;
+  private timers = new Map<number, { at: number; run: () => void }>();
+  private next = 0;
+  now() { return this.time; }
+  wake(ms: number, run: () => void) {
+    const id = this.next++;
+    this.timers.set(id, { at: this.time + ms, run });
+    return () => { this.timers.delete(id); };
+  }
+  advance(ms: number) {
+    const end = this.time + ms;
+    for (;;) {
+      const due = [...this.timers.entries()].filter(([, t]) => t.at <= end).sort(([, a], [, b]) => a.at - b.at)[0];
+      if (!due) break;
+      this.timers.delete(due[0]);
+      this.time = Math.max(this.time, due[1].at);
+      due[1].run();
+    }
+    this.time = end;
+  }
+}
+
+function limited(limit = 600_000) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-approvals-"));
+  dirs.push(dir);
+  const clock = new FakeClock(), notes: string[] = [], events: Event[] = [];
+  const state = { limit };
+  const approvals = new Approvals(new Log(dir), (event) => events.push(event), () => state.limit, (text) => notes.push(text), clock);
+  const settled = (promise: Promise<boolean>) => { const box: { value?: boolean } = {}; void promise.then((v) => { box.value = v; }); return box; };
+  return { approvals, clock, notes, events, state, settled };
+}
+
+test("an unattended ask is denied at the limit with a note, and an interactive ask keeps waiting", async () => {
+  const { approvals, clock, notes, events, settled } = limited();
+  const unattended = settled(approvals.ask("Bash", { command: "rm x" }, undefined, true));
+  const interactive = settled(approvals.ask("Bash", { command: "ls" }));
+  clock.advance(599_999);
+  await flush();
+  expect(unattended.value).toBeUndefined();
+  expect(notes).toEqual([]);
+  clock.advance(1);
+  await flush();
+  expect(unattended.value).toBe(false);
+  expect(notes).toEqual(["Nobody answered the approval for Bash within 10m, so membr denied it."]);
+  expect(events.filter((event) => event.type === "ask-closed")).toHaveLength(1);
+  clock.advance(10 * 3_600_000);
+  await flush();
+  expect(interactive.value).toBeUndefined();
+  expect(approvals.requests).toHaveLength(1);
+});
+
+test("an unattended ask answered in time is not denied later", async () => {
+  const { approvals, clock, notes, events, settled } = limited();
+  const decision = settled(approvals.ask("Read", { file_path: "/a" }, undefined, true));
+  const ask = events.find((event) => event.type === "ask")!;
+  approvals.answer({ type: "act", id: "x", act: "answer", approval: (ask as { id: string }).id, choice: "once" }, 0);
+  clock.advance(3_600_000);
+  await flush();
+  expect(decision.value).toBe(true);
+  expect(notes).toEqual([]);
+});
+
+test("a reload to a shorter limit denies an older unattended ask at once, and a longer one extends it", async () => {
+  const { approvals, clock, notes, state, settled } = limited();
+  const old = settled(approvals.ask("Bash", { command: "a" }, undefined, true));
+  clock.advance(300_000);
+  const fresh = settled(approvals.ask("Bash", { command: "b" }, undefined, true));
+  state.limit = 60_000;
+  approvals.rearm();
+  await flush();
+  expect(old.value).toBe(false);
+  expect(fresh.value).toBeUndefined();
+  expect(notes).toEqual(["Nobody answered the approval for Bash within 1m, so membr denied it."]);
+  clock.advance(60_000);
+  await flush();
+  expect(fresh.value).toBe(false);
+  expect(notes).toHaveLength(2);
+
+  state.limit = 600_000;
+  const extended = settled(approvals.ask("Bash", { command: "c" }, undefined, true));
+  clock.advance(500_000);
+  state.limit = 3_600_000;
+  approvals.rearm();
+  clock.advance(600_000);
+  await flush();
+  expect(extended.value).toBeUndefined();
+  clock.advance(3_000_000);
+  await flush();
+  expect(extended.value).toBe(false);
+  expect(notes.at(-1)).toBe("Nobody answered the approval for Bash within 1h, so membr denied it.");
 });

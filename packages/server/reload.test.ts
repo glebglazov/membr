@@ -49,6 +49,25 @@ test("home comes from --home, then MEMBR_HOME, then the file, then the server's 
   expect(readConfig(dir, {}).home).toBe(os.homedir());
 });
 
+test("approvalTimeout reads seconds, minutes and hours from the file, and defaults to ten minutes", () => {
+  const dir = directory();
+  expect(readConfig(dir, {}).approvalTimeout).toBe(600_000);
+  for (const [text, ms] of [["90s", 90_000], ["10m", 600_000], ["2h", 7_200_000], ["24h", 86_400_000]] as const) {
+    writeConfig(dir, { approvalTimeout: text });
+    expect(readConfig(dir, {}).approvalTimeout).toBe(ms);
+  }
+  writeConfig(dir, { approvalTimeout: "1m" });
+  expect(readConfig(dir, { MEMBR_APPROVALTIMEOUT: "2h", MEMBR_APPROVAL_TIMEOUT: "2h" }).approvalTimeout).toBe(60_000);
+});
+
+test("approvalTimeout refuses a bad format, zero and more than 24h, naming the key", () => {
+  const dir = directory();
+  for (const [value, reason] of [["10 min", "must be a number and a unit"], ["10", "must be a number and a unit"], [600, "must be a number and a unit"], ["1.5h", "must be a number and a unit"], ["0m", "must be more than 0"], ["25h", "must be 24h or less"], ["1441m", "must be 24h or less"]] as const) {
+    writeConfig(dir, { approvalTimeout: value });
+    expect(() => readConfig(dir, {})).toThrow(`config.json: approvalTimeout ${reason}`);
+  }
+});
+
 test("a home that is not a directory is refused with the place it came from", () => {
   const dir = directory();
   fs.writeFileSync(path.join(dir, "file"), "");

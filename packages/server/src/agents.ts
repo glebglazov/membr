@@ -3,15 +3,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseEntry, type Entry, type Event } from "@membr/protocol";
-import { type Ask, type Effort, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
+import { type Effort, type Engine, type Epoch, type EpochOptions, type From } from "./engine.ts";
 import { identity } from "./log.ts";
 import { appendFile, truncateFile } from "./durable.ts";
 import { pump } from "./pump.ts";
 
-export type Task = { name: string; task: string };
+// from is the voice of the first message. A run with a schedule, or spawned in a scheduled turn, is unattended.
+export type Task = { name: string; task: string; from?: From; schedule?: string };
+type Ask = (tool: string, input: Record<string, unknown>, signal: AbortSignal, unattended: boolean) => Promise<boolean>;
 export type AgentTools = { spawn(tasks: Task[], effort?: Effort): string; tell(name: string, message: string): string };
 // A subagent does one task. Its session lives only as long as this run: new work goes to a new subagent.
-type Run = { phase: "running" | "stopping"; session: Epoch; sent: number; replies: string[]; halt: AbortController };
+type Run = { phase: "running" | "stopping"; session: Epoch; sent: number; replies: string[]; halt: AbortController; schedule?: string; origin?: string };
 type Agent = { name: string; entries: Entry[]; state: Run | { phase: "finished" }; live: string; failure?: unknown };
 const SUB_HEAD = `You are a subagent of membr, an AI agent that works for one user in a
 single chat that never ends. membr gave you a task. Do it yourself, with
@@ -32,7 +34,7 @@ export class Agents implements AgentTools {
   private closed = false;
   private readonly restarted: Agent[] = [];
 
-  constructor(dir: string, private readonly engine: Engine, private readonly options: () => EpochOptions, private readonly view: () => string, private readonly ask: Ask, private readonly emit: (event: Event) => void, private readonly change: () => void, private readonly report: (text: string, stopped: boolean) => void) {
+  constructor(dir: string, private readonly engine: Engine, private readonly options: () => EpochOptions, private readonly view: () => string, private readonly ask: Ask, private readonly emit: (event: Event) => void, private readonly change: () => void, private readonly report: (text: string, stopped: boolean, schedule?: string) => void) {
     this.dir = path.join(dir, "docs", "agent");
     fs.mkdirSync(this.dir, { recursive: true });
     this.machine = identity(dir, "machine");
@@ -69,22 +71,23 @@ export class Agents implements AgentTools {
   get active(): string[] { return [...this.registry.values()].filter((agent) => agent.state.phase === "running" || agent.state.phase === "stopping").map((agent) => agent.name); }
   get names(): string[] { return [...this.registry.keys()]; }
   has(name: string): boolean { return this.registry.has(name); }
+  scheduled(schedule: string): boolean { return [...this.registry.values()].some((agent) => agent.state.phase !== "finished" && agent.state.schedule === schedule); }
   read(name: string): { entries: Entry[]; live: string } | null {
     const agent = this.registry.get(name);
     return agent ? { entries: agent.entries.slice(), live: agent.live } : null;
   }
 
-  spawn(tasks: Task[], effort?: Effort): string {
+  spawn(tasks: Task[], effort?: Effort, unattended = false): string {
     if (this.closed) throw new Error("The chat is closed");
     if (!tasks.length) return "No tasks.";
-    const names = tasks.map(({ name: wanted, task }) => {
-      const name = this.freeName(wanted);
+    const names = tasks.map((task) => {
+      const name = this.freeName(task.name);
       const agent: Agent = { name, entries: [], state: { phase: "finished" }, live: "" };
       const fd = fs.openSync(path.join(this.dir, name + ".jsonl"), "wx", 0o600);
       fs.closeSync(fd);
       this.registry.set(name, agent);
       this.append(agent, "note", "subagent" + (effort ? " at effort " + effort : ""));
-      this.start(agent, task, effort);
+      this.start(agent, task, effort, unattended || task.schedule !== undefined);
       return name;
     });
     return "Started " + names.join(", ") + ". Each one's report will reach you as a message when it finishes.";
@@ -133,23 +136,25 @@ export class Agents implements AgentTools {
     return name;
   }
 
-  private start(agent: Agent, task: string, effort: Effort | undefined): void {
+  private start(agent: Agent, task: Task, effort: Effort | undefined, unattended: boolean): void {
     const halt = new AbortController();
-    const { agents: _, ...options } = this.options();
+    const { agents: _, schedules: __, ...options } = this.options();
     const session = this.engine.open(this.view() + `\n\nYou are subagent ${agent.name}.`, { ...options, append: options.append + "\n\n" + SUB_HEAD, pick: { ...options.pick, effort: effort ?? options.pick.effort }, ask: (tool, input, signal) => {
       if (agent.state.phase !== "running") return Promise.resolve(false);
-      return this.ask(tool, input, signal ? AbortSignal.any([signal, halt.signal]) : halt.signal);
+      return this.ask(tool, input, signal ? AbortSignal.any([signal, halt.signal]) : halt.signal, unattended);
     } });
-    const run: Run = { phase: "running", session, sent: 0, replies: [], halt };
+    // The main agent did not spawn a scheduled run, so its report says where it came from.
+    const origin = task.schedule === undefined ? {} : { schedule: task.schedule, origin: `Schedule ${task.schedule} started this subagent at its time, with the task ${task.from === "user" ? "the user scheduled" : "you scheduled"}: ${task.task}\nTell the user what it found.\n\n` };
+    const run: Run = { phase: "running", session, sent: 0, replies: [], halt, ...origin };
     agent.state = run;
     void this.listen(agent, run);
-    this.send(agent, run, task, "now");
+    this.send(agent, run, task.task, "now", task.from);
   }
 
-  private send(agent: Agent, run: Run, text: string, priority: "now" | "next"): void {
+  private send(agent: Agent, run: Run, text: string, priority: "now" | "next", from: From = "membr"): void {
     try {
       this.append(agent, "user", text);
-      run.sent = run.session.send(text, priority, "membr");
+      run.sent = run.session.send(text, priority, from);
       this.change();
     } catch (error) { this.failed(agent, run, error); }
   }
@@ -176,7 +181,7 @@ export class Agents implements AgentTools {
     this.append(agent, "note", note ?? "Finished.");
     if (note) run.replies.push(note);
     this.end(agent, run);
-    this.report(`[${agent.name}] report\n${run.replies.filter(Boolean).join("\n\n")}\nFull chat: zoom("${agent.name}")`, run.phase === "stopping");
+    this.report(`[${agent.name}] report\n${run.origin ?? ""}${run.replies.filter(Boolean).join("\n\n")}\nFull chat: zoom("${agent.name}")`, run.phase === "stopping", run.schedule);
   }
 
   private failed(agent: Agent, run: Run, error: unknown): void {

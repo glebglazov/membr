@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Act, Entry } from "@membr/protocol";
-import { busy, canAsk, canDelegate, closed, next, refusal, turnId, wait, type Facts, type Input, type PendingInput, type Transition, type Turn } from "./src/turn.ts";
+import { busy, canAsk, canDelegate, closed, next, refusal, turnId, unattended, wait, type Facts, type Input, type PendingInput, type Transition, type Turn } from "./src/turn.ts";
 
 const input: PendingInput = { text: "Work", from: "user" };
 const idle: Turn = { phase: "idle", attempt: 2 };
@@ -126,3 +126,26 @@ for (const row of [
 ]) {
   test(`refusal for ${row.act.act} in ${row.turn.phase}`, () => expect(refusal(row.turn, row.act)).toBe(row.reason));
 }
+
+const fired: PendingInput = { text: "Read the inbox.", from: "user", fire: { schedule: "k3x9q2" } };
+const scheduled: Turn = { phase: "running", id: 7, scheduled: "k3x9q2", attempt: 2 };
+const tags: Array<{ name: string; turn: Turn; input: Input; expected: Transition }> = [
+  { name: "a tagged input from idle starts a scheduled turn", turn: idle, input: { kind: "start", input: fired, id: 12 }, expected: { turn: { phase: "running", id: 12, scheduled: "k3x9q2", attempt: 2 }, effects: [{ kind: "state" }, { kind: "send", input: fired, priority: "now" }] } },
+  { name: "a user message during a scheduled turn makes it attended", turn: scheduled, input: { kind: "start", input, id: 12 }, expected: { turn: running, effects: [{ kind: "state" }, { kind: "send", input, priority: "next" }] } },
+  { name: "a tagged input during a scheduled turn keeps it scheduled", turn: scheduled, input: { kind: "start", input: fired, id: 12 }, expected: { turn: scheduled, effects: [{ kind: "state" }, { kind: "send", input: fired, priority: "next" }] } },
+  { name: "a tagged input during a user turn leaves it attended", turn: running, input: { kind: "start", input: fired, id: 12 }, expected: { turn: running, effects: [{ kind: "state" }, { kind: "send", input: fired, priority: "next" }] } },
+  { name: "a summary wait with mixed pending input starts an attended turn", turn: { ...summaries, pending: [fired, input] }, input: { kind: "rotated", attempt: 3 }, expected: { turn: { phase: "running", id: 7, attempt: 3 }, effects: [{ kind: "send", input: fired, priority: "now" }, { kind: "send", input, priority: "next" }, { kind: "state" }] } },
+  { name: "a summary wait with only tagged input starts a scheduled turn", turn: { ...summaries, pending: [fired] }, input: { kind: "rotated", attempt: 3 }, expected: { turn: { phase: "running", id: 7, scheduled: "k3x9q2", attempt: 3 }, effects: [{ kind: "send", input: fired, priority: "now" }, { kind: "state" }] } },
+  { name: "a scheduled turn keeps its tag through the goal check", turn: scheduled, input: { kind: "finished", source: "ended", entry: null, error: false }, expected: { turn: { ...checking, scheduled: "k3x9q2" }, effects: [{ kind: "afterHook" }, { kind: "checkGoal", goal: "Finish", attempt: 3 }, { kind: "state" }] } },
+  { name: "a goal continue after a scheduled turn stays scheduled", turn: { ...checking, scheduled: "k3x9q2" }, input: { kind: "continued", entry }, expected: { turn: { phase: "running", id: 12, scheduled: "k3x9q2", attempt: 3 }, effects: [{ kind: "record", entry }, { kind: "dispatch", input: { kind: "continueRecorded", id: 12 } }] } },
+  { name: "the goal continue input carries the tag", turn: { phase: "running", id: 12, scheduled: "k3x9q2", attempt: 3 }, input: { kind: "continueRecorded", id: 12 }, expected: { turn: { phase: "idle", attempt: 3 }, effects: [{ kind: "dispatch", input: { kind: "start", id: 12, input: { text: "The goal isn't satisfied yet: keep working.", from: "membr", fire: { schedule: "k3x9q2" } } } }] } },
+  { name: "a report from a scheduled subagent gives tagged work", turn: idle, input: { kind: "report", text: "Done", stopped: false, schedule: "k3x9q2" }, expected: { turn: idle, effects: [{ kind: "work", text: "Done", id: 12, fire: { schedule: "k3x9q2" } }] } },
+];
+for (const row of tags) {
+  test(row.name, () => expect(next(row.turn, row.input, facts)).toEqual(row.expected));
+}
+
+test("only a running scheduled turn is unattended", () => {
+  expect(unattended(scheduled)).toBe(true);
+  for (const turn of [idle, running, { ...stopping, scheduled: "k3x9q2" }, { ...checking, scheduled: "k3x9q2" }, summaries]) expect(unattended(turn)).toBe(false);
+});
