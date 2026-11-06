@@ -2,7 +2,7 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import PROMPT from "./prompt.txt" with { type: "text" };
 import { type Act, type Answer, type Entry, type Event, type Pick, type Skill, type State, type Usage } from "@membr/protocol";
-import { claude, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
+import { claude, type Context, type Engine, type Epoch, type EpochOptions } from "./engine.ts";
 import { Agents } from "./agents.ts";
 import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
@@ -29,6 +29,8 @@ export class Chat {
   private halt = new AbortController();
   private session: Session;
   private usage: State["usage"] = null;
+  // the size of the epoch at the end of its last turn; unknown until a turn of the epoch ends
+  private context: Context = null;
   private sent = 0;
   private knownImports = 0;
   private streaming = "";
@@ -83,7 +85,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, compression: this.tree.usage };
+    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, compression: this.tree.usage, context: this.context };
   }
 
   // Answers an act id the hub could not parse or accept, so a retry with that id gets the same refusal.
@@ -168,6 +170,7 @@ export class Chat {
   }
 
   private open(upto = this.log.count): Session {
+    this.context = null;
     this.options = { ...this.options, ...this.harness(this.config) };
     return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options), cwd: this.options.cwd };
   }
@@ -347,6 +350,7 @@ export class Chat {
       case "fail": throw effect.error;
       case "usage":
         this.usage = effect.usage;
+        this.context = effect.context;
         break;
       case "record": this.record(effect.entry); break;
       case "note": this.record(this.log.append("note", effect.text)); break;

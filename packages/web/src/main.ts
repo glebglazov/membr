@@ -1,6 +1,6 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
+import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
 import { VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
@@ -123,15 +123,10 @@ function Icon({ name }: { name: keyof typeof ICONS }) {
   return h("svg", { class: "icon", viewBox: "0 0 24 24", "aria-hidden": "true" }, h("path", { d: ICONS[name] }));
 }
 
-function compact(tokens: number): string {
-  return tokens < 1000 ? String(tokens) : tokens < 1e6 ? `${Math.round(tokens / 1000)}k` : `${(tokens / 1e6).toFixed(1)}M`;
-}
-
 function Usage() {
-  const compression = model.state.compression;
-  const cached = cacheShare(compression ?? null);
-  if (!compression || cached === null) return null;
-  return h("span", { class: "usage", title: "Tokens sent to Haiku to compress the chat into memory, and the share read from the cache" }, `compression ${compact(inputTokens(compression))} sent · ${Math.round(cached * 100)}% cached`);
+  const words = epochWords(model.state.context);
+  if (!words) return null;
+  return h("span", { class: "usage", title: "Tokens of the epoch after its last turn, of the size at which the next turn starts a new epoch" }, words);
 }
 
 function Settings() {
@@ -149,6 +144,7 @@ function Settings() {
     h("div", { class: "popover" },
       h("dl", { class: "facts", "aria-label": "Chat status" },
         h("div", { "aria-label": "Current model" }, h("dt", null, "Model"), h("dd", null, model.state.pick?.model ?? "unavailable")),
+        h("div", { "aria-label": "Epoch size", title: "Tokens of the epoch at the end of its last turn, of the size at which the next turn starts a new epoch: 80% of the model's context window." }, h("dt", null, "Epoch"), h("dd", null, model.state.context === "overflow" ? "full" : model.state.context ? `${model.state.context.used.toLocaleString()} of ${epochLimit(model.state.context).toLocaleString()} tokens` : "after the next turn")),
         h("div", { "aria-label": "Compression use", title: "Every Haiku call that compressed a message or merged two lines of memory: input tokens sent, the share read from the cache, and output tokens." }, h("dt", null, "Compression"), h("dd", null, compression && cached !== null ? `${inputTokens(compression).toLocaleString()} sent, ${(cached * 100).toFixed(1)}% cached, ${compression.output.toLocaleString()} out` : "none yet")),
         h("div", { "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, h("dt", null, "Turn cache"), h("dd", null, share === null ? "unavailable" : (share * 100).toFixed(1) + "%")),
         h("div", { "aria-label": "Goal", title: model.state.goal ?? "No goal" }, h("dt", null, "Goal"), h("dd", null, model.state.goal ?? "none"))),

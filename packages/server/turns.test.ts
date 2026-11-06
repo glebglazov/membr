@@ -229,6 +229,16 @@ test("a failed epoch cannot reopen when an earlier interrupt finishes", async ()
   expect(hub.engine.epochs).toHaveLength(1);
 });
 
+test("the state shows how full the epoch was after its last turn", async () => {
+  const context = { used: 50_000, window: 200_000 };
+  const hub = serve(new FakeEngine((epoch) => epoch.emit({ ...END, context })));
+  const client = await connect(hub);
+  expect((await client.wait("state")).state.context).toBeNull();
+  const mark = client.events.length;
+  client.act({ type: "act", act: "say", id: "work", text: "Work" });
+  expect((await client.wait("state", mark, (event) => !event.state.busy)).state.context).toEqual(context);
+});
+
 test("compression usage adds every Haiku call and stays after a restart", async () => {
   const engine = new FakeEngine((epoch) => epoch.emit(END));
   engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };

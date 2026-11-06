@@ -1,4 +1,4 @@
-import type { Act, Entry, State, Usage } from "@membr/protocol";
+import { NEW_EPOCH_SHARE, type Act, type Entry, type State, type Usage } from "@membr/protocol";
 import type { Context, From, Priority } from "./engine.ts";
 import type { Image } from "./images.ts";
 import type { Log } from "./log.ts";
@@ -45,7 +45,7 @@ export type Effect =
   | { kind: "interrupt"; id: number }
   | { kind: "error"; reason: string }
   | { kind: "fail"; error: unknown }
-  | { kind: "usage"; usage: Usage }
+  | { kind: "usage"; usage: Usage; context: Context }
   | { kind: "record"; entry: Entry }
   | { kind: "note"; text: string }
   | { kind: "completeGoal"; revision: number }
@@ -58,7 +58,7 @@ const FULL = "The epoch was full, so membr opened a new one. Send your message a
 
 // The summary batch counts the view, not the raw tool output inside the epoch, so an epoch can fill before a batch.
 // From 80% of the window it gets a new epoch while the next turn still fits; a turn that overflows gets one too.
-function full(context: Context): boolean { return context === "overflow" || (context !== null && context.used >= 0.8 * context.window); }
+function full(context: Context): boolean { return context === "overflow" || (context !== null && context.used >= NEW_EPOCH_SHARE * context.window); }
 
 export function closed(turn: Turn): boolean { return turn.phase === "closing" || turn.phase === "closed"; }
 export function turnId(turn: Turn, count: number): number { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" ? turn.id : count; }
@@ -118,7 +118,7 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
       return {
         turn: full(input.context) ? { ...turn, reopen: true } : turn,
         effects: [
-          { kind: "usage", usage: input.usage },
+          { kind: "usage", usage: input.usage, context: input.context },
           ...(turn.phase === "running" && input.done ? [{ kind: "finish", id: turn.id, reason: input.error === null ? undefined : `The turn failed: ${input.error}`, source: "ended" } satisfies Effect] : [{ kind: "state" } satisfies Effect]),
           ...(input.context === "overflow" ? [{ kind: "note", text: FULL } satisfies Effect] : []),
         ],

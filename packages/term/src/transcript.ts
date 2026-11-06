@@ -1,4 +1,4 @@
-import { cacheShare, effectivePick, inputTokens, rows, type Brief, type Model, type Row } from "@membr/core";
+import { epochWords, effectivePick, rows, type Brief, type Model, type Row } from "@membr/core";
 import type { Entry } from "@membr/protocol";
 
 export type Tone = "user" | "label" | "plain" | "dim" | "error" | "info" | "warn";
@@ -63,22 +63,16 @@ export function transcript(model: Model, width: number): Line[] {
   return lines;
 }
 
-function compact(tokens: number): string {
-  return tokens < 1000 ? String(tokens) : tokens < 1e6 ? `${Math.round(tokens / 1000)}k` : `${(tokens / 1e6).toFixed(1)}M`;
-}
-
 export function status(model: Model): Line {
   const connection = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready"
     : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages send when connected";
   const pick = effectivePick(model);
-  const compression = model.state.compression;
-  const cached = cacheShare(compression ?? null);
   const parts = [
     connection,
     model.state.agents.length ? `${plural(model.state.agents.length, "agent")} at work` : null,
     model.state.goal ? `goal: ${model.state.goal}` : null,
     pick ? `${pick.model} ${pick.effort}${pick.fast ? " fast" : ""}` : null,
-    compression && cached !== null ? `compression ${compact(inputTokens(compression))} sent, ${Math.round(cached * 100)}% cached` : null,
+    epochWords(model.state.context),
     model.pending.size ? `${plural(model.pending.size, "request")} waiting` : null,
   ];
   return { text: parts.filter(Boolean).join(" | "), tone: model.connection === "refused" ? "error" : model.connection === "ready" ? "info" : "warn" };

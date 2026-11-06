@@ -13,7 +13,7 @@ One input from the user or from membr, and the agent work that answers it, up to
 _Avoid_: request, round
 
 **Epoch**:
-One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of home or rules, and when a turn ends with the session at 80% or more of the model's context window or over it.
+One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of home or rules, and when a turn ends with the session at 80% or more of the model's context window or over it. The status shows the epoch's size after its last turn, of that 80%.
 _Avoid_: session, conversation
 
 **Harness**:
@@ -25,7 +25,7 @@ A `/name` command from the harness. The agent runs it when the user's message st
 _Avoid_: slash command, plugin
 
 **Compression**:
-One Haiku call that writes one line of the tree: it compresses one message into a line, or merges two adjacent lines into one. A line is 512 bytes or less. A message, or a pair of lines, that fits in 512 bytes stays as it is, with no call. Compression runs in the background as messages come in. The status shows the tokens that all compressions sent to Haiku, and the share read from the cache.
+One Haiku call that writes one line of the tree: it compresses one message into a line, or merges two adjacent lines into one. A line is 512 bytes or less. A message, or a pair of lines, that fits in 512 bytes stays as it is, with no call. Compression runs in the background as messages come in. The Settings popover shows the tokens that all compressions sent to Haiku, and the share read from the cache.
 _Avoid_: summarization, compaction (the code keeps UniiChat's names `compact` and compactor)
 
 **Summary batch**:

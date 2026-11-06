@@ -1,7 +1,7 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import type { ImportInput, ImportEstimate, ImportStatus, Act, Entry, Event, MemoryLine, Part, Pick, Read, ScheduleSpec, ScheduleView, Skill, State, Usage, When } from "@membr/protocol";
+import { NEW_EPOCH_SHARE, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
@@ -367,6 +367,18 @@ export function answering(model: Model, approval: string): boolean {
 }
 
 export function inputTokens(usage: Usage): number { return usage.input + usage.cacheRead + usage.cacheWrite; }
+// The token count at which the epoch's next turn end starts a new epoch.
+export function epochLimit(context: { window: number }): number { return Math.round(context.window * NEW_EPOCH_SHARE); }
+// the status words for how far the epoch is from a new one; null until a turn of the epoch ends
+export function epochWords(context: Context | undefined): string | null {
+  if (context === undefined || context === null) return null;
+  if (context === "overflow") return "epoch full";
+  const limit = epochLimit(context);
+  return `epoch ${tokens(context.used)} / ${tokens(limit)} (${Math.round(context.used / limit * 100)}%)`;
+}
+export function tokens(count: number): string {
+  return count < 1000 ? String(count) : count < 1e6 ? `${Math.round(count / 1000)}k` : `${(count / 1e6).toFixed(1)}M`;
+}
 export function cacheShare(usage: Usage | null): number | null {
   return usage && inputTokens(usage) > 0 ? usage.cacheRead / inputTokens(usage) : null;
 }
