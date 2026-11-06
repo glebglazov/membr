@@ -1,7 +1,8 @@
-import { createElement as h, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
-import { Box, Text, useInput, usePaste, useWindowSize } from "ink";
+import { createElement as h, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
+import { Box, Text, useApp, useInput, usePaste, useWindowSize } from "ink";
 import { answering, complete, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
 import { EMPTY_COMPOSER, edit, insert, layout, type Composer } from "./composer.ts";
+import type { Wheel } from "./terminal.ts";
 import { newId, type Session } from "./session.ts";
 import { status, transcript, wrap, type Line, type Tone } from "./transcript.ts";
 
@@ -37,13 +38,27 @@ function previewLines(model: Model, width: number): Line[] {
   ];
 }
 
-export function App({ session }: { session: Session }): ReactElement {
+// What up and down recall: the user's messages in the chat, then what this terminal sent that is not in the chat yet or never goes there, such as /help.
+function history(model: Model, sent: readonly string[]): string[] {
+  const said = [...model.entries.values()].filter((entry) => entry.kind === "user").sort((a, b) => a.i - b.i).map((entry) => entry.text);
+  const known = new Set(said);
+  return [...said, ...sent.filter((text) => !known.has(text))].filter((text, index, all) => text !== all[index - 1]);
+}
+
+// `editor` opens the composer text in an external editor and gives back the saved text, or null.
+export function App({ session, wheel, editor }: { session: Session; wheel?: Wheel; editor?: (text: string) => string | null }): ReactElement {
+  const { suspendTerminal } = useApp();
   const model = useSyncExternalStore(session.subscribe, session.model);
   const size = useWindowSize();
   const columns = size.columns || 80, rowsHigh = size.rows || 24;
   const [composer, setComposer] = useState<Composer>(EMPTY_COMPOSER);
   const [scroll, setScroll] = useState(0);
+  const [sent, setSent] = useState<string[]>([]);
+  const scrollLimit = useRef(0);
+  // Ctrl+X starts a two-key command, as in Claude Code: Ctrl+X then g goes back to the bottom of the chat.
+  const chord = useRef(false);
   useEffect(() => () => session.close(), [session]);
+  useEffect(() => wheel?.((lines) => setScroll((previous) => Math.max(0, Math.min(scrollLimit.current, Math.min(previous, scrollLimit.current) + lines)))), [wheel]);
 
   const menu = complete(model, composer.text);
   const approval = [...model.approvals.values()][0];
@@ -65,11 +80,13 @@ export function App({ session }: { session: Session }): ReactElement {
   const lines = transcript(model, columns);
   const maxScroll = Math.max(0, lines.length - height);
   const offset = Math.min(scroll, maxScroll);
+  scrollLimit.current = maxScroll;
   const visible = lines.slice(Math.max(0, lines.length - height - offset), lines.length - offset);
   const state = status(model);
 
   function send(text: string) {
     session.input({ type: "send", id: newId(), text });
+    setSent((previous) => [...previous, text]);
     const failed = session.model().error !== null;
     if (!failed) setScroll(0);
     return failed;
@@ -79,6 +96,11 @@ export function App({ session }: { session: Session }): ReactElement {
     const current = session.model();
     if (key.pageUp) return setScroll(offset + Math.max(1, height >> 1));
     if (key.pageDown) return setScroll(Math.max(0, offset - Math.max(1, height >> 1)));
+    if (chord.current) {
+      chord.current = false;
+      if (input === "g" && !key.ctrl && !key.meta) return setScroll(0);
+    }
+    if (key.ctrl && input === "x") { chord.current = true; return; }
     if (key.escape) {
       if (current.state.busy || current.state.agents.length) session.input({ type: "stop", id: newId() });
       return;
@@ -96,7 +118,13 @@ export function App({ session }: { session: Session }): ReactElement {
       else if (input === "d") session.input({ type: "schedule-discard" });
       return;
     }
-    const result = edit(composer, { input, ...key }, complete(current, composer.text));
+    if (key.ctrl && input === "g") {
+      if (!editor) return;
+      let saved: string | null = null;
+      void suspendTerminal(() => { saved = editor(composer.text); }).then(() => { if (saved !== null) setComposer(insert(EMPTY_COMPOSER, saved)); });
+      return;
+    }
+    const result = edit(composer, { input, ...key }, complete(current, composer.text), history(current, sent));
     if (result.submit === null) return setComposer(result.composer);
     if (!send(result.submit)) setComposer(result.composer);
   });

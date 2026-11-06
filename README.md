@@ -53,10 +53,17 @@ These are the commands:
   this command. It takes no options.
 
 In the terminal chat, Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at
-the end of the line adds a new line. Type `/` to see the commands and skills,
-and use Tab to complete one. Press o, a or d to answer an approval. Esc stops
-the turn, and Ctrl+C quits. The memory tree, the agents view, imports and
-images are only in the web view.
+the end of the line adds a new line. Ctrl+G opens the text in `$VISUAL`, or
+`$EDITOR`, or `vim`. When you save and quit, the text comes back to the
+composer. Type `/` to see the commands and skills, and use Tab to complete one.
+Up on the first line shows the message you sent before. Down on the last line
+goes forward, and then gives back the text you typed. Ctrl or Option with Left
+or Right moves one word. Cmd with Left or Right goes to the start or the end of
+the line. The mouse wheel, Page Up and Page Down scroll the chat. Ctrl+X and
+then g goes back to the bottom. Because membr reads the mouse, hold Option
+(iTerm2, Terminal) or Shift (Ghostty, kitty, WezTerm) to select text. Press o,
+a or d to answer an approval. Esc stops the turn, and Ctrl+C quits. The memory
+tree, the agents view, imports and images are only in the web view.
 
 membr keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR`
 names. One server at a time can use a data directory. A second server on the

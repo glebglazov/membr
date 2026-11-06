@@ -30,6 +30,9 @@ const engine = new FakeEngine((epoch, message) => {
       { kind: "text", text: "Reviewed src/app.ts. No problems found." },
       { ...END, reply: "Reviewed src/app.ts. No problems found.", usage: { input: 100, cacheRead: 900, cacheWrite: 0, output: 50 }, context: { used: 42_000, window: 200_000 } },
     );
+  } else if (message.text === "long") {
+    const text = Array.from({ length: 60 }, (_, n) => `long line ${n}`).join("\n");
+    epoch.emit({ kind: "text", text }, { ...END, reply: text });
   } else epoch.emit({ kind: "delta", text: "Thinking about it" });
 });
 engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
@@ -37,7 +40,9 @@ engine.skills = [{ name: "review", description: "Review a change", argumentHint:
 const server = await startHub(engine);
 
 const command = process.env.MEMBR_BIN ? [path.resolve(process.env.MEMBR_BIN)] : ["bun", path.join(root, "packages/server/src/main.ts")];
-tmux("new-session", "-d", "-s", "e2e", "-x", "100", "-y", "30", "-c", root, [...command, server.url].join(" "));
+tmux("-f", "/dev/null", "new-session", "-d", "-s", "e2e", "-x", "100", "-y", "30", "-c", root, ["env", "EDITOR='vim -u NONE -N'", ...command, server.url].join(" "),
+  // As in a tmux that sends Shift+Enter and other modified keys only to an app that asks for them.
+  ";", "set", "-s", "extended-keys", "on", ";", "set", "-s", "extended-keys-format", "csi-u");
 try {
   show("connected", await waitFor("Ready", (t) => t.includes("Ready")));
 
@@ -54,7 +59,7 @@ try {
   if (!turn.includes("> Made 1 tool call: Read")) throw new Error("The tool call is not collapsed into a brief");
 
   keys("first line");
-  keys("C-j");
+  keys("S-Enter");
   keys("second line");
   show("multi-line composer", await waitFor("two lines", (t) => t.includes("> first line") && t.includes("second line")));
   keys("Enter");
@@ -69,6 +74,26 @@ try {
   keys("d");
   if (await decision !== false) throw new Error("Deny did not reach the engine");
   await waitFor("the approval to close", (t) => !t.includes("Allow Bash?"));
+
+  keys("long", "Enter");
+  await waitFor("the long reply", (t) => t.includes("long line 59") && t.includes("Ready"));
+  // A wheel-up report as the terminal sends it, then a key: the transcript scrolls and nothing of the report is typed.
+  tmux("send-keys", "-t", "e2e", "-H", ..."\x1b[<64;10;10M".split("").map((c) => c.charCodeAt(0).toString(16)));
+  show("wheel up", await waitFor("the scroll", (t) => t.includes("scrolled up 3") && !t.includes("long line 59")));
+  keys("C-x", "g");
+  await waitFor("Ctrl+X g to go to the bottom", (t) => t.includes("long line 59") && !t.includes("scrolled up") && !/^> g/m.test(t));
+  keys("Up");
+  const recalled = await waitFor("the recalled message", (t) => /^> long$/m.test(t));
+  if (recalled.includes("[<")) throw new Error("The mouse report reached the composer");
+  keys("C-e", "Space", "word", "M-b");
+  keys("x");
+  show("recall and Option+b", await waitFor("x before the last word", (t) => /^> long xword$/m.test(t)));
+
+  // Ctrl+G opens the editor on the composer text; the text saved in vim comes back to the composer.
+  keys("C-e", "C-u", "edit me", "C-g");
+  await waitFor("vim", (t) => t.includes("message.txt") || t.includes("~"));
+  keys("A", " in vim", "Escape", ":wq", "Enter");
+  show("after the editor", await waitFor("the edited text", (t) => /^> edit me in vim$/m.test(t) && t.includes("Ready")));
 
   keys("C-c");
   for (let i = 0; i < 100 && tmux("list-panes", "-a").trim() !== ""; i++) await Bun.sleep(50);
