@@ -7,12 +7,22 @@ import { readConfig } from "./config.ts";
 import type { Engine } from "./engine.ts";
 
 export async function main(engine?: Engine) {
-  const USAGE = "usage: membr serve [--port N] [--host ADDRESS | --tailscale]";
+  const USAGE = "usage: membr serve [--port N] [--host ADDRESS | --tailscale]\n       membr term [url] [--token TOKEN]";
 
   const { positionals, values } = parseArgs({
     allowPositionals: true,
-    options: { port: { type: "string", default: "8788" }, host: { type: "string" }, tailscale: { type: "boolean", default: false } },
+    options: { port: { type: "string", default: "8788" }, host: { type: "string" }, tailscale: { type: "boolean", default: false }, token: { type: "string" }, help: { type: "boolean", default: false } },
   });
+
+  if (positionals[0] === "term") {
+    const { runTerm, TERM_USAGE } = await import("../../term/src/run.ts");
+    if (values.help) { console.log(TERM_USAGE); return; }
+    try { await runTerm({ url: positionals[1], token: values.token }); } catch (error) {
+      console.error("membr: " + (error instanceof Error ? error.message : String(error)));
+      process.exit(1);
+    }
+    process.exit(0);
+  }
 
   if (positionals[0] !== "serve") {
     console.error(USAGE);

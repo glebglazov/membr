@@ -1,0 +1,17 @@
+{
+  "name": "@membr/term",
+  "private": true,
+  "type": "module",
+  "exports": "./src/run.ts",
+  "dependencies": {
+    "@membr/core": "workspace:*",
+    "@membr/protocol": "workspace:*",
+    "ink": "8.0.0",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "ink-testing-library": "4.0.0",
+    "react-devtools-core": "8.0.0"
+  }
+}

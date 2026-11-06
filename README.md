@@ -35,6 +35,25 @@ It keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR` names.
 One server at a time can use a data directory. A second server on the same
 directory exits with status 1 and names the process that holds the lock.
 
+## Chat in the terminal
+
+```sh
+bun packages/server/src/main.ts term        # or: membr term
+```
+
+`membr term` connects to `ws://127.0.0.1:8788/ws`. To use a different
+server, give its address or the sign-in link that `membr serve` printed, or
+pass the token with `--token TOKEN`.
+
+- Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at the end of the
+  line adds a new line.
+- Type `/` to see the commands and skills, and use Tab to complete one.
+- Press o, a or d to answer an approval.
+- Esc stops the turn, and Ctrl+C quits.
+
+The memory tree, the agents view, imports and images are only in the web
+view.
+
 ## Install the standalone binary
 
 Install Bun and run `bun install`, then build the binary:
