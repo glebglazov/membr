@@ -1,5 +1,5 @@
 import type { Skill, When } from "@membr/protocol";
-import type { Account, Engine, EngineEvent, Epoch, EpochOptions, From, Pick, Priority } from "../src/engine.ts";
+import { NO_USAGE, type Account, type Compaction, type Engine, type EngineEvent, type Epoch, type EpochOptions, type From, type Pick, type Priority, type Usage } from "../src/engine.ts";
 
 export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, context: null, fast: null, through: 0 };
 type Message = { text: string; priority: Priority; from: From; images?: import("../src/images.ts").Image[] };
@@ -58,7 +58,8 @@ export class FakeEngine implements Engine {
     if (this.skills.length) epoch.emit({ kind: "skills", skills: this.skills });
     return epoch;
   }
-  async compact(_prompt: string): Promise<string | null> { return "A compacted message."; }
+  compactUsage: Usage = NO_USAGE;
+  async compact(_prompt: string): Promise<Compaction> { return { line: "A compacted message.", usage: this.compactUsage }; }
   async checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean> {
     this.checks.push({ goal, chat, signal });
     return this.onCheck(goal, chat, signal);

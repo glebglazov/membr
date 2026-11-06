@@ -29,11 +29,11 @@ export class Chat {
   private halt = new AbortController();
   private session: Session;
   private usage: State["usage"] = null;
-  private epochUsage: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
   private sent = 0;
   private knownImports = 0;
   private streaming = "";
   private skillList: Skill[] = [];
+  private shownCompression: Usage | null = null;
   private options: EpochOptions;
   private picking = Promise.resolve();
   private afterQueue = Promise.resolve();
@@ -83,7 +83,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, epoch: this.epochUsage };
+    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, agents: this.agents.active, agentNames: this.agents.names, usage: this.usage, compression: this.tree.usage };
   }
 
   // Answers an act id the hub could not parse or accept, so a retry with that id gets the same refusal.
@@ -168,7 +168,6 @@ export class Chat {
   }
 
   private open(upto = this.log.count): Session {
-    this.epochUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
     this.options = { ...this.options, ...this.harness(this.config) };
     return { id: crypto.randomUUID(), epoch: this.engine.open(this.view.text(upto), this.options), cwd: this.options.cwd };
   }
@@ -348,10 +347,6 @@ export class Chat {
       case "fail": throw effect.error;
       case "usage":
         this.usage = effect.usage;
-        this.epochUsage = {
-          input: this.epochUsage.input + effect.usage.input, cacheRead: this.epochUsage.cacheRead + effect.usage.cacheRead,
-          cacheWrite: this.epochUsage.cacheWrite + effect.usage.cacheWrite, output: this.epochUsage.output + effect.usage.output,
-        };
         break;
       case "record": this.record(effect.entry); break;
       case "note": this.record(this.log.append("note", effect.text)); break;
@@ -380,8 +375,16 @@ export class Chat {
     }).catch((error) => console.error("after: " + (error instanceof Error ? error.message : String(error))));
   }
 
+  // the tree changed; a line that took Haiku calls makes the compression total new
+  compressed(): void {
+    const now = this.tree.usage, shown = this.shownCompression;
+    if (shown && now.input === shown.input && now.cacheRead === shown.cacheRead && now.cacheWrite === shown.cacheWrite && now.output === shown.output) return;
+    this.change();
+  }
+
   private change(): void {
     if (!this.state.busy) this.streaming = "";
+    this.shownCompression = this.tree.usage;
     this.emit({ type: "state", state: this.state });
     this.schedules.poke();
   }

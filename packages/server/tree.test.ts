@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Part } from "@membr/protocol";
 import { serveHub } from "./src/hub.ts";
+import { NO_USAGE, type Compaction } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
 
@@ -24,10 +25,10 @@ class Compactor extends FakeEngine {
   constructor(private readonly run: (prompt: string, call: number) => Promise<string | null> = async () => "unii: summary") {
     super((epoch) => epoch.emit(END));
   }
-  override async compact(prompt: string): Promise<string | null> {
+  override async compact(prompt: string): Promise<Compaction> {
     this.prompts.push(prompt);
     this.peak = Math.max(this.peak, ++this.active);
-    try { return await this.run(prompt, this.prompts.length); } finally { this.active--; }
+    try { return { line: await this.run(prompt, this.prompts.length), usage: NO_USAGE }; } finally { this.active--; }
   }
 }
 

@@ -209,7 +209,7 @@ export function serveHub(options: {
       for (const client of sockets) send(client, event);
     }, options.engine, options.epoch, config, options.clock);
     imports = new Imports(log, tree, (event) => { for (const client of sockets) send(client, event); }, (entries) => chat!.imported(entries));
-    tree.onChange = () => imports?.changed();
+    tree.onChange = () => { imports?.changed(); chat?.compressed(); };
   } catch (error) {
     chat?.close();
     tree?.close();

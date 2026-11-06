@@ -272,7 +272,7 @@ describe.skipIf(!REAL)("S3 engine contract", () => {
       Array.from({ length: 4 }, async () => {
         while (next < 200) {
           const id = next++;
-          await claude.compact(leaf(id)).then((line) => lines.push(line), (err) => errors.push(String(err)));
+          await claude.compact(leaf(id)).then(({ line }) => lines.push(line), (err) => errors.push(String(err)));
         }
       }),
     );
@@ -280,7 +280,7 @@ describe.skipIf(!REAL)("S3 engine contract", () => {
     const after = await claude.account();
     const bytes = lines.filter((line) => line !== null).map((line) => Buffer.byteLength(line!));
     record("8-compactions", {
-      one: { startMs, bytes: one && Buffer.byteLength(one) },
+      one: { startMs, bytes: one.line && Buffer.byteLength(one.line) },
       batch: {
         count: 200,
         promptBytes: leaf(0).length,

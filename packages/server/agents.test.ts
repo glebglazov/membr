@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { Log } from "./src/log.ts";
+import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
 
@@ -217,7 +218,7 @@ test("new main input names active agents and stop-all blocks late delegation", a
 test("an agent report joins a summary wait and reaches the replacement epoch", async () => {
   const held = Promise.withResolvers<string>();
   const engine = new FakeEngine((epoch) => { if (epoch.options.agents) epoch.emit(END); });
-  engine.compact = () => held.promise;
+  engine.compact = () => held.promise.then((line) => ({ line, usage: NO_USAGE }));
   const { client, agents, dir } = await start(engine);
   let waiting = false;
   for (let i = 0; i < 300; i++) {

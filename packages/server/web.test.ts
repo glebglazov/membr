@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { serveHub } from "./src/hub.ts";
+import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { seedMemory } from "./test/memory.ts";
 import { TestClient } from "./test/client.ts";
@@ -87,7 +88,7 @@ test("the export JSON matches every saved message and summary before and after r
     { kind: "tool", id: "export-tool", name: "Read", input: { file_path: "/example" } },
     { kind: "echo", id: "export-tool", text: "Saved tool result.", error: false }, END,
   ));
-  engine.compact = () => compact.promise;
+  engine.compact = () => compact.promise.then((line) => ({ line, usage: NO_USAGE }));
   const hub = serveHub({ dir, port: 0, engine });
   hubs.push(hub);
   const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));

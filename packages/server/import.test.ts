@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Act, Entry, ImportInput } from "@membr/protocol";
 import { serveHub } from "./src/hub.ts";
+import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
 
@@ -55,7 +56,7 @@ class Compactor extends FakeEngine {
   constructor(readonly build: (prompt: string) => Promise<string | null> = async () => "s".repeat(480)) { super((epoch) => epoch.emit(END)); }
   override async compact(prompt: string) {
     this.calls.push(prompt); this.peak = Math.max(this.peak, ++this.active);
-    try { return await this.build(prompt); } finally { this.active--; }
+    try { return { line: await this.build(prompt), usage: NO_USAGE }; } finally { this.active--; }
   }
 }
 

@@ -26,12 +26,13 @@ const engine = new FakeEngine((epoch, message) => {
   if (message.text.startsWith("/review")) {
     epoch.emit(
       { kind: "tool", id: "t1", name: "Read", input: { file_path: "src/app.ts" } },
-      { kind: "echo", id: "t1", text: "file contents", error: false },
+      { kind: "echo", id: "t1", text: "file contents ".repeat(50), error: false },
       { kind: "text", text: "Reviewed src/app.ts. No problems found." },
       { ...END, reply: "Reviewed src/app.ts. No problems found.", usage: { input: 100, cacheRead: 900, cacheWrite: 0, output: 50 } },
     );
   } else epoch.emit({ kind: "delta", text: "Thinking about it" });
 });
+engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
 engine.skills = [{ name: "review", description: "Review a change", argumentHint: "<path>" }];
 const server = await startHub(engine);
 
@@ -47,7 +48,7 @@ try {
   keys("Tab");
   await waitFor("the completed name", (t) => t.includes("> /review") && !t.includes("Review a change"));
   keys("src/app.ts", "Enter");
-  const turn = await waitFor("the skill turn", (t) => t.includes("Reviewed src/app.ts. No problems found.") && t.includes("cache 90%"));
+  const turn = await waitFor("the skill turn", (t) => t.includes("Reviewed src/app.ts. No problems found.") && t.includes("compression 100 sent, 90% cached"));
   show("after /review src/app.ts", turn);
   if (engine.epochs[0].messages[0].text !== "/review src/app.ts") throw new Error("The skill did not reach the agent as a say act");
   if (!turn.includes("> Made 1 tool call: Read")) throw new Error("The tool call is not collapsed into a brief");

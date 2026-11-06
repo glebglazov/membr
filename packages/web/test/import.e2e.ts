@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { serveHub } from "../../server/src/hub.ts";
 import { END, FakeEngine } from "../../server/test/engine.ts";
+import { NO_USAGE } from "../../server/src/engine.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-import-browser-"));
 const folder = path.join(dir, "projects"); fs.mkdirSync(folder);
@@ -12,7 +13,7 @@ let release!: () => void;
 const held = new Promise<void>((resolve) => { release = resolve; });
 class Engine extends FakeEngine {
   calls = 0;
-  override async compact() { this.calls++; await held; return "Past session summary."; }
+  override async compact() { this.calls++; await held; return { line: "Past session summary.", usage: NO_USAGE }; }
 }
 const engine = new Engine((epoch) => epoch.emit({ kind: "text", text: "The live turn finished." }, END));
 const hub = serveHub({ dir: path.join(dir, "memory"), port: 0, engine });

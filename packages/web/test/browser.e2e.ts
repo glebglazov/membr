@@ -67,6 +67,18 @@ async function sameTurn(browser: Browser): Promise<void> {
   } });
 }
 
+async function compressionUse(browser: Browser): Promise<void> {
+  const engine = new FakeEngine((epoch) => epoch.emit(END));
+  engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
+  await withChat({ browser, engine, check: async (context, url) => {
+    const page = await openChat(context, url);
+    await send(page, "A message long enough for Haiku to compress. " + "x".repeat(600));
+    await expect(page.locator(".usage")).toHaveText("compression 100 sent · 90% cached");
+    await page.locator("summary[aria-label=Settings]").click();
+    await expect(page.getByLabel("Compression use")).toContainText("100 sent, 90.0% cached, 5 out");
+  } });
+}
+
 async function sharedApproval(browser: Browser): Promise<void> {
   const engine = new FakeEngine((epoch) => {
     void epoch.options.ask?.("Bash", { command: "pwd" }).then((allowed) => {
@@ -267,6 +279,8 @@ try {
   console.log("PASS Two tabs show the same live and completed turn.");
   await sharedApproval(browser);
   console.log("PASS An approval answer closes the card in both tabs.");
+  await compressionUse(browser);
+  console.log("PASS The status and the settings show the tokens sent to Haiku for compression and their cache share.");
   await responsiveLayout(browser);
   console.log("PASS Light and dark layouts fit desktop and 390 px widths.");
   await markdownReply(browser);
@@ -275,7 +289,7 @@ try {
   console.log("PASS Diagram zoom responds to trackpad and touch pinch.");
   await briefsAndAgents(browser);
   console.log("PASS Tool calls, an agent start and its report fold into briefs that open the agent's chat.");
-  console.log("6 browser checks passed.");
+  console.log("7 browser checks passed.");
 } finally {
   await browser?.close();
 }

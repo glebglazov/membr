@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { Log } from "./src/log.ts";
+import type { Compaction } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
 import { seedMemory } from "./test/memory.ts";
@@ -154,7 +155,7 @@ test("geometric roots and unbuilt summaries remain navigable while compaction wa
   const dir = directory();
   const log = new Log(dir);
   for (let i = 0; i < 8; i++) log.append("user", "x".repeat(600));
-  class Waiting extends FakeEngine { override compact(): Promise<string | null> { return new Promise(() => {}); } }
+  class Waiting extends FakeEngine { override compact(): Promise<Compaction> { return new Promise(() => {}); } }
   const { memory, client } = await start(dir, new Waiting());
   client.read({ type: "read", read: "root", id: "root" });
   expect((await client.wait("read")).parts).toEqual([{ l: 3, i: 0 }]);

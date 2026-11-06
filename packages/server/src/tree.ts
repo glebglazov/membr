@@ -3,7 +3,7 @@
 // See licenses/UniiChat.txt.
 import path from "node:path";
 import type { MemoryLine, Part } from "@membr/protocol";
-import type { Engine } from "./engine.ts";
+import { NO_USAGE, plus, type Engine, type Usage } from "./engine.ts";
 import type { Log } from "./log.ts";
 import { end, flat, merge, render } from "./view.ts";
 import { imageMarks } from "./images.ts";
@@ -26,10 +26,17 @@ ${SCALE}
 of them from there too.
 <input>
 `;
-type Node = Part & { text: string; size: number };
+// `usage` is the sum of the Haiku calls that wrote the line. A line short
+// enough to keep as it is had no call, and has no usage.
+type Node = Part & { text: string; size: number; usage?: Usage };
 
 function key({ l, i }: Part): number { return (2 * i + 1) * 2 ** l - 1; }
 function context(part: Part): number { return part.l === 0 ? part.i : end(part); }
+function isUsage(raw: unknown): raw is Usage {
+  if (raw === null || typeof raw !== "object") return false;
+  const u = raw as Record<string, unknown>;
+  return [u.input, u.cacheRead, u.cacheWrite, u.output].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+}
 function cut(text: string): string {
   const bytes = Buffer.from(text);
   let length = Math.min(bytes.length, NODE);
@@ -50,6 +57,7 @@ export class Tree {
   private count = 0;
   private scheduled = false;
   private stopped = false;
+  private spent: Usage = NO_USAGE;
 
   constructor(dir: string, private readonly log: Log, private readonly engine: Engine) {
     const nodes: Part[] = [];
@@ -58,7 +66,9 @@ export class Tree {
         || typeof raw.l !== "number" || !Number.isSafeInteger(raw.l) || raw.l < 0 || raw.l > 52
         || typeof raw.i !== "number" || !Number.isSafeInteger(raw.i) || raw.i < 0
         || typeof raw.text !== "string" || raw.text !== Buffer.from(raw.text).toString("utf8")
-        || raw.size !== Buffer.byteLength(raw.text) || raw.size > NODE) throw new Error(`Invalid tree record in ${file}`);
+        || raw.size !== Buffer.byteLength(raw.text) || raw.size > NODE
+        || ("usage" in raw && !isUsage(raw.usage))) throw new Error(`Invalid tree record in ${file}`);
+      if ("usage" in raw) this.spent = plus(this.spent, raw.usage as Usage);
       const part = { l: raw.l, i: raw.i };
       if (end(part) > this.log.count || !Number.isSafeInteger(key(part))) throw new Error(`Invalid tree node in ${file}`);
       nodes.push(part);
@@ -185,6 +195,9 @@ export class Tree {
     });
   }
 
+  // the tokens of every Haiku call that wrote a line of this tree, over its whole life
+  get usage(): Usage { return this.spent; }
+
   read(part: Part): string | null {
     const raw = this.journal.read(key(part));
     return raw === null ? null : (raw as Node).text;
@@ -208,8 +221,9 @@ export class Tree {
     return flat(a) + "\n" + flat(b);
   }
 
-  private store(part: Part, text: string): void {
-    const record: Node = { ...part, text, size: Buffer.byteLength(text) };
+  private store(part: Part, text: string, usage?: Usage): void {
+    const record: Node = { ...part, text, size: Buffer.byteLength(text), ...(usage ? { usage } : {}) };
+    if (usage) this.spent = plus(this.spent, usage);
     this.journal.append(record, key(part), new Date().toISOString());
     this.ready.delete(key(part));
     this.parent(part);
@@ -268,10 +282,15 @@ export class Tree {
     let note = "";
     let tries = 0;
     let delay = 1000;
+    let spent = NO_USAGE;
     while (!this.stopped && tries < TRIES) {
       if (this.held(part)) return;
       let answer: string | null;
-      try { answer = await this.engine.compact(prompt + note); } catch {
+      try {
+        const compaction = await this.engine.compact(prompt + note);
+        answer = compaction.line;
+        spent = plus(spent, compaction.usage);
+      } catch {
         if (this.stopped) return;
         await new Promise<void>((resolve) => {
           const timer = setTimeout(() => { this.delays.delete(timer); resolve(); }, delay);
@@ -293,6 +312,6 @@ over the ${NODE}-byte limit. Write the whole line again, cutting just
 enough of the least valuable items to fit before this cut:
 ${cut(line)}| ← LIMIT`;
     }
-    if (!this.stopped) this.store(part, cut(best ?? flat(source)));
+    if (!this.stopped) this.store(part, cut(best ?? flat(source)), spent);
   }
 }

@@ -71,15 +71,14 @@ export function status(model: Model): Line {
   const connection = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready"
     : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages send when connected";
   const pick = effectivePick(model);
-  const epoch = model.state.epoch;
-  const share = cacheShare(model.state.usage);
+  const compression = model.state.compression;
+  const cached = cacheShare(compression ?? null);
   const parts = [
     connection,
     model.state.agents.length ? `${plural(model.state.agents.length, "agent")} at work` : null,
     model.state.goal ? `goal: ${model.state.goal}` : null,
     pick ? `${pick.model} ${pick.effort}${pick.fast ? " fast" : ""}` : null,
-    epoch ? `${compact(inputTokens(epoch) + epoch.output)} tokens` : null,
-    share !== null ? `cache ${Math.round(share * 100)}%` : null,
+    compression && cached !== null ? `compression ${compact(inputTokens(compression))} sent, ${Math.round(cached * 100)}% cached` : null,
     model.pending.size ? `${plural(model.pending.size, "request")} waiting` : null,
   ];
   return { text: parts.filter(Boolean).join(" | "), tone: model.connection === "refused" ? "error" : model.connection === "ready" ? "info" : "warn" };

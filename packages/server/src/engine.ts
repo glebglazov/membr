@@ -49,6 +49,14 @@ export type From = "user" | "membr";
 
 // the tokens of one turn: `input` is the part not read from the cache
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+export const NO_USAGE: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+export function plus(a: Usage, b: Usage): Usage {
+  return { input: a.input + b.input, cacheRead: a.cacheRead + b.cacheRead, cacheWrite: a.cacheWrite + b.cacheWrite, output: a.output + b.output };
+}
+
+// one Haiku call of the compactor: its line, or null when the model gives
+// none, and the tokens the call took
+export type Compaction = { line: string | null; usage: Usage };
 
 // How full the epoch is at the end of a turn. `used` is the input of the
 // turn's last model call, so it is the size of the session as the model saw
@@ -92,8 +100,7 @@ export type Account = {
 
 export interface Engine {
   open(view: string, options: EpochOptions): Epoch;
-  // one line, or null when the model gives none
-  compact(prompt: string): Promise<string | null>;
+  compact(prompt: string): Promise<Compaction>;
   checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean>;
   // the time words of a text as a When, and those exact words; throws on an answer it cannot read
   when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }>;
@@ -423,12 +430,7 @@ function* translate(sdk: SDKMessage, through: number, last: { model: string; use
         kind: "end",
         reply: sdk.subtype === "success" ? sdk.result : "",
         error: sdk.subtype !== "success" ? sdk.errors.join("\n") || sdk.subtype : sdk.is_error ? sdk.result : null,
-        usage: {
-          input: sdk.usage.input_tokens,
-          cacheRead: sdk.usage.cache_read_input_tokens,
-          cacheWrite: sdk.usage.cache_creation_input_tokens,
-          output: sdk.usage.output_tokens,
-        },
+        usage: usageOf(sdk),
         context: context(sdk, last),
         through,
         fast: sdk.fast_mode_state ? { state: sdk.fast_mode_state, blocked: sdk.fast_mode_disabled_reason ?? null } : null,
@@ -455,7 +457,16 @@ function textOf(content: unknown): string {
   return "";
 }
 
-async function compact(prompt: string): Promise<string | null> {
+function usageOf(result: Extract<SDKMessage, { type: "result" }>): Usage {
+  return {
+    input: result.usage.input_tokens,
+    cacheRead: result.usage.cache_read_input_tokens,
+    cacheWrite: result.usage.cache_creation_input_tokens,
+    output: result.usage.output_tokens,
+  };
+}
+
+async function compact(prompt: string): Promise<Compaction> {
   const inbox = new Inbox();
   inbox.push(message(prompt, "next", "membr"));
   inbox.end();
@@ -479,7 +490,7 @@ async function compact(prompt: string): Promise<string | null> {
     if (sdk.subtype !== "success" || sdk.is_error) {
       throw new Error(`compaction failed: ${sdk.subtype === "success" ? sdk.result : sdk.errors.join("; ") || sdk.subtype}`);
     }
-    return sdk.stop_reason === "refusal" ? null : sdk.result.trim() || null;
+    return { line: sdk.stop_reason === "refusal" ? null : sdk.result.trim() || null, usage: usageOf(sdk) };
   }
   throw new Error("compaction ended with no result");
 }

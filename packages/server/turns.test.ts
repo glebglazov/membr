@@ -229,20 +229,18 @@ test("a failed epoch cannot reopen when an earlier interrupt finishes", async ()
   expect(hub.engine.epochs).toHaveLength(1);
 });
 
-test("epoch usage adds completed main turns and starts at zero after restart", async () => {
-  const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
-  const hub = serve(new FakeEngine((epoch) => epoch.emit({ ...END, usage })));
+test("compression usage adds every Haiku call and stays after a restart", async () => {
+  const engine = new FakeEngine((epoch) => epoch.emit(END));
+  engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
+  const hub = serve(engine);
   const client = await connect(hub);
-  expect((await client.wait("state")).state.epoch).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
-  for (let index = 1; index <= 2; index++) {
-    const mark = client.events.length;
-    client.act({ type: "act", act: "say", id: `usage-${index}`, text: "Work" });
-    const completed = await client.wait("state", mark, (event) => !event.state.busy);
-    expect(completed.state.usage).toEqual(usage);
-    expect(completed.state.epoch).toEqual({ input: 100 * index, cacheRead: 700 * index, cacheWrite: 200 * index, output: 50 * index });
-  }
+  expect((await client.wait("state")).state.compression).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
+  client.act({ type: "act", act: "say", id: "long", text: "x".repeat(600) });
+  client.act({ type: "act", act: "say", id: "short", text: "Short enough to keep as it is" });
+  const one = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
+  expect((await client.wait("state", 0, (event) => event.state.compression?.input === 10)).state.compression).toEqual(one);
   client.close();
   await hub.close();
   const restarted = await connect(serve(new FakeEngine(), hub.dir));
-  expect((await restarted.wait("state")).state.epoch).toEqual({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
+  expect((await restarted.wait("state")).state.compression).toEqual(one);
 });

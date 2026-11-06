@@ -8,6 +8,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
+import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine, type FakeEpoch } from "./test/engine.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
@@ -79,7 +80,7 @@ test("3000 protocol messages retain at least 95% prompt prefixes and rotate only
       compactions.add(prompt.slice(0, prompt.indexOf("Compaction:")));
       const task = prompt.slice(prompt.indexOf("Compaction:"));
       const hash = createHash("sha256").update(task).digest("hex");
-      return `summary ${hash} ` + bytes(parseInt(hash.slice(0, 6), 16), 240 + parseInt(hash.slice(0, 2), 16) % 160);
+      return { line: `summary ${hash} ` + bytes(parseInt(hash.slice(0, 6), 16), 240 + parseInt(hash.slice(0, 2), 16) % 160), usage: NO_USAGE };
     }
   }
   const engine = new Replay((epoch, message) => {
@@ -137,7 +138,7 @@ test("3000 protocol messages retain at least 95% prompt prefixes and rotate only
 test("restart keeps placeholders, pick and goal in the saved view", async () => {
   const held = Promise.withResolvers<string>();
   const engine = new FakeEngine((epoch) => epoch.emit(END));
-  engine.compact = () => held.promise;
+  engine.compact = () => held.promise.then((line) => ({ line, usage: NO_USAGE }));
   const before = await serve(engine);
   await say(before, "long", "long message ".repeat(100));
   expect(saved(before.dir).lines[0].text).toBe("(not summarized yet: zoom it)");
@@ -166,7 +167,7 @@ test("restart keeps placeholders, pick and goal in the saved view", async () => 
 async function waitingBatch() {
   const held = Promise.withResolvers<string>();
   const engine = new FakeEngine((epoch) => epoch.emit(END));
-  engine.compact = () => held.promise;
+  engine.compact = () => held.promise.then((line) => ({ line, usage: NO_USAGE }));
   const hub = await serve(engine);
   for (let i = 0; i < 300; i++) {
     const mark = hub.client.events.length;
@@ -303,22 +304,4 @@ test("a failed send after a batch fails the new epoch and ends the wait", async 
   expect((await hub.client.wait("state", mark, (event) => !event.state.busy)).state.wait).toBe("");
   expect(hub.engine.epochs).toHaveLength(2);
   expect(hub.engine.epochs[1].closed).toBe(true);
-});
-
-test("epoch usage resets at a batch merge while last-turn usage stays available", async () => {
-  const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
-  const engine = new FakeEngine((epoch) => epoch.emit({ ...END, usage }));
-  const hub = await serve(engine);
-  for (let index = 0; index < 300; index++) {
-    const mark = hub.client.events.length;
-    await say(hub, `usage-${index}`, bytes(index, 500));
-    const completed = await hub.client.wait("state", mark, (event) => !event.state.busy);
-    expect(completed.state.usage).toEqual(usage);
-    if (engine.epochs.length > 1) {
-      expect(completed.state.epoch).toEqual(usage);
-      return;
-    }
-    expect(completed.state.epoch?.input).toBe(100 * (index + 1));
-  }
-  throw new Error("The view never started a second epoch");
 });

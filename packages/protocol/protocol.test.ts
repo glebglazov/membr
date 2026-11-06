@@ -19,8 +19,8 @@ test("state events parse optional epoch usage and reject invalid counts", async 
   const state = { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null };
   const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
   expect(parseEvent({ type: "state", state })).toEqual({ type: "state", state });
-  expect(parseEvent({ type: "state", state: { ...state, epoch: usage } })).toEqual({ type: "state", state: { ...state, epoch: usage } });
-  expect(() => parseEvent({ type: "state", state: { ...state, epoch: { ...usage, input: -1 } } })).toThrow("Expected a nonnegative integer");
+  expect(parseEvent({ type: "state", state: { ...state, compression: usage } })).toEqual({ type: "state", state: { ...state, compression: usage } });
+  expect(() => parseEvent({ type: "state", state: { ...state, compression: { ...usage, input: -1 } } })).toThrow("Expected a nonnegative integer");
 });
 
 test("skills events parse each skill and reject a nameless one", async () => {

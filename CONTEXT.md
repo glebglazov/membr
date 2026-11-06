@@ -24,8 +24,16 @@ _Avoid_: config, environment
 A `/name` command from the harness. The agent runs it when the user's message starts with it. A skill with the name of a membr command is hidden behind that command. Built-in Claude Code commands are not skills, because they act on the session, which is an epoch.
 _Avoid_: slash command, plugin
 
+**Compression**:
+One Haiku call that writes one line of the tree: it compresses one message into a line, or merges two adjacent lines into one. A line is 512 bytes or less. A message, or a pair of lines, that fits in 512 bytes stays as it is, with no call. Compression runs in the background as messages come in. The status shows the tokens that all compressions sent to Haiku, and the share read from the cache.
+_Avoid_: summarization, compaction (the code keeps UniiChat's names `compact` and compactor)
+
+**Summary batch**:
+The step that makes the view smaller. When the view is larger than 128 KB, membr replaces pairs of old lines with the line above them in the tree, oldest first, until the view is 64 KB or less. Then a new epoch starts from that view. It calls no model: it uses only lines that compression wrote.
+_Avoid_: compaction, compression
+
 **Summary wait**:
-The phase of a turn in which membr summarizes old messages before it starts a new epoch.
+The phase of a turn in which membr waits for compression to write the lines that the summary batch needs, before it starts a new epoch.
 
 **Schedule**:
 A task text with a time (one ISO time, or a cron and a time zone name), stored in the log. It runs as a turn or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.

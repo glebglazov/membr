@@ -128,10 +128,10 @@ function compact(tokens: number): string {
 }
 
 function Usage() {
-  const epoch = model.state.epoch;
-  const share = cacheShare(model.state.usage);
-  if (!epoch) return null;
-  return h("span", { class: "usage" }, `${compact(inputTokens(epoch) + epoch.output)} tokens`, share !== null && ` · cache ${Math.round(share * 100)}%`);
+  const compression = model.state.compression;
+  const cached = cacheShare(compression ?? null);
+  if (!compression || cached === null) return null;
+  return h("span", { class: "usage", title: "Tokens sent to Haiku to compress the chat into memory, and the share read from the cache" }, `compression ${compact(inputTokens(compression))} sent · ${Math.round(cached * 100)}% cached`);
 }
 
 function Settings() {
@@ -142,14 +142,15 @@ function Settings() {
     return () => document.removeEventListener("pointerdown", close);
   }, []);
   const share = cacheShare(model.state.usage);
-  const epoch = model.state.epoch;
+  const compression = model.state.compression;
+  const cached = cacheShare(compression ?? null);
   return h("details", { class: "settings", ref: panel },
     h("summary", { "aria-label": "Settings", title: "Settings" }, h(Icon, { name: "gear" })),
     h("div", { class: "popover" },
       h("dl", { class: "facts", "aria-label": "Chat status" },
         h("div", { "aria-label": "Current model" }, h("dt", null, "Model"), h("dd", null, model.state.pick?.model ?? "unavailable")),
-        h("div", { "aria-label": "Epoch use", title: "Total input and output tokens reported for completed chat turns in the current epoch, including cache reads and writes." }, h("dt", null, "Epoch"), h("dd", null, epoch ? (inputTokens(epoch) + epoch.output).toLocaleString() + " tokens" : "unavailable")),
-        h("div", { "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, h("dt", null, "Cache"), h("dd", null, share === null ? "unavailable" : (share * 100).toFixed(1) + "%")),
+        h("div", { "aria-label": "Compression use", title: "Every Haiku call that compressed a message or merged two lines of memory: input tokens sent, the share read from the cache, and output tokens." }, h("dt", null, "Compression"), h("dd", null, compression && cached !== null ? `${inputTokens(compression).toLocaleString()} sent, ${(cached * 100).toFixed(1)}% cached, ${compression.output.toLocaleString()} out` : "none yet")),
+        h("div", { "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, h("dt", null, "Turn cache"), h("dd", null, share === null ? "unavailable" : (share * 100).toFixed(1) + "%")),
         h("div", { "aria-label": "Goal", title: model.state.goal ?? "No goal" }, h("dt", null, "Goal"), h("dd", null, model.state.goal ?? "none"))),
       h(ImportPanel, null),
       h("a", { class: "export", href: "/export" }, "Export memory")));
