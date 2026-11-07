@@ -70,6 +70,8 @@ export type Read = { type: "read"; id: string } & (
   | { read: "subagent"; name: string }
   | ({ read: "import" } & ImportInput)
   | { read: "when"; text: string; zone: string }
+  // the next older page of the log's displayable entries, before this log index
+  | { read: "page"; before: number }
 );
 export type Answer = { type: "answer"; id: string } & (
   | { ok: true; entry: number | null }
@@ -94,6 +96,8 @@ export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }
   | { type: "entry"; entry: Entry }
+  // The latest page of the log's displayable entries, sent once on join. They start at log index `from`.
+  | { type: "history"; from: number; entries: Entry[] }
   | { type: "subagent-entry"; name: string; entry: Entry }
   | { type: "live"; text: string; subagent: string | null }
   | { type: "view"; parts: Part[]; lines?: MemoryLine[]; turn?: number }
@@ -102,7 +106,7 @@ export type Event =
   | { type: "approval"; id: string; tool: string; input: Record<string, unknown> }
   | { type: "state"; state: State }
   | Answer
-  | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; live?: string; error?: string }
+  | { type: "read"; id: string; entries: Entry[]; parts: Part[]; lines: MemoryLine[]; live?: string; error?: string; from?: number }
   | { type: "import-estimate"; id: string; estimate: ImportEstimate }
   | { type: "imports"; imports: ImportStatus[] }
   | { type: "skills"; skills: Skill[] }
@@ -278,6 +282,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "subagent": return { ...base, read: "subagent", name: id(v.name) };
       case "import": return { ...base, read: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       case "when": return { ...base, read: "when", text: string(v.text), zone: string(v.zone) };
+      case "page": return { ...base, read: "page", before: integer(v.before) };
       default: throw new Error("Unknown read");
     }
   }
@@ -289,6 +294,7 @@ export function parseEvent(value: unknown): Event {
     case "ready": return { type: "ready", version: version(v.version) };
     case "refused": return { type: "refused", reason: string(v.reason) };
     case "entry": return { type: "entry", entry: parseEntry(v.entry) };
+    case "history": return { type: "history", from: integer(v.from), entries: list(v.entries, parseEntry) };
     case "subagent-entry": return { type: "subagent-entry", name: id(v.name), entry: parseEntry(v.entry) };
     case "live": return { type: "live", text: string(v.text), subagent: nullable(v.subagent, string) };
     case "view": return { type: "view", parts: list(v.parts, part), ...(v.lines === undefined ? {} : { lines: list(v.lines, memoryLine) }), ...(v.turn === undefined ? {} : { turn: integer(v.turn) }) };
@@ -299,7 +305,7 @@ export function parseEvent(value: unknown): Event {
       return boolean(v.ok)
         ? { type: "answer", id: id(v.id), ok: true, entry: nullable(v.entry, integer) }
         : { type: "answer", id: id(v.id), ok: false, reason: string(v.reason) };
-    case "read": return { type: "read", id: id(v.id), entries: list(v.entries, parseEntry), parts: list(v.parts, part), lines: list(v.lines, memoryLine), ...(v.live === undefined ? {} : { live: string(v.live) }), ...(v.error === undefined ? {} : { error: string(v.error) }) };
+    case "read": return { type: "read", id: id(v.id), entries: list(v.entries, parseEntry), parts: list(v.parts, part), lines: list(v.lines, memoryLine), ...(v.live === undefined ? {} : { live: string(v.live) }), ...(v.error === undefined ? {} : { error: string(v.error) }), ...(v.from === undefined ? {} : { from: integer(v.from) }) };
     case "import-estimate": return { type: "import-estimate", id: id(v.id), estimate: importEstimate(v.estimate) };
     case "imports": return { type: "imports", imports: list(v.imports, (item) => { const run = object(item); return { ...importEstimate(run), id: id(run.id), phase: oneOf(run.phase, ["running", "paused", "complete"]) }; }) };
     case "error": return { type: "error", id: nullable(v.id, id), reason: string(v.reason) };

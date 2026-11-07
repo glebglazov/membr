@@ -117,3 +117,17 @@ test("parseSchedule keeps a stored schedule and entries keep their scheduled mar
   expect(parseEntry(entry)).toEqual(entry);
   expect(() => parseEntry({ ...entry, scheduled: { schedule: "k3x9q2" } })).toThrow("Expected a boolean");
 });
+
+test("a page read, a history event and a paged read reply round trip, and refuse a bad index", async () => {
+  const { parseClientMessage, parseEvent } = await import("./src/index.ts");
+  const entry = { i: 3, kind: "user", text: "Read the inbox.", date: "2026-11-06T07:30:00.000Z", from: { machine: "m", seq: 3 } } as const;
+  const read = { type: "read", id: "p", read: "page", before: 40 } as const;
+  expect(parseClientMessage(read)).toEqual(read);
+  expect(() => parseClientMessage({ ...read, before: -1 })).toThrow("Expected a nonnegative integer");
+  const history = { type: "history", from: 3, entries: [entry] } as const;
+  expect<unknown>(parseEvent(history)).toEqual(history);
+  expect(() => parseEvent({ ...history, from: "3" })).toThrow("Expected a nonnegative integer");
+  const reply = { type: "read", id: "p", entries: [entry], parts: [], lines: [], from: 3 } as const;
+  expect<unknown>(parseEvent(reply)).toEqual(reply);
+  expect<unknown>(parseEvent({ ...reply, from: undefined })).toEqual({ type: "read", id: "p", entries: [entry], parts: [], lines: [] });
+});
