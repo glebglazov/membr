@@ -244,3 +244,4 @@ footer > .schedule-preview { margin-bottom: 10px; }
 :root[data-keyboard] footer { padding-bottom: 10px; }
 /* iOS Safari zooms into a field with text under 16px when it gets focus. The zoom makes the page wider than the screen and stops the app from following the keyboard. */
 @media (pointer: coarse) { :root :is(textarea, input:not([type=checkbox]):not([type=file]), select) { font-size: 16px; } }
+.earlier { align-self: center; }

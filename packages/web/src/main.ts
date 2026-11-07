@@ -1,6 +1,6 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { accept, act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
+import { accept, act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, earlier, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
 import { NOTEBOOK_CAP, VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
@@ -306,6 +306,20 @@ function SchedulesPage() {
     schedules.map((schedule) => h(ScheduleCard, { schedule, key: schedule.id })));
 }
 
+// Asks for the next older page when it nears the viewport, and is a button too, for a visitor who would rather ask.
+function Earlier() {
+  const state = earlier(model);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (state !== "idle" || !button.current) return;
+    const observer = new IntersectionObserver((seen) => { if (seen.some((item) => item.isIntersecting)) input({ type: "older", id: id() }); }, { root: button.current.closest(".scroller"), rootMargin: "600px 0px 0px 0px" });
+    observer.observe(button.current);
+    return () => observer.disconnect();
+  }, [state]);
+  if (state === "none") return null;
+  return h("button", { type: "button", class: "ghost small earlier", ref: button, disabled: state === "loading", "aria-busy": state === "loading", onClick: () => input({ type: "older", id: id() }) }, "Load earlier messages");
+}
+
 const bytesOf = (text: string) => new TextEncoder().encode(text).length;
 
 function NotebookPage() {
@@ -371,7 +385,7 @@ function App() {
   const [readingImages, setReadingImages] = useState(false);
   const files = useRef<HTMLInputElement>(null);
   const subagent = model.subagent === null ? null : model.subagents.get(model.subagent);
-  const scroll = useChatScroll(model.page === "chat" && (model.subagent !== null || !model.folded), { log: model.subagent ?? "", entries: subagent?.entries ?? model.entries, live: subagent?.live ?? model.live, ready: model.connection === "ready" && (model.subagent === null || subagent?.loaded === true) });
+  const scroll = useChatScroll(model.page === "chat" && (model.subagent !== null || !model.folded), { log: model.subagent ?? "", entries: subagent?.entries ?? model.entries, from: subagent ? 0 : model.from, live: subagent?.live ?? model.live, ready: model.connection === "ready" && (model.subagent === null || subagent?.loaded === true) });
   changed = () => update((value) => value + 1);
   useEffect(() => {
     const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : location.hash === "#schedules" ? "schedules" : location.hash === "#notebook" ? "notebook" : "chat" });
@@ -441,6 +455,7 @@ function App() {
       chatting && body.length > 0 && h("div", { class: "fold-bar" },
         model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
         h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
+      chatting && !model.folded && h(Earlier, null),
       model.page === "schedules" ? h(SchedulesPage, null) : model.page === "notebook" ? h(NotebookPage, null) : subagent ? [
         h("div", { key: "title", class: "subagent-title" },
           h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "subagent", name: null }) }, "← Main chat"),

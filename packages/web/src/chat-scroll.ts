@@ -5,7 +5,8 @@ type Target = { kind: "entry"; i: number } | { kind: "live"; after: number };
 // opening: the chat was just shown, and the start of its newest message stays at the top until the reader scrolls.
 type Position = { mode: "opening" } | { mode: "following" } | { mode: "reading"; unseen: Target | null };
 type Jump = "unseen" | "newest" | null;
-type Content = { log: string; entries: ReadonlyMap<number, Entry>; live: string; ready: boolean };
+// `from` is the lowest log index the chat holds. Entries below it come from a page of older messages or a zoom, so they are never new.
+type Content = { log: string; entries: ReadonlyMap<number, Entry>; from: number; live: string; ready: boolean };
 
 export function useChatScroll(enabled: boolean, content: Content) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -21,6 +22,8 @@ export function useChatScroll(enabled: boolean, content: Content) {
   // The logs whose history has come in. A reconnect sends the history again, and the chat stays on screen meanwhile.
   const loadedLogs = useRef(new Set<string>());
   if (content.ready) loadedLogs.current.add(content.log);
+  // The first row on screen and where it was, so older rows added above it do not move it.
+  const anchor = useRef<{ node: Element; top: number } | null>(null);
 
   function jump(): Jump {
     const current = position.current;
@@ -74,6 +77,15 @@ export function useChatScroll(enabled: boolean, content: Content) {
   function startReading() {
     if (position.current.mode !== "reading") setPosition({ mode: "reading", unseen: null });
   }
+  function measure() {
+    const limit = scroller.current?.getBoundingClientRect().top ?? 0;
+    for (const node of main.current?.children ?? []) {
+      if (!node.hasAttribute("data-entry") && !node.hasAttribute("data-part")) continue;
+      const top = node.getBoundingClientRect().top;
+      if (node.getBoundingClientRect().bottom > limit) { anchor.current = { node, top }; return; }
+    }
+    anchor.current = null;
+  }
   function find(target: Target): HTMLElement | null {
     if (target.kind === "live") return main.current?.querySelector<HTMLElement>('[data-live]') ?? null;
     return main.current?.querySelector<HTMLElement>(`[data-entry="${target.i}"], [data-entries~="${target.i}"]`) ?? null;
@@ -109,6 +121,7 @@ export function useChatScroll(enabled: boolean, content: Content) {
       else if (mode === "following" ? top() < lastTop.current - 1 : mode === "opening" && Math.abs(top() - lastTop.current) > 1) startReading();
       lastTop.current = top();
       measureFar();
+      measure();
     };
     const wheel = (event: WheelEvent) => {
       if (event.defaultPrevented || event.ctrlKey || event.deltaY >= 0 || top() === 0) return;
@@ -147,12 +160,18 @@ export function useChatScroll(enabled: boolean, content: Content) {
     previous.current = content;
     if (!enabled) return;
     if (before.log !== content.log) setPosition({ mode: "opening" });
-    else if (position.current.mode === "opening" && before.ready && (before.entries !== content.entries || before.live !== content.live)) startReading();
+    else if (position.current.mode === "opening" && before.ready && content.from === before.from && (before.entries !== content.entries || before.live !== content.live)) startReading();
     const current = position.current;
     if (current.mode === "opening") { open(); return; }
     if (current.mode === "following") { bottom(); return; }
+    const held = anchor.current;
+    if (held?.node.isConnected && content.from < before.from && before.log === content.log) {
+      scroller.current?.scrollBy({ top: held.node.getBoundingClientRect().top - held.top, behavior: "instant" });
+      lastTop.current = top();
+    }
+    measure();
     if (!before.ready || !content.ready) return;
-    const added = [...content.entries.values()].filter((entry) => !before.entries.has(entry.i)).sort((a, b) => a.i - b.i);
+    const added = [...content.entries.values()].filter((entry) => !before.entries.has(entry.i) && entry.i >= before.from).sort((a, b) => a.i - b.i);
     if (current.unseen?.kind === "live") {
       const after = current.unseen.after;
       const final = added.find((entry) => entry.kind === "unii" && entry.i > after);
@@ -166,7 +185,7 @@ export function useChatScroll(enabled: boolean, content: Content) {
       const target: Target = { kind: "live", after: [...content.entries.keys()].reduce((last, i) => Math.max(last, i), -1) };
       if (unseen(target)) setPosition({ mode: "reading", unseen: target });
     }
-  }, [enabled, content.log, content.entries, content.live, content.ready]);
+  }, [enabled, content.log, content.entries, content.from, content.live, content.ready]);
 
   return { scroller, main, loaded: loadedLogs.current.has(content.log), jump: enabled ? jump() : null, goToUnseen, followLatest };
 }
