@@ -58,6 +58,12 @@ try {
   if (engine.epochs[0].messages[0].text !== "/review src/app.ts") throw new Error("The skill did not reach the agent as a say act");
   if (!turn.includes("> Made 1 tool call: Read")) throw new Error("The tool call is not collapsed into a brief");
 
+  keys("please run /rev");
+  show("typing mid-prompt", await waitFor("the skill alone", (t) => t.includes("/review <path>") && !t.includes("/goal")));
+  keys("Tab");
+  await waitFor("the name in place", (t) => t.includes("> please run /review") && !t.includes("Review a change"));
+  keys("C-u");
+  await waitFor("the composer to clear", (t) => !t.includes("please run"));
   keys("first line");
   keys("S-Enter");
   keys("second line");

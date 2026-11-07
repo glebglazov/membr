@@ -1,5 +1,5 @@
 import type { Key } from "ink";
-import type { Command } from "@membr/core";
+import { accept, type Completion } from "@membr/core";
 
 // `recall` is set while up and down walk the history: the message on screen, counted back from the newest, and the text that was in the composer before the walk.
 export type Recall = { back: number; draft: string };
@@ -50,8 +50,8 @@ function recall(composer: Composer, direction: -1 | 1, history: readonly string[
   return { text, cursor: direction < 0 ? 0 : text.length, pick: 0, recall: { back, draft } };
 }
 
-// One key press against the composer. `menu` is what core offers for the current text: when it is not empty, up and down move through it and Tab takes the chosen name. `history` is the messages the user sent, oldest first.
-export function edit(composer: Composer, press: Press, menu: readonly Command[], history: readonly string[] = []): Edit {
+// One key press against the composer. `menu` is what core offers for the word at the cursor: when it has names, up and down move through them and Tab takes the chosen one in place of the word. `history` is the messages the user sent, oldest first.
+export function edit(composer: Composer, press: Press, menu: Completion, history: readonly string[] = []): Edit {
   const { text, cursor } = composer;
   const keep = (next: Composer): Edit => ({ composer: next, submit: null });
   const newline = press.return && (press.shift || press.meta) || press.ctrl && press.input === "j";
@@ -61,12 +61,14 @@ export function edit(composer: Composer, press: Press, menu: readonly Command[],
     return text.trim() ? { composer: EMPTY_COMPOSER, submit: text } : keep(composer);
   }
   if (press.tab) {
-    const chosen = menu[composer.pick];
-    return chosen ? keep(typed(chosen.name + " ", chosen.name.length + 1)) : keep(composer);
+    const chosen = menu.commands[composer.pick];
+    if (!chosen) return keep(composer);
+    const next = accept(text, cursor, menu, chosen);
+    return keep(typed(next.text, next.cursor));
   }
   if (press.upArrow || press.downArrow) {
     const direction = press.upArrow ? -1 : 1;
-    if (menu.length && !composer.recall) return keep({ ...composer, pick: (composer.pick + direction + menu.length) % menu.length });
+    if (menu.commands.length && !composer.recall) return keep({ ...composer, pick: (composer.pick + direction + menu.commands.length) % menu.commands.length });
     const moved = vertical(composer, direction);
     return keep(moved.cursor === cursor ? recall(composer, direction, history) : moved);
   }

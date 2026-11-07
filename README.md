@@ -56,6 +56,7 @@ In the terminal chat, Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at
 the end of the line adds a new line. Ctrl+G opens the text in `$VISUAL`, or
 `$EDITOR`, or `vim`. When you save and quit, the text comes back to the
 composer. Type `/` to see the commands and skills, and use Tab to complete one.
+A skill can be anywhere in the message. A command works only at the start.
 Up on the first line shows the message you sent before. Down on the last line
 goes forward, and then gives back the text you typed. Ctrl or Option with Left
 or Right moves one word. Cmd with Left or Right goes to the start or the end of
@@ -291,6 +292,7 @@ server's harness, each with `name`, `description` and `argumentHint`:
 
 The server sends the event again when the list changes. Each event replaces the
 earlier list. To run a skill, send a `say` act whose text starts with `/name`.
+A skill named elsewhere in the text runs too, through the Skill tool.
 The server sends that text to the agent as it is, with no notes added.
 
 Before `ready`, the server also sends a `schedules` event, and it sends the

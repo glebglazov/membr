@@ -211,8 +211,7 @@ export class Chat {
   }
 
   private inputText(text: string): string {
-    // Claude Code runs a skill only when the message starts with it, and what follows is its arguments.
-    // The notes wait for the next message.
+    // A message that starts with a skill is that skill's arguments, so the notes wait for the next message.
     if (text.startsWith("/")) return text;
     const imported: string[] = [];
     for (let i = this.knownImports; i < this.log.count; i++) {

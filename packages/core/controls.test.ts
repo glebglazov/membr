@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { act, answering, cacheShare, complete, createModel, effectivePick, hear, HELP } from "./src/index.ts";
+import { accept, act, answering, cacheShare, complete, createModel, effectivePick, hear, HELP } from "./src/index.ts";
 import { parseClientMessage, type Act, type Pick, type State } from "@membr/protocol";
 
 const pick: Pick = { model: "sonnet", effort: "high", fast: false };
@@ -33,7 +33,7 @@ test("reload asks the server to read its config again, and resends once", () => 
   const refused = hear(result.model, { type: "answer", id: "command", ok: false, reason: "The config was not reloaded: config.json must be an object" });
   expect(refused.error).toBe("The config was not reloaded: config.json must be an object");
   expect(send("/reload now").model.error).toBe("Use /reload without an argument.");
-  expect(complete(ready(), "/rel").map((command) => command.name)).toEqual(["/reload"]);
+  expect(complete(ready(), "/rel").commands.map((command) => command.name)).toEqual(["/reload"]);
 });
 
 test("S2 stop commands address all work or one named agent", () => {
@@ -137,6 +137,25 @@ test("S2 cache share uses the latest completed turn and includes cache writes", 
   expect(cacheShare({ input: 0, cacheRead: 0, cacheWrite: 0, output: 5 })).toBeNull();
 });
 
+test("a skill is offered for a / anywhere in the message, and a membr command only at its start", () => {
+  const model = hear(ready(), { type: "skills", skills: [{ name: "pdf", description: "Read a PDF.", argumentHint: "<file>" }, { name: "goal", description: "Hidden by /goal.", argumentHint: "" }] });
+  const names = (text: string, cursor?: number) => complete(model, text, cursor).commands.map((c) => c.name);
+  expect(names("please /p")).toEqual(["/pdf"]);
+  expect(names("please /g")).toEqual([]);
+  expect(names("  /g")).toEqual(["/goal"]);
+  expect(names("a/p")).toEqual([]);
+  expect(names("see https://x/p")).toEqual([]);
+  expect(names("please /pdf", 9)).toEqual([]);
+  expect(complete(model, "please /p").start).toBe(7);
+  const middle = complete(model, "please /p tail", 9);
+  expect(middle.commands.map((c) => c.name)).toEqual(["/pdf"]);
+  expect(accept("please /p tail", 9, middle, middle.commands[0])).toEqual({ text: "please /pdf tail", cursor: 12 });
+  const end = complete(model, "please /p");
+  expect(accept("please /p", 9, end, end.commands[0])).toEqual({ text: "please /pdf ", cursor: 12 });
+  const first = complete(model, "/pd more", 3);
+  expect(accept("/pd more", 3, first, first.commands[0])).toEqual({ text: "/pdf more", cursor: 5 });
+});
+
 test("a skill command goes to the agent as typed, and membr commands keep their names", () => {
   const skills = [
     { name: "pdf", description: "Read a PDF.", argumentHint: "<file>" },
@@ -147,8 +166,8 @@ test("a skill command goes to the agent as typed, and membr commands keep their 
   expect(act(model, { type: "send", id: "s", text: "  /pdf report.pdf  " }).acts).toEqual([{ type: "act", act: "say", id: "s", text: "/pdf report.pdf" }]);
   expect(act(model, { type: "send", id: "h", text: "/help" }).acts).toEqual([]);
   expect(act(model, { type: "send", id: "u", text: "/nope" }).model.error).toBe("Unknown command /nope. Use /help.");
-  expect(complete(model, "/p").map((c) => c.name)).toEqual(["/pause", "/pdf", "/pstack:poteto-mode", "/stop", "/speed", "/accept", "/help"]);
-  expect(complete(model, "/poteto").map((c) => c.name)).toEqual(["/pstack:poteto-mode"]);
-  expect(complete(model, "/pdf x")).toEqual([]);
-  expect(complete(model, "/").filter((c) => c.name === "/help")).toHaveLength(1);
+  expect(complete(model, "/p").commands.map((c) => c.name)).toEqual(["/pause", "/pdf", "/pstack:poteto-mode", "/stop", "/speed", "/accept", "/help"]);
+  expect(complete(model, "/poteto").commands.map((c) => c.name)).toEqual(["/pstack:poteto-mode"]);
+  expect(complete(model, "/pdf x").commands).toEqual([]);
+  expect(complete(model, "/").commands.filter((c) => c.name === "/help")).toHaveLength(1);
 });

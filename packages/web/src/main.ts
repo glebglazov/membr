@@ -1,6 +1,6 @@
 import { h, render, type ComponentChild } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
-import { act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { accept, act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
 import { VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
@@ -309,6 +309,9 @@ function App() {
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState(0);
   const [menuClosed, setMenuClosed] = useState(false);
+  const [caret, setCaret] = useState(0);
+  // Where the caret goes after the next render: setting `value` moves it to the end, so Tab puts it back.
+  const place = useRef<number | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [readingImages, setReadingImages] = useState(false);
   const files = useRef<HTMLInputElement>(null);
@@ -339,10 +342,21 @@ function App() {
       changed();
     } finally { setReadingImages(false); }
   }
-  const commands = menuClosed ? [] : complete(model, draft);
+  const completion = complete(model, draft, caret);
+  const commands = menuClosed ? [] : completion.commands;
   const current = Math.min(selected, commands.length - 1);
-  function edit(text: string) { setDraft(text); setSelected(0); setMenuClosed(false); }
-  function insert(command: Command) { edit(command.name + " "); field.current?.focus(); }
+  useLayoutEffect(() => {
+    if (place.current !== null) field.current?.setSelectionRange(place.current, place.current);
+    place.current = null;
+  });
+  function edit(text: string, at: number = text.length) { setDraft(text); setCaret(at); setSelected(0); setMenuClosed(false); }
+  function insert(command: Command) {
+    const next = accept(draft, caret, completion, command);
+    edit(next.text, next.cursor);
+    place.current = next.cursor;
+    field.current?.focus();
+  }
+  const track = (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) setCaret(event.currentTarget.selectionStart); };
   function send() {
     if ((!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused") return;
     input({ type: "send", id: id(), text: draft });
@@ -394,7 +408,7 @@ function App() {
         model.attachments.length > 0 && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", class: "ghost small", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
         commands.length > 0 && h(CommandMenu, { commands, selected: current, choose: insert }),
         h("textarea", { "aria-label": "Message", placeholder: "Message membr", value: draft, rows: 2, ref: field,
-          onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) edit(event.currentTarget.value); },
+          onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) edit(event.currentTarget.value, event.currentTarget.selectionStart); }, onKeyUp: track, onClick: track,
           onKeyDown: (event: KeyboardEvent) => {
             if (commands.length > 0 && !event.isComposing) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setSelected((current + (event.key === "ArrowDown" ? 1 : commands.length - 1)) % commands.length); return; }

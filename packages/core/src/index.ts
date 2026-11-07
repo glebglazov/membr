@@ -337,13 +337,26 @@ function skill(model: Model, name: string): Skill | undefined {
   return COMMANDS.some((command) => command.name === name) ? undefined : model.skills.find((skill) => "/" + skill.name === name);
 }
 
-// The commands and skills that the composer can offer for its text: names
-// that start with the typed word first, then names that contain it.
-export function complete(model: Model, text: string): Command[] {
-  if (!/^\/\S*$/.test(text)) return [];
-  const all = [...COMMANDS, ...model.skills.filter((s) => skill(model, "/" + s.name)).map((s) => ({ name: "/" + s.name, hint: s.argumentHint, description: s.description }))];
-  const word = text.toLowerCase();
-  return [...all.filter((c) => c.name.toLowerCase().startsWith(word)), ...all.filter((c) => !c.name.toLowerCase().startsWith(word) && c.name.toLowerCase().includes(word.slice(1)))];
+// The `/word` that ends at the cursor, and the names the composer can offer for it.
+export type Completion = { start: number; commands: Command[] };
+
+// A skill runs wherever the message names it, but membr's own commands only work as the first word. So the names that start with the typed word come first, then the names that contain it; after other text, only skills.
+export function complete(model: Model, text: string, cursor: number = text.length): Completion {
+  const start = text.slice(0, cursor).search(/(?:^|\s)\/\S*$/);
+  const none = { start: cursor, commands: [] };
+  if (start === -1 || (cursor < text.length && !/\s/.test(text[cursor]))) return none;
+  const from = text[start] === "/" ? start : start + 1;
+  const skills = model.skills.filter((s) => skill(model, "/" + s.name)).map((s) => ({ name: "/" + s.name, hint: s.argumentHint, description: s.description }));
+  const all = text.slice(0, from).trim() === "" ? [...COMMANDS, ...skills] : skills;
+  const word = text.slice(from, cursor).toLowerCase();
+  return { start: from, commands: [...all.filter((c) => c.name.toLowerCase().startsWith(word)), ...all.filter((c) => !c.name.toLowerCase().startsWith(word) && c.name.toLowerCase().includes(word.slice(1)))] };
+}
+
+// Puts the chosen name in place of the typed word, with one space after it unless the text already has whitespace there.
+export function accept(text: string, cursor: number, completion: Completion, command: Command): { text: string; cursor: number } {
+  const space = /^\s/.test(text.slice(cursor)) ? "" : " ";
+  const name = command.name + space;
+  return { text: text.slice(0, completion.start) + name + text.slice(cursor), cursor: completion.start + command.name.length + 1 };
 }
 
 function post(model: Model, messages: Act[]): ReturnType<typeof act> {

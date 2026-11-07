@@ -9,6 +9,7 @@ import { connectSession, type Session } from "../src/session.ts";
 import { PassThrough } from "node:stream";
 import { END, FakeEngine } from "../../server/test/engine.ts";
 import { startHub } from "./hub.ts";
+const none = { start: 0, commands: [] };
 
 const cleanups: Array<() => unknown> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -107,23 +108,30 @@ test("a lost connection shows offline, then reconnects and resends the pending a
 test("composer keys: newline variants, backslash continuation, paste, and menu navigation", () => {
   const model = hear(createModel(), { type: "skills", skills: [{ name: "quest", description: "Quest", argumentHint: "" }] });
   let composer = insert(EMPTY_COMPOSER, "a");
-  composer = edit(composer, { input: "", return: true, shift: true }, []).composer;
-  composer = edit(composer, { input: "b" }, []).composer;
-  composer = edit(composer, { input: "j", ctrl: true }, []).composer;
-  composer = edit(composer, { input: "c\\" }, []).composer;
-  composer = edit(composer, { input: "", return: true }, []).composer;
+  composer = edit(composer, { input: "", return: true, shift: true }, none).composer;
+  composer = edit(composer, { input: "b" }, none).composer;
+  composer = edit(composer, { input: "j", ctrl: true }, none).composer;
+  composer = edit(composer, { input: "c\\" }, none).composer;
+  composer = edit(composer, { input: "", return: true }, none).composer;
   expect(composer.text).toBe("a\nb\nc\n");
-  expect(edit(composer, { input: "", return: true }, []).submit).toBe("a\nb\nc\n");
+  expect(edit(composer, { input: "", return: true }, none).submit).toBe("a\nb\nc\n");
 
   composer = insert(EMPTY_COMPOSER, "/qu");
-  const menu = complete(model, composer.text);
-  expect(menu[0].name).toBe("/quest");
+  const menu = complete(model, composer.text, composer.cursor);
+  expect(menu.commands[0].name).toBe("/quest");
   expect(edit(composer, { input: "", tab: true }, menu).composer.text).toBe("/quest ");
+
+  const middle = { ...insert(EMPTY_COMPOSER, "please run /qu then"), cursor: 14 };
+  const offered = complete(model, middle.text, middle.cursor);
+  expect(offered.commands.map((command) => command.name)).toEqual(["/quest"]);
+  const taken = edit(middle, { input: "", tab: true }, offered).composer;
+  expect(taken.text).toBe("please run /quest then");
+  expect(taken.cursor).toBe(18);
 });
 
 test("up and down walk the sent messages and give back the draft; up and down move inside a multi-line message first", () => {
   const history = ["first", "one\ntwo"];
-  const press = (composer: typeof EMPTY_COMPOSER, key: "upArrow" | "downArrow") => edit(composer, { input: "", [key]: true }, [], history).composer;
+  const press = (composer: typeof EMPTY_COMPOSER, key: "upArrow" | "downArrow") => edit(composer, { input: "", [key]: true }, none, history).composer;
   let composer = insert(EMPTY_COMPOSER, "draft");
   composer = press(composer, "upArrow");
   expect(composer.text).toBe("one\ntwo");
@@ -140,15 +148,15 @@ test("up and down walk the sent messages and give back the draft; up and down mo
   expect(composer).toMatchObject({ text: "draft", recall: null });
   expect(press(EMPTY_COMPOSER, "downArrow")).toEqual(EMPTY_COMPOSER);
 
-  const menu = [{ name: "/help", hint: "", description: "Help" }, { name: "/halt", hint: "", description: "Halt" }];
-  const recalled = edit(EMPTY_COMPOSER, { input: "", upArrow: true }, [], ["/help"]).composer;
+  const menu = { start: 0, commands: [{ name: "/help", hint: "", description: "Help" }, { name: "/halt", hint: "", description: "Halt" }] };
+  const recalled = edit(EMPTY_COMPOSER, { input: "", upArrow: true }, none, ["/help"]).composer;
   expect(edit(recalled, { input: "", downArrow: true }, menu, ["/help"]).composer.text).toBe("");
   expect(edit(insert(EMPTY_COMPOSER, "/h"), { input: "", downArrow: true }, menu, ["/help"]).composer).toMatchObject({ text: "/h", pick: 1 });
 });
 
 test("Ctrl, Option and Cmd with left and right move by word and to the line's ends", () => {
   const at = (cursor: number) => ({ ...insert(EMPTY_COMPOSER, "say hello  world\nnext"), cursor });
-  const move = (cursor: number, press: Parameters<typeof edit>[1]) => edit(at(cursor), press, []).composer.cursor;
+  const move = (cursor: number, press: Parameters<typeof edit>[1]) => edit(at(cursor), press, none).composer.cursor;
   expect(move(16, { input: "", leftArrow: true, ctrl: true })).toBe(11);
   expect(move(11, { input: "", leftArrow: true, meta: true })).toBe(4);
   expect(move(11, { input: "b", meta: true })).toBe(4);
@@ -162,7 +170,7 @@ test("Ctrl, Option and Cmd with left and right move by word and to the line's en
 
 test("Ctrl, Option and Cmd with Backspace erase a word back and to the line's start", async () => {
   const at = (cursor: number) => ({ ...insert(EMPTY_COMPOSER, "first\nsay hello  world"), cursor });
-  const erase = (cursor: number, press: Parameters<typeof edit>[1]) => edit(at(cursor), press, []).composer;
+  const erase = (cursor: number, press: Parameters<typeof edit>[1]) => edit(at(cursor), press, none).composer;
   expect(erase(22, { input: "", backspace: true, ctrl: true })).toMatchObject({ text: "first\nsay hello  ", cursor: 17 });
   expect(erase(17, { input: "", backspace: true, meta: true })).toMatchObject({ text: "first\nsay world", cursor: 10 });
   expect(erase(15, { input: "", backspace: true, super: true })).toMatchObject({ text: "first\n  world", cursor: 6 });

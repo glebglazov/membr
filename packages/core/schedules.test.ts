@@ -62,9 +62,9 @@ test("S5 the schedules event replaces the list, and the id commands act on a sch
 });
 
 test("S5 / offers the schedule commands, and a time shows in the zone of its schedule", () => {
-  const names = complete(createModel(), "/sch").map((command) => command.name);
+  const names = complete(createModel(), "/sch").commands.map((command) => command.name);
   expect(names).toEqual(["/schedule", "/schedules", "/unschedule"]);
-  expect(complete(createModel(), "/un").map((command) => command.name)).toContain("/unschedule");
+  expect(complete(createModel(), "/un").commands.map((command) => command.name)).toContain("/unschedule");
   expect(fireTime("2026-11-09T08:30:00.000Z", "Europe/London", Date.parse("2026-11-06T12:00:00Z"))).toBe("Mon 08:30");
   expect(fireTime("2026-07-09T07:30:00.000Z", "Europe/London", Date.parse("2026-07-06T12:00:00Z"))).toBe("Thu 08:30");
   expect(fireTime("2027-01-09T08:30:00.000Z", "Europe/London", Date.parse("2026-11-06T12:00:00Z"))).toBe("9 Jan 08:30");

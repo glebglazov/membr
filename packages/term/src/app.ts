@@ -60,7 +60,7 @@ export function App({ session, wheel, editor }: { session: Session; wheel?: Whee
   useEffect(() => () => session.close(), [session]);
   useEffect(() => wheel?.((lines) => setScroll((previous) => Math.max(0, Math.min(scrollLimit.current, Math.min(previous, scrollLimit.current) + lines)))), [wheel]);
 
-  const menu = complete(model, composer.text);
+  const menu = complete(model, composer.text, composer.cursor).commands;
   const approval = [...model.approvals.values()][0];
 
   const notices: Line[] = [
@@ -124,7 +124,7 @@ export function App({ session, wheel, editor }: { session: Session; wheel?: Whee
       void suspendTerminal(() => { saved = editor(composer.text); }).then(() => { if (saved !== null) setComposer(insert(EMPTY_COMPOSER, saved)); });
       return;
     }
-    const result = edit(composer, { input, ...key }, complete(current, composer.text), history(current, sent));
+    const result = edit(composer, { input, ...key }, complete(current, composer.text, composer.cursor), history(current, sent));
     if (result.submit === null) return setComposer(result.composer);
     if (!send(result.submit)) setComposer(result.composer);
   });

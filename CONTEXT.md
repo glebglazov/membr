@@ -21,7 +21,7 @@ The Claude Code settings, skills, plugins and MCP servers that the Engine loads 
 _Avoid_: config, environment
 
 **Skill**:
-A `/name` command from the harness. The agent runs it when the user's message starts with it. A skill with the name of a membr command is hidden behind that command. Built-in Claude Code commands are not skills, because they act on the session, which is an epoch.
+A `/name` command from the harness. When the message starts with it, Claude Code runs it and the rest of the message is its arguments. Elsewhere in the message, the agent runs it with the Skill tool. Membr commands work only at the start of the message. A skill with the name of a membr command is hidden behind that command. Built-in Claude Code commands are not skills, because they act on the session, which is an epoch.
 _Avoid_: slash command, plugin
 
 **Compression**:
