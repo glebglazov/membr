@@ -70,8 +70,10 @@ export type State = { busy: boolean; wait: string; goal: string | null; pick: Pi
 // how full the epoch was at the end of its last turn: `used` of the model's
 // `window` tokens, "overflow" when it no longer fit, null before a turn ends
 export type Context = { used: number; window: number } | "overflow" | null;
-// A turn that ends with the epoch at this share of the window or more gets a new epoch.
-export const NEW_EPOCH_SHARE = 0.8;
+// A turn that ends with the epoch at this many tokens or more gets a new epoch: past it, each request
+// costs more and the model reads its context less well. A small window lowers it to 80%, so the next turn still fits.
+export const EPOCH_BUDGET = 150_000;
+export function epochLimit(window: number): number { return Math.min(EPOCH_BUDGET, Math.round(window * 0.8)); }
 export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }

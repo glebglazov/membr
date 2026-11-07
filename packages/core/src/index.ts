@@ -1,7 +1,7 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import { NEW_EPOCH_SHARE, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
+import { epochLimit, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
@@ -383,13 +383,12 @@ export function answering(model: Model, approval: string): boolean {
 }
 
 export function inputTokens(usage: Usage): number { return usage.input + usage.cacheRead + usage.cacheWrite; }
-// The token count at which the epoch's next turn end starts a new epoch.
-export function epochLimit(context: { window: number }): number { return Math.round(context.window * NEW_EPOCH_SHARE); }
+export { epochLimit };
 // the status words for how far the epoch is from a new one; null until a turn of the epoch ends
 export function epochWords(context: Context | undefined): string | null {
   if (context === undefined || context === null) return null;
   if (context === "overflow") return "epoch full";
-  const limit = epochLimit(context);
+  const limit = epochLimit(context.window);
   return `epoch ${tokens(context.used)} / ${tokens(limit)} (${Math.round(context.used / limit * 100)}%)`;
 }
 export function tokens(count: number): string {

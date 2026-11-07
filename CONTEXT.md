@@ -33,7 +33,7 @@ One input from the user or from membr, and the agent work that answers it, up to
 _Avoid_: request, round
 
 **Epoch**:
-One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of the agent's home or prompt, and when a turn ends with the session at 80% or more of the model's context window or over it. The status shows the epoch's size after its last turn, of that 80%.
+One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of the agent's home or prompt, and when a turn ends with the session at 150k tokens or more (80% of the model's context window, when that is less) or over the window. The status shows the epoch's size after its last turn, of that limit.
 _Avoid_: session, conversation
 
 **Harness**:

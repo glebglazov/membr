@@ -48,8 +48,10 @@ test("a turn that overflows the epoch fails, a note asks to send it again, and t
 });
 
 const near: Array<{ name: string; context: Context; epochs: number }> = [
-  { name: "a turn that ends at 80% of the window opens a new epoch for the next message", context: { used: 800_000, window: 1_000_000 }, epochs: 2 },
-  { name: "a turn that ends below 80% of the window keeps the epoch", context: { used: 799_999, window: 1_000_000 }, epochs: 1 },
+  { name: "a turn that ends at 150k tokens of a large window opens a new epoch for the next message", context: { used: 150_000, window: 1_000_000 }, epochs: 2 },
+  { name: "a turn that ends below 150k tokens of a large window keeps the epoch", context: { used: 149_999, window: 1_000_000 }, epochs: 1 },
+  { name: "a turn that ends at 80% of a small window opens a new epoch for the next message", context: { used: 120_000, window: 150_000 }, epochs: 2 },
+  { name: "a turn that ends below 80% of a small window keeps the epoch", context: { used: 119_999, window: 150_000 }, epochs: 1 },
   { name: "a turn with no known context keeps the epoch", context: null, epochs: 1 },
 ];
 for (const row of near) {

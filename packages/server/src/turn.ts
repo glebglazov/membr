@@ -1,4 +1,4 @@
-import { NEW_EPOCH_SHARE, type Act, type Entry, type State, type Usage } from "@membr/protocol";
+import { epochLimit, type Act, type Entry, type State, type Usage } from "@membr/protocol";
 import type { Context, From, Priority } from "./engine.ts";
 import type { Image } from "./images.ts";
 import type { Log } from "./log.ts";
@@ -57,8 +57,8 @@ const GOAL_NO = "The goal isn't satisfied yet: keep working.";
 const FULL = "The epoch was full, so membr opened a new one. Send your message again.";
 
 // The summary batch counts the view, not the raw tool output inside the epoch, so an epoch can fill before a batch.
-// From 80% of the window it gets a new epoch while the next turn still fits; a turn that overflows gets one too.
-function full(context: Context): boolean { return context === "overflow" || (context !== null && context.used >= NEW_EPOCH_SHARE * context.window); }
+// From the epoch limit it gets a new epoch while the next turn still fits; a turn that overflows gets one too.
+function full(context: Context): boolean { return context === "overflow" || (context !== null && context.used >= epochLimit(context.window)); }
 
 export function closed(turn: Turn): boolean { return turn.phase === "closing" || turn.phase === "closed"; }
 export function turnId(turn: Turn, count: number): number { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" ? turn.id : count; }
