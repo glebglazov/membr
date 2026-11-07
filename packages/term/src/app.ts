@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Box, Text, useApp, useInput, usePaste, useWindowSize } from "ink";
-import { answering, complete, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
+import { answering, complete, earlier, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
 import { EMPTY_COMPOSER, edit, insert, layout, type Composer } from "./composer.ts";
 import type { Wheel } from "./terminal.ts";
 import { newId, type Session } from "./session.ts";
@@ -83,6 +83,13 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   scrollLimit.current = maxScroll;
   const visible = lines.slice(Math.max(0, lines.length - height - offset), lines.length - offset);
   const state = status(model, agent);
+  // Reaching the top of the loaded chat asks for the next older page. The offset counts from the bottom, so the rows that arrive above leave the same content on screen.
+  const atTop = offset >= maxScroll && !model.folded && model.page === "chat" && earlier(model) === "idle";
+  useEffect(() => {
+    if (!atTop) return;
+    setScroll(offset);
+    session.input({ type: "older", id: newId() });
+  }, [atTop]);
 
   function send(text: string) {
     session.input({ type: "send", id: newId(), text });

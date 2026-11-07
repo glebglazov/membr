@@ -402,7 +402,11 @@ Send hello first:
 {"type":"hello","version":"3.0","kind":"term","device":null,"token":"TOKEN"}
 ```
 
-The server replays logged `entry` events, then sends `ready`. A different major
+The server sends one `history` event with the latest page of the chat's
+entries and the log index `from` where it starts, then sends `ready`. Entries
+under a summary line are not in it. Ask for older ones with
+`{"type":"read","id":"page-1","read":"page","before":FROM}`, and the `read`
+reply carries the next older entries and their `from`. A different major
 version gets `refused` with a reason. Both `web` and `term` use the same protocol.
 A token supplied by the connection allows `"token":null` in hello. A local
 connection to a loopback address also permits `"token":null`. Browser requests

@@ -10,6 +10,12 @@ import { connectSession, type Session } from "../src/session.ts";
 import { PassThrough } from "node:stream";
 import { END, FakeEngine } from "../../server/test/engine.ts";
 import { startHub } from "./hub.ts";
+import { Log } from "../../server/src/log.ts";
+import { PAGE } from "../../server/src/view.ts";
+import { defaultStore } from "../../server/test/config.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 const none = { start: 0, commands: [] };
 
 const cleanups: Array<() => unknown> = [];
@@ -240,6 +246,28 @@ test("the mouse wheel scrolls the transcript, and Ink gets the keys without the 
   app.stdin.write("g");
   await until(() => frame(app).includes("line 39") && !frame(app).includes("scrolled up"), "Ctrl+X g to go to the bottom");
   expect(frame(app)).not.toContain("> g");
+});
+
+test("scrolling to the top of a long chat loads the older page and leaves the same lines on screen", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "membr-term-long-"));
+  const log = new Log(defaultStore(dir));
+  const count = PAGE * 2 + 30, name = (i: number) => `Message ${String(i).padStart(4, "0")}`;
+  for (let i = 0; i < count; i++) log.append(i % 2 ? "unii" : "user", name(i));
+  const server = await startHub(new FakeEngine(), { dir });
+  const session = connectSession({ url: server.url, token: null, delays: [50] });
+  let scroll: ((lines: number) => void) | null = null;
+  const app = render(createElement(App, { session, wheel: (listener) => { scroll = listener; return () => { scroll = null; }; } }));
+  cleanups.push(() => app.unmount(), () => session.close(), () => server.close(), () => server.remove());
+  await until(() => frame(app).includes(name(count - 1)), "the latest message");
+  expect(session.model().from).toBe(count - PAGE);
+  scroll!(100_000);
+  await until(() => frame(app).includes("scrolled up") && !frame(app).includes(name(count - 1)), "the top of the loaded chat");
+  const top = frame(app);
+  await until(() => session.model().from < count - PAGE, "the older page");
+  await Bun.sleep(100);
+  expect(frame(app), "the same lines stay on screen after the page loads").toBe(top);
+  await until(() => { scroll!(100_000); return frame(app).includes(name(0)); }, "the first message");
+  expect(session.model().from).toBe(0);
 });
 
 test("Ctrl+G edits the composer text in the editor and puts the saved text back", async () => {
