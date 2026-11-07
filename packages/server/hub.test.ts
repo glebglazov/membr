@@ -92,7 +92,7 @@ test("a process restart preserves messages, answers and source sequence", async 
   const after = await serve(before.dir);
   expect(after.token).toBe(before.token);
   const b = await connect(after);
-  expect(await b.wait("entry")).toEqual(entry);
+  expect((await b.wait("history")).entries).toEqual([entry.entry]);
   b.act({ type: "act", id: "kept", act: "say", text: "Different content" });
   expect(await b.wait("answer")).toEqual(answer);
   b.act({ type: "act", id: "next", act: "say", text: "Next message" });
@@ -202,7 +202,7 @@ test("a committed entry survives a directory sync failure without a second appen
   await before.proc.exited;
   const after = await serve(before.dir);
   const recovered = await connect(after);
-  expect((await recovered.wait("entry")).entry.text).toBe(act.text);
+  expect((await recovered.wait("history")).entries[0].text).toBe(act.text);
   recovered.act(act);
   expect(await recovered.wait("answer")).toEqual({ type: "answer", id: act.id, ok: true, entry: 0 });
   expect(records(after.dir)).toHaveLength(1);
@@ -224,7 +224,7 @@ test("recovery uses message indexes when a clock change reverses daily file orde
   fs.writeFileSync(path.join(main, "2026-10-22.jsonl"), saved.filter((record) => record.turn?.id === 1).map((record) => JSON.stringify(record)).join("\n") + "\n");
   const after = await serve(before.dir);
   const recovered = await connect(after);
-  expect(recovered.events.filter((event) => event.type === "entry").map((event) => event.entry.text)).toEqual(["first-day", "second-day"]);
+  expect(recovered.entries.map((entry) => entry.text)).toEqual(["first-day", "second-day"]);
   recovered.read({ type: "read", id: "both", read: "zoom", part: { l: 1, i: 0 } });
   const children = await recovered.wait("read");
   expect(children.parts).toEqual([{ l: 0, i: 0 }, { l: 0, i: 1 }]);

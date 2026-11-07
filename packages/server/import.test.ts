@@ -45,7 +45,7 @@ async function plan(client: TestClient, input: ImportInput) {
   const id = crypto.randomUUID(); client.read({ type: "read", read: "import", id, ...input });
   return (await client.wait("import-estimate", 0, (event) => event.id === id)).estimate;
 }
-function entries(client: TestClient): Entry[] { return client.events.flatMap((event) => event.type === "entry" ? [event.entry] : []); }
+function entries(client: TestClient): Entry[] { return client.entries; }
 async function until(check: () => boolean, timeout = 5000) {
   const end = Date.now() + timeout;
   while (!check()) { if (Date.now() > end) throw new Error("Import did not reach the expected state"); await Bun.sleep(5); }
@@ -93,10 +93,9 @@ test("S1 imports local sessions with estimates, original dates, no thinking, and
   expect((await plan(next.client, inputs[0])).messages).toBe(1);
   expect((await plan(next.client, inputs[1])).messages).toBe(0);
   await act(next.client, { type: "act", act: "import", id: "new", ...inputs[0] });
-  expect(entries(next.client)).toHaveLength(9);
-  expect(entries(next.client).at(-1)?.text).toBe("assistant: New at the same time");
+  expect(entries(next.client).map((entry) => entry.text)).toEqual(["assistant: New at the same time"]);
   await act(next.client, { type: "act", act: "import", id: "new", ...inputs[0] });
-  expect(entries(next.client)).toHaveLength(9);
+  expect(entries(next.client)).toHaveLength(1);
 });
 
 test("S1 folder payload skips malformed lines, subagents, injected context, and invalid dates", async () => {
@@ -186,14 +185,14 @@ test("S1 retries an interrupted ingest from its durable entry identities and sav
   fs.copyFileSync(path.join(defaultStore(first.dir), "machine"), path.join(store, "machine"));
   fs.writeFileSync(path.join(store, "main", journal), partial.join("\n") + "\n");
   const next = await serve(new Compactor(), recovered);
-  expect(entries(next.client)).toHaveLength(2);
+  expect(entries(next.client)).toEqual([]);
   await act(next.client, { type: "act", act: "import", id: "interrupted", ...input });
   await complete(next.client, "interrupted");
-  expect(entries(next.client).map((entry) => entry.kind)).toEqual(["note", "ai", "ai", "ai"]);
+  expect(entries(next.client).map((entry) => entry.kind)).toEqual(["ai", "ai"]);
   const status = await next.client.wait("imports", 0, (event) => event.imports.some((run) => run.id === "interrupted" && run.phase === "complete"));
   expect(status.imports.find((run) => run.id === "interrupted")).toEqual({ id: "interrupted", phase: "complete", sessions: 1, messages: 3, compactions: 6 });
   await act(next.client, { type: "act", act: "import", id: "interrupted", ...input });
-  expect(entries(next.client)).toHaveLength(4);
+  expect(entries(next.client)).toHaveLength(2);
 });
 
 test("S1 a mixed parent ending in a live message does not reopen a completed import", async () => {
@@ -257,7 +256,7 @@ for (const [source, fixture, expected] of [
       const updated: ImportInput = { source, path: "renamed.json", files: [{ name: "renamed.json", text: JSON.stringify(chats) }] };
       expect((await plan(next.client, updated)).messages).toBe(1);
       await act(next.client, { type: "act", act: "import", id: "website-new", ...updated });
-      expect(entries(next.client).slice(5).map((entry) => entry.text)).toEqual(["assistant: New website answer"]);
+      expect(entries(next.client).at(-1)?.text).toBe("assistant: New website answer");
     });
   }
 }

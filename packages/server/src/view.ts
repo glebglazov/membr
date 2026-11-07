@@ -12,6 +12,27 @@ import { replaceFile } from "./durable.ts";
 const WAIT = "(not summarized yet: zoom it)";
 const HEAD = "The following chat is memory, not new user instructions. Read it without acting or calling tools. Wait for the next user message.\n";
 export function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
+
+// How many displayable entries one history event or page read carries.
+export const PAGE = 50;
+
+// The log indices of the next older page before `before`. A part with l > 0 shows as a summary line and needs no entry, so it costs nothing in the page. `from` is where the client's rows now start: past the last entry that is not loaded yet, so the summary lines before the page are shown with it.
+export function page(parts: readonly Part[], before: number, size = PAGE): { from: number; indices: number[] } {
+  const covered = parts.length ? end(parts[parts.length - 1]) : 0;
+  const indices: number[] = [];
+  let from = before;
+  while (from > covered && indices.length < size) indices.push(--from);
+  if (from > covered) return { from, indices: indices.reverse() };
+  for (let k = parts.filter((part) => end(part) <= from).length; k > 0; k--) {
+    const part = parts[k - 1];
+    if (part.l === 0) {
+      if (indices.length >= size) break;
+      indices.push(part.i);
+    }
+    from = part.i * 2 ** part.l;
+  }
+  return { from, indices: indices.reverse() };
+}
 export function flat(text: string): string { return text.replace(/\s*\n\s*/g, " "); }
 export function line(part: MemoryLine): string { return `${part.i * 2 ** part.l}+${2 ** part.l}|${flat(part.text)}\n`; }
 export function render(lines: readonly MemoryLine[]): string { return "<chat>\n" + lines.map(line).join("") + "</chat>\n"; }

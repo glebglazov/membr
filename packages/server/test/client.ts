@@ -1,4 +1,4 @@
-import { VERSION, parseEvent, type Act, type Event, type Hello, type Read } from "@membr/protocol";
+import { VERSION, parseEvent, type Act, type Entry, type Event, type Hello, type Read } from "@membr/protocol";
 
 export class TestClient {
   readonly events: Event[] = [];
@@ -27,6 +27,9 @@ export class TestClient {
     socket.send(JSON.stringify(hello));
     return client;
   }
+
+  // every entry the client was told of: the history on join, then the live ones
+  get entries(): Entry[] { return this.events.flatMap((event) => event.type === "history" ? event.entries : event.type === "entry" ? [event.entry] : []); }
 
   act(act: Act): void { this.socket.send(JSON.stringify(act)); }
   read(read: Read): void { this.socket.send(JSON.stringify(read)); }

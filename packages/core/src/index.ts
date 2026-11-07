@@ -17,6 +17,8 @@ export type Model = {
   uploads: ReadonlyMap<string, Upload>;
   connection: "offline" | "connecting" | "ready" | "refused";
   entries: ReadonlyMap<number, Entry>;
+  // The chat holds the displayable entries from this log index on, with no gap. 0 means it holds them back to the start.
+  from: number;
   live: string;
   state: State;
   parts: Part[];
@@ -56,6 +58,7 @@ export type Input =
   | { type: "open"; id: string; part: Part }
   | { type: "close"; part: Part }
   | { type: "fold" }
+  | { type: "older"; id: string }
   | { type: "page"; page: Page }
   | { type: "schedule-preview"; id: string; text: string; zone: string }
   | { type: "schedule-accept"; id: string; run?: ScheduleSpec["run"]; missed?: ScheduleSpec["missed"] }
@@ -80,10 +83,18 @@ export function createModel(): Model {
   return {
     importPlan: null, imports: [],
     subagent: null, subagents: new Map(), attachments: [], uploads: new Map(),
-    connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
+    connection: "offline", entries: new Map(), from: 0, live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
     roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], agents: [], schedules: [], notebook: null, preview: null,
     state: { busy: false, wait: "", goal: null, pick: null, subagents: [], usage: null },
   };
+}
+
+function start(part: Part): number { return part.i * 2 ** part.l; }
+
+// Whether the chat has older entries to load, and whether a page of them is on its way.
+export function earlier(model: Model): "none" | "idle" | "loading" {
+  if (model.from === 0) return "none";
+  return [...model.reads.values()].some((request) => request.read === "page") ? "loading" : "idle";
 }
 
 function requestSubagent(model: Model, name: string): Model {
@@ -146,6 +157,13 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       entries.set(event.entry.i, event.entry);
       return { ...model, entries, live: event.entry.kind === "unii" ? "" : model.live };
     }
+    case "history": {
+      const held = [...model.entries.keys()].reduce((last, i) => Math.max(last, i), -1);
+      const joins = held >= event.from - 1;
+      const entries = new Map(joins ? model.entries : []);
+      for (const entry of event.entries) entries.set(entry.i, entry);
+      return { ...model, entries, from: joins && model.entries.size ? Math.min(model.from, event.from) : event.from };
+    }
     case "subagent-entry": {
       const log = subagentLog(model, event.name), entries = new Map(log.entries), subagents = new Map(model.subagents);
       entries.set(event.entry.i, event.entry);
@@ -184,7 +202,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       const nodes = new Map(model.nodes), entries = new Map(model.entries);
       for (const line of event.lines) nodes.set(partKey(line), line);
       for (const entry of event.entries) entries.set(entry.i, entry);
-      return { ...model, reads, nodes, entries, roots: request.read === "roots" ? event.parts : model.roots };
+      return { ...model, reads, nodes, entries, from: request.read === "page" && event.from !== undefined ? Math.min(model.from, event.from) : model.from, roots: request.read === "roots" ? event.parts : model.roots };
     }
     case "answer": {
       const pending = new Map(model.pending);
@@ -235,6 +253,11 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     return output({ ...model, attachments, error: null });
   }
   if (input.type === "detach") return output({ ...model, attachments: model.attachments.filter((image) => image.id !== input.id) });
+  if (input.type === "older") {
+    if (earlier(model) !== "idle") return output(model);
+    const request: Read = { type: "read", read: "page", id: input.id, before: model.from };
+    return output({ ...model, reads: new Map([...model.reads, [request.id, request]]) }, [], [request]);
+  }
   if (input.type === "reads") return output(model, [], [...model.reads.values()]);
   if (input.type === "dismiss-error") return output({ ...model, error: null });
   if (input.type === "schedule-preview") {
@@ -261,7 +284,7 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
   if (input.type === "send" && input.text.trim().startsWith("/")) return model.attachments.length
     ? output({ ...model, error: "Remove images before you use a command." }) : command(model, input);
   if (input.type === "fold" || input.type === "page") {
-    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "subagent" || request.read === "when")), error: null };
+    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "subagent" || request.read === "when" || request.read === "page")), error: null };
     if (input.type === "fold") next.folded = !model.folded;
     else { next.page = input.page; if (input.page !== "chat") next.subagent = null; }
     const refreshed = next.folded || next.page === "tree" ? requestRoots(next) : next;
@@ -496,7 +519,7 @@ export function rows(model: Model): Row[] {
     }
     return { kind: "summary", part, text };
   }
-  const parts = overview ? model.roots ?? [] : model.parts;
+  const parts = overview ? model.roots ?? [] : model.parts.filter((part) => start(part) >= model.from);
   const result = parts.map((part) => block(part, !overview));
   if (!overview) {
     const covered = parts.length ? end(parts[parts.length - 1]) : 0;

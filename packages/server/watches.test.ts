@@ -59,7 +59,7 @@ async function until<T>(check: () => T | undefined | false, tick = () => {}): Pr
 }
 
 const view = (client: TestClient, id: string): ScheduleView | undefined => client.events.findLast((event) => event.type === "schedules")?.schedules.find((s) => s.id === id);
-const entries = (client: TestClient): Entry[] => client.events.flatMap((event) => event.type === "entry" ? [event.entry] : []);
+const entries = (client: TestClient): Entry[] => client.entries;
 const fires = (client: TestClient) => entries(client).filter((entry) => entry.kind === "work" && entry.text.startsWith("Watch "));
 const notes = (client: TestClient) => entries(client).filter((entry) => entry.kind === "note").map((entry) => entry.text);
 

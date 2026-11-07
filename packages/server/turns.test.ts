@@ -48,12 +48,12 @@ test("two clients get live text and each Engine block in order, with one send pe
   await a.wait("state", mark, (event) => !event.state.busy);
   await b.wait("entry", 0, (event) => event.entry.kind === "echo");
   for (const client of [a, b]) {
-    expect(client.events.filter((event) => event.type === "entry").map((event) => event.entry.kind)).toEqual(["user", "unii", "tool", "echo"]);
+    expect(client.entries.map((entry) => entry.kind)).toEqual(["user", "unii", "tool", "echo"]);
     expect((await client.wait("live")).text).toBe("Hello");
     expect(client.events.findIndex((event) => event.type === "live")).toBeLessThan(client.events.findIndex((event) => event.type === "entry" && event.entry.kind === "unii"));
   }
   expect(hub.engine.epochs[0].messages).toEqual([{ text: "Read this", priority: "now", from: "user" }]);
-  const entries = a.events.filter((event) => event.type === "entry").map((event) => event.entry);
+  const entries = a.entries;
   expect(JSON.parse(entries[2].text)).toEqual({ id: "call-1", name: "Read", input: { file_path: "/tmp/example" } });
   expect(JSON.parse(entries[3].text)).toEqual({ id: "call-1", text: "contents", error: false });
   expect(Object.values(JSON.parse(fs.readFileSync(path.join(defaultStore(hub.dir), "epochs.json"), "utf8"))).map((record) => (record as { session: string }).session)).toEqual(["fake-session-1"]);
@@ -113,7 +113,7 @@ test("a result already in flight cannot finish later input or hide it on restart
   before.close();
   const after = serve(new FakeEngine(), before.dir);
   const b = await connect(after);
-  expect(b.events.filter((event) => event.type === "entry").map((event) => event.entry.kind)).toEqual(["user", "user", "user", "note"]);
+  expect(b.entries.map((entry) => entry.kind)).toEqual(["user", "user", "user", "note"]);
   expect(after.engine.epochs[0].view).toContain("Second task");
   expect(after.engine.epochs[0].view).toContain("Third task");
 });
@@ -140,7 +140,7 @@ test("stop logs one note and fences new input until interrupt completes", async 
   await a.wait("state", mark, (event) => !event.state.busy);
   expect(epoch.closed).toBe(false);
   expect(hub.engine.epochs).toHaveLength(1);
-  expect(a.events.filter((event) => event.type === "entry" && event.entry.kind === "note")).toHaveLength(1);
+  expect(a.entries.filter((entry) => entry.kind === "note")).toHaveLength(1);
   a.act({ type: "act", act: "say", id: "new", text: "New work" });
   await a.wait("answer", 0, (event) => event.id === "new");
   b.act(stop);
@@ -159,7 +159,7 @@ test("restart opens a new epoch with the saved view and one cut note", async () 
   before.close();
   const after = serve(new FakeEngine(), before.dir);
   const b = await connect(after);
-  const entries = b.events.filter((event) => event.type === "entry").map((event) => event.entry);
+  const entries = b.entries;
   expect(entries.map((entry) => entry.kind)).toEqual(["user", "unii", "note"]);
   for (const entry of entries) expect(after.engine.epochs[0].view).toContain(`${entry.i}+1|${entry.kind}: ${entry.text.replace(/\s*\n\s*/g, " ")}`);
   b.act({ type: "act", act: "say", id: "cut", text: "Do not send again" });
@@ -168,7 +168,7 @@ test("restart opens a new epoch with the saved view and one cut note", async () 
   after.close();
   const again = serve(new FakeEngine(), before.dir);
   const c = await connect(again);
-  expect(c.events.filter((event) => event.type === "entry" && event.entry.kind === "note")).toHaveLength(1);
+  expect(c.entries.filter((entry) => entry.kind === "note")).toHaveLength(1);
 });
 
 test("an Engine failure ends busy state and leaves a durable note", async () => {

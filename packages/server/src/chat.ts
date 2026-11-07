@@ -8,7 +8,7 @@ import { Approvals } from "./approvals.ts";
 import { Log } from "./log.ts";
 import type { Epochs } from "./epochs.ts";
 import type { Tree } from "./tree.ts";
-import { View } from "./view.ts";
+import { View, page } from "./view.ts";
 import { pump } from "./pump.ts";
 import { next, turnId, busy, status, wait, refusal, canDelegate, canAsk, closed, unattended, type Turn, type Input, type Effect } from "./turn.ts";
 import { Notebook, block } from "./notebook.ts";
@@ -89,6 +89,12 @@ export class Chat {
 
   viewEvent(lines = this.view.summaries): Extract<Event, { type: "view" }> {
     return { type: "view", parts: this.view.parts, lines, turn: this.log.latestTurn };
+  }
+
+  // The entries of the next older page before a log index, and the index where they start.
+  page(before: number): { from: number; entries: Entry[] } {
+    const { from, indices } = page(this.view.parts, Math.min(before, this.log.count));
+    return { from, entries: indices.flatMap((i) => this.log.read(i) ?? []) };
   }
 
   get asks() { return this.approvals.requests; }

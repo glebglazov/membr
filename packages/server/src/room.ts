@@ -80,13 +80,10 @@ export class Room {
     for (const client of this.clients) client.send(data);
   }
 
-  // A client that sent a valid hello gets the whole log and the live state, then every event.
+  // A client that sent a valid hello gets the latest page of the log and the live state, then every event.
   join(client: Client, agents: AgentInfo[]): void {
     const send = (event: Event) => client.send(JSON.stringify(event));
-    for (let i = 0; i < this.log.count; i++) {
-      const entry = this.log.read(i);
-      if (entry) send({ type: "entry", entry });
-    }
+    send({ type: "history", ...this.chat.page(this.log.count) });
     this.clients.add(client);
     for (const ask of this.chat.asks) send(ask);
     send(this.chat.viewEvent());
@@ -128,6 +125,10 @@ export class Room {
     if (request.read === "roots" || request.read === "root") {
       const lines = this.memory.roots();
       send({ type: "read", id: request.id, entries: [], parts: lines.map(({ l, i }) => ({ l, i })), lines });
+      return;
+    }
+    if (request.read === "page") {
+      send({ type: "read", id: request.id, ...this.chat.page(request.before), parts: [], lines: [] });
       return;
     }
     if (request.read === "when") {

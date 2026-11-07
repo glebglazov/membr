@@ -117,8 +117,8 @@ test("an archive made with no server restores the same installation, and leaves 
 
   const server = await serve(target);
   const client = await connect(server.url, target);
-  const entries = await client.wait("entry", 0, (event) => event.entry.text === "second message");
-  expect(entries.entry.text).toBe("second message");
+  await client.wait("history");
+  expect(client.entries.map((entry) => entry.text)).toContain("second message");
 });
 
 test("an export while the server runs leaves the server answering, and its archive imports the same", async () => {

@@ -35,7 +35,7 @@ async function act(client: TestClient, id: string, kind: "goal" | "say" | "stop"
 }
 
 function entries(client: TestClient) {
-  return client.events.filter((event) => event.type === "entry").map((event) => event.entry);
+  return client.entries;
 }
 
 test("two unmet checks produce three turns, then a met check clears the goal", async () => {

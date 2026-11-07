@@ -291,7 +291,7 @@ test("a failed view save fails the chat after the input reaches the log", async 
   fs.rmdirSync(path.join(defaultStore(hub.dir), "view.json.tmp"));
   const after = await serve(new FakeEngine(), hub.dir);
   expect(after.engine.epochs[0].view).toContain("Keep this durable input");
-  expect(after.client.events.filter((event) => event.type === "entry" && event.entry.kind === "note")).toHaveLength(1);
+  expect(after.client.entries.filter((entry) => entry.kind === "note")).toHaveLength(1);
 });
 
 test("a failed send after a batch fails the new epoch and ends the wait", async () => {

@@ -54,7 +54,7 @@ async function schedule(client: TestClient, spec: ScheduleSpec): Promise<string>
   return (await client.wait("schedules", mark)).schedules.at(-1)!.id;
 }
 
-const entries = (client: TestClient): Entry[] => client.events.flatMap((event) => event.type === "entry" ? [event.entry] : []);
+const entries = (client: TestClient): Entry[] => client.entries;
 const fires = (client: TestClient): Entry[] => entries(client).filter((entry) => entry.scheduled);
 const idle = (client: TestClient, mark: number) => client.wait("state", mark, (event) => !event.state.busy);
 
