@@ -88,6 +88,11 @@ try {
   keys("C-e", "Space", "word", "M-b");
   keys("x");
   show("recall and Option+b", await waitFor("x before the last word", (t) => /^> long xword$/m.test(t)));
+  // The screen capture drops trailing spaces: after Ctrl+Backspace the composer holds "long xword more ".
+  keys("C-e", " more words", "C-BSpace");
+  await waitFor("Ctrl+Backspace to erase a word", (t) => /^> long xword more$/m.test(t));
+  keys("M-BSpace");
+  show("Ctrl and Option with Backspace", await waitFor("Option+Backspace to erase a word", (t) => /^> long xword$/m.test(t)));
 
   // Ctrl+G opens the editor on the composer text; the text saved in vim comes back to the composer.
   keys("C-e", "C-u", "edit me", "C-g");

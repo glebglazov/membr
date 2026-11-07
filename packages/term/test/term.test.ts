@@ -160,6 +160,23 @@ test("Ctrl, Option and Cmd with left and right move by word and to the line's en
   expect(move(7, { input: "", leftArrow: true })).toBe(6);
 });
 
+test("Ctrl, Option and Cmd with Backspace erase a word back and to the line's start", async () => {
+  const at = (cursor: number) => ({ ...insert(EMPTY_COMPOSER, "first\nsay hello  world"), cursor });
+  const erase = (cursor: number, press: Parameters<typeof edit>[1]) => edit(at(cursor), press, []).composer;
+  expect(erase(22, { input: "", backspace: true, ctrl: true })).toMatchObject({ text: "first\nsay hello  ", cursor: 17 });
+  expect(erase(17, { input: "", backspace: true, meta: true })).toMatchObject({ text: "first\nsay world", cursor: 10 });
+  expect(erase(15, { input: "", backspace: true, super: true })).toMatchObject({ text: "first\n  world", cursor: 6 });
+  expect(erase(22, { input: "", backspace: true })).toMatchObject({ text: "first\nsay hello  worl", cursor: 21 });
+
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => stdin, ref: () => stdin, unref: () => stdin }) as unknown as NodeJS.ReadStream;
+  const terminal = terminalInput(stdin, { write: () => true } as unknown as NodeJS.WriteStream);
+  cleanups.push(() => terminal.close());
+  const keys: string[] = [];
+  terminal.stdin.on("data", (chunk) => keys.push(String(chunk)));
+  stdin.write("a\bb\x7f");
+  await until(() => keys.join("") === "a\x1b[127;5ub\x7f", "Ctrl+H as Ctrl+Backspace");
+});
+
 test("Up in an empty composer brings back the last message sent, and Enter sends it again", async () => {
   const engine = new FakeEngine((epoch) => epoch.emit({ kind: "text", text: "ok" }, { ...END, reply: "ok" }));
   const { screen } = await open(engine);

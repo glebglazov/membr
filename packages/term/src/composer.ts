@@ -77,8 +77,9 @@ export function edit(composer: Composer, press: Press, menu: readonly Command[],
   if ((press.ctrl || press.meta) && press.rightArrow || press.meta && press.input === "f") return keep({ ...composer, cursor: wordRight(text, cursor) });
   if (press.leftArrow) return keep({ ...composer, cursor: Math.max(0, cursor - 1) });
   if (press.rightArrow) return keep({ ...composer, cursor: Math.min(text.length, cursor + 1) });
-  if (press.ctrl && press.input === "u") return keep(typed(text.slice(0, lineStart(text, cursor)) + text.slice(cursor), lineStart(text, cursor)));
-  if (press.ctrl && press.input === "w") {
+  // Cmd+Backspace erases to the line's start, as Ctrl+U does. Ctrl+Backspace and Option+Backspace, which macOS Terminal sends as Esc and Backspace, erase one word back, as Ctrl+W does.
+  if (press.ctrl && press.input === "u" || press.super && press.backspace) return keep(typed(text.slice(0, lineStart(text, cursor)) + text.slice(cursor), lineStart(text, cursor)));
+  if (press.ctrl && press.input === "w" || (press.ctrl || press.meta) && press.backspace) {
     const start = wordLeft(text, cursor);
     return keep(typed(text.slice(0, start) + text.slice(cursor), start));
   }

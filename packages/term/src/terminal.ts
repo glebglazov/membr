@@ -8,6 +8,8 @@ import { PassThrough } from "node:stream";
 const REPORT = /\x1b\[<(\d+);\d+;\d+([Mm])/g;
 const PARTIAL = /\x1b(\[(<[\d;]*)?)?$/;
 const WHEEL_LINES = 3;
+// Without the kitty protocol, most terminals send Ctrl+Backspace as Ctrl+H, which Ink reads as a plain Backspace. Its kitty code lets the composer erase a word.
+const CTRL_BACKSPACE = "\x1b[127;5u";
 
 export type Wheel = (listener: (lines: number) => void) => () => void;
 
@@ -33,7 +35,7 @@ export function terminalInput(stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStre
       const wheel = Number(button) & ~28;
       if (kind === "M" && (wheel === 64 || wheel === 65)) for (const listener of listeners) listener(wheel === 64 ? WHEEL_LINES : -WHEEL_LINES);
       return "";
-    });
+    }).replaceAll("\b", CTRL_BACKSPACE);
     if (rest) filtered.write(rest);
   };
   // A lone Esc waits in `held` for the rest of a report; when no more input comes, it was the Esc key.
