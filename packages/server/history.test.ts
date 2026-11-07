@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { Log } from "./src/log.ts";
-import { PAGE } from "./src/view.ts";
+import { PAGE, page } from "./src/view.ts";
 import { TestClient } from "./test/client.ts";
 import { FakeEngine } from "./test/engine.ts";
 import { defaultStore } from "./test/config.ts";
@@ -61,4 +61,9 @@ test("page reads walk back to the start and give each displayable entry once, wi
   expect(froms).toEqual([150, 96, 46, 0]);
   const expected = [...Array.from({ length: 64 }, (_, k) => 32 + k), ...Array.from({ length: 100 }, (_, k) => 100 + k)];
   expect(seen).toEqual(expected);
+});
+
+test("a page read before an index inside a summary shows the whole summary", () => {
+  expect(page([{ l: 5, i: 0 }, { l: 0, i: 32 }], 10)).toEqual({ from: 0, indices: [] });
+  expect(page([{ l: 0, i: 0 }, { l: 0, i: 1 }, { l: 1, i: 1 }, { l: 0, i: 4 }], 3)).toEqual({ from: 0, indices: [0, 1] });
 });

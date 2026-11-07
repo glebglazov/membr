@@ -23,7 +23,7 @@ export function page(parts: readonly Part[], before: number, size = PAGE): { fro
   let from = before;
   while (from > covered && indices.length < size) indices.push(--from);
   if (from > covered) return { from, indices: indices.reverse() };
-  for (let k = parts.filter((part) => end(part) <= from).length; k > 0; k--) {
+  for (let k = parts.filter((part) => part.i * 2 ** part.l < from).length; k > 0; k--) {
     const part = parts[k - 1];
     if (part.l === 0) {
       if (indices.length >= size) break;
