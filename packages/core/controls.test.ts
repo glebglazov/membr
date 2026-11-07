@@ -3,7 +3,7 @@ import { accept, act, answering, cacheShare, complete, createModel, effectivePic
 import { parseClientMessage, type Act, type Pick, type State } from "@membr/protocol";
 
 const pick: Pick = { model: "sonnet", effort: "high", fast: false };
-const state: State = { busy: false, wait: "", goal: null, pick, agents: [], usage: null };
+const state: State = { busy: false, wait: "", goal: null, pick, subagents: [], usage: null };
 function ready() { return hear(hear(createModel(), { type: "state", state }), { type: "ready", version: "1.0" }); }
 function send(text: string) { return act(ready(), { type: "send", id: "command", text }); }
 
@@ -36,9 +36,9 @@ test("reload asks the server to read its config again, and resends once", () => 
   expect(complete(ready(), "/rel").commands.map((command) => command.name)).toEqual(["/reload"]);
 });
 
-test("S2 stop commands address all work or one named agent", () => {
-  expect(send("/stop").acts).toEqual([{ type: "act", act: "stop", id: "command", agent: null }]);
-  expect(send("/stop Scout").acts).toEqual([{ type: "act", act: "stop", id: "command", agent: "Scout" }]);
+test("S2 stop commands address all work or one named subagent", () => {
+  expect(send("/stop").acts).toEqual([{ type: "act", act: "stop", id: "command", subagent: null }]);
+  expect(send("/stop Scout").acts).toEqual([{ type: "act", act: "stop", id: "command", subagent: "Scout" }]);
 });
 
 test("S2 model, effort, and speed commands use the latest pending pick", () => {

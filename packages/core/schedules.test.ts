@@ -4,7 +4,7 @@ import { act, clientZone, complete, createModel, fireTime, hear } from "./src/in
 
 const cron: When = { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" };
 const view = (id: string, phase: ScheduleView["phase"], extra: Partial<ScheduleView> = {}): ScheduleView => ({
-  id, text: "read the inbox notes", when: cron, run: "agent", missed: "once", author: "user", phase, since: "2026-11-06T09:00:00.000Z", next: [], last: null, ...extra,
+  id, text: "read the inbox notes", when: cron, run: "subagent", missed: "once", author: "user", phase, since: "2026-11-06T09:00:00.000Z", next: [], last: null, ...extra,
 });
 const ready = () => hear(createModel(), { type: "ready", version: "1.0" });
 
@@ -19,7 +19,7 @@ test("S5 /schedule reads the time with the client's zone, then accept sends the 
   expect(heard.preview?.proposal).toEqual({ when: cron, text: "read the inbox notes", next: ["2026-11-09T08:30:00.000Z"] });
 
   const accepted = act(heard, { type: "schedule-accept", id: "s1" });
-  expect(accepted.acts).toEqual([{ type: "act", act: "schedule", id: "s1", schedule: { text: "read the inbox notes", when: cron, run: "agent", missed: "once" } }]);
+  expect(accepted.acts).toEqual([{ type: "act", act: "schedule", id: "s1", schedule: { text: "read the inbox notes", when: cron, run: "subagent", missed: "once" } }]);
   expect(accepted.model.preview).not.toBeNull();
   expect(hear(accepted.model, { type: "answer", id: "s1", ok: true, entry: null }).preview).toBeNull();
 });

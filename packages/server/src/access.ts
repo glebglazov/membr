@@ -46,7 +46,7 @@ export function access(request: Request, peerAddress: string, token: string): Ac
   const secureCookie = origin.startsWith("https:");
   if (peer && (loopback(url.hostname) || url.hostname === "localhost" || proxied)) return { kind: "local", origin, secureCookie };
   if (tokens.length) return { kind: "token", origin, secureCookie };
-  if (url.pathname === "/ws" && header === null && request.headers.get("upgrade")?.toLowerCase() === "websocket") return { kind: "deferred", origin, secureCookie };
+  if (url.pathname.endsWith("/ws") && header === null && request.headers.get("upgrade")?.toLowerCase() === "websocket") return { kind: "deferred", origin, secureCookie };
   return { kind: "refused", status: 401, reason: "Bearer token required" };
 }
 

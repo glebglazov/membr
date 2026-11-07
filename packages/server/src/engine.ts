@@ -8,7 +8,7 @@
 // call on Haiku, with no tools and none of the user's settings.
 import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type SlashCommand, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { AgentTools } from "./agents.ts";
+import type { SubagentTools } from "./subagents.ts";
 import type { ScheduleTools } from "./schedules.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
@@ -34,7 +34,7 @@ export type EpochOptions = {
   cwd: string;
   ask?: Ask;
   memory?: MemoryTools;
-  agents?: AgentTools;
+  subagents?: SubagentTools;
   schedules?: ScheduleTools;
 };
 
@@ -228,14 +228,14 @@ const whenShape = z.discriminatedUnion("kind", [
 // The boundary of the model's input: create needs text and when, and the protocol parser is the one validator.
 // An error comes back as text, so the model can correct itself.
 export function scheduleTool(schedules: ScheduleTools) {
-  return tool("schedule", "Create, list or cancel the user's schedules. create only proposes one: it runs after the user accepts it in a client. Its fires come to you as [membr] messages, not as the user. Give when as a 5-field cron with an IANA zone, or as a one-time ISO instant. run \"agent\" (the default) starts a subagent at that time, and \"turn\" starts a turn of yours. missed says what to do if membr was not running then: \"once\" runs it late, \"skip\" drops it. cancel works only on schedules you proposed: for the user's own, ask the user to run /unschedule.",
-    { action: z.enum(["create", "list", "cancel"]), text: z.string().optional().describe("the task, for create"), when: whenShape.optional().describe("for create"), run: z.enum(["turn", "agent"]).optional(), missed: z.enum(["skip", "once"]).optional(), id: z.string().optional().describe("for cancel") },
+  return tool("schedule", "Create, list or cancel the user's schedules. create only proposes one: it runs after the user accepts it in a client. Its fires come to you as [membr] messages, not as the user. Give when as a 5-field cron with an IANA zone, or as a one-time ISO instant. run \"subagent\" (the default) starts a subagent at that time, and \"turn\" starts a turn of yours. missed says what to do if membr was not running then: \"once\" runs it late, \"skip\" drops it. cancel works only on schedules you proposed: for the user's own, ask the user to run /unschedule.",
+    { action: z.enum(["create", "list", "cancel"]), text: z.string().optional().describe("the task, for create"), when: whenShape.optional().describe("for create"), run: z.enum(["turn", "subagent"]).optional(), missed: z.enum(["skip", "once"]).optional(), id: z.string().optional().describe("for cancel") },
     async ({ action, text, when, run, missed, id }) => {
       try {
         if (action === "cancel" && !id) throw new Error("cancel needs an id.");
         const answer = action === "list" ? schedules.list()
           : action === "cancel" ? schedules.cancel(id!)
-          : schedules.create(parseScheduleSpec({ text, when, run: run ?? "agent", missed: missed ?? "once" }));
+          : schedules.create(parseScheduleSpec({ text, when, run: run ?? "subagent", missed: missed ?? "once" }));
         return { content: [{ type: "text" as const, text: answer }] };
       } catch (error) {
         return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
@@ -246,17 +246,17 @@ export function scheduleTool(schedules: ScheduleTools) {
 function open(view: string, options: EpochOptions): Epoch {
   const inbox = new Inbox();
   const memory = options.memory;
-  const agents = options.agents;
+  const subagents = options.subagents;
   const schedules = options.schedules;
   const mcpServers = memory ? { memory: createSdkMcpServer({ name: "memory", version: "1", tools: [
-    tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
+    tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With a subagent's name as id, give that subagent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
       const answer = memory.zoom(id, n, at);
       return { content: [{ type: "text", text: answer.text }, ...answer.images.map((image) => ({ type: "image" as const, ...image }))], isError: answer.error };
     }, { annotations: { readOnlyHint: true } }),
     tool("date", "The date and time of message id.", { id: z.number().int() }, async ({ id }) => ({ content: [{ type: "text", text: memory.date(id) }] }), { annotations: { readOnlyHint: true } }),
-    ...(agents ? [
-      tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.object({ name: z.string(), task: z.string() })), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: agents.spawn(tasks, effort) }] })),
-      tool("tell", "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it.", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: agents.tell(name, message) }] })),
+    ...(subagents ? [
+      tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.object({ name: z.string(), task: z.string() })), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: subagents.spawn(tasks, effort) }] })),
+      tool("tell", "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it.", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: subagents.tell(name, message) }] })),
     ] : []),
     ...(schedules ? [scheduleTool(schedules)] : []),
   ] }) } : undefined;

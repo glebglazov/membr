@@ -19,7 +19,8 @@ function html(text: string): string {
 // (src/mermaid.ts), loaded once a finished message holds a diagram. The URL is a variable so the
 // bundler leaves the import alone.
 type Mermaid = typeof import("mermaid").default;
-const MERMAID_URL = "/mermaid.js";
+// Relative to the page, which is /membr/<agent>/ or the default agent's /.
+const MERMAID_URL = new URL("mermaid.js", location.href).href;
 let mermaid: Promise<Mermaid> | undefined;
 let rendered = 0;
 const dark = matchMedia("(prefers-color-scheme: dark)");

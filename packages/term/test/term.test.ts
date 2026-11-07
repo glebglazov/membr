@@ -263,8 +263,10 @@ test("Ctrl+G edits the composer text in the editor and puts the saved text back"
 
 test("membr accepts the sign-in link that membr status prints", async () => {
   const { socketUrl } = await import("../src/run.ts");
-  expect(socketUrl("https://host.ts.net:8788/?token=abc")).toEqual({ url: "wss://host.ts.net:8788/ws", token: "abc" });
-  expect(socketUrl("ws://127.0.0.1:8788/ws")).toEqual({ url: "ws://127.0.0.1:8788/ws", token: null });
+  expect(socketUrl("https://host.ts.net:8788/?token=abc")).toEqual({ url: "wss://host.ts.net:8788/ws", token: "abc", agent: "default" });
+  expect(socketUrl("ws://127.0.0.1:8788/ws")).toEqual({ url: "ws://127.0.0.1:8788/ws", token: null, agent: "default" });
+  expect(socketUrl("https://host.ts.net/membr/research")).toEqual({ url: "wss://host.ts.net/membr/research/ws", token: null, agent: "research" });
+  expect(socketUrl("http://127.0.0.1:8788/membr/research/?token=t")).toEqual({ url: "ws://127.0.0.1:8788/membr/research/ws", token: "t", agent: "research" });
 });
 
 

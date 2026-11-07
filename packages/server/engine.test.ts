@@ -65,7 +65,7 @@ test("the Engine registers zoom and date and sends their text, errors and images
   expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
   const wire = JSON.parse(stdout);
   expect(wire.registered).toEqual([
-    { name: "zoom", description: "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With an agent's name as id, give that agent's whole chat. A long text comes in pages from character at, saying where to go on." },
+    { name: "zoom", description: "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With a subagent's name as id, give that subagent's whole chat. A long text comes in pages from character at, saying where to go on." },
     { name: "date", description: "The date and time of message id." },
   ]);
   expect(wire.allowed ?? []).toEqual([]);
@@ -78,7 +78,7 @@ test("the Engine registers zoom and date and sends their text, errors and images
 });
 
 test("main MCP registers spawn and tell while child input stays synthetic", async () => {
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-agents-wire.ts")], { stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test/engine-subagents-wire.ts")], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
   const wire = JSON.parse(stdout);
@@ -96,7 +96,7 @@ test("main MCP registers spawn and tell while child input stays synthetic", asyn
   expect(wire.delegated).toEqual([{ tasks: [{ name: "reader", task: "Task" }], effort: "high" }, { name: "reader", message: "More" }]);
   expect(wire.answers).toEqual([{ content: [{ type: "text", text: "Started reader." }] }, { content: [{ type: "text", text: "Sent." }] }]);
   expect(wire.calls[1].messages.map((message: { isSynthetic: boolean; message: { content: string } }) => [message.isSynthetic, message.message.content])).toEqual([
-    [true, "[membr]\nview and saved agent chat"], [true, "[membr]\nAgent task"], [true, "[membr]\nAgent correction"],
+    [true, "[membr]\nview and saved subagent chat"], [true, "[membr]\nAgent task"], [true, "[membr]\nAgent correction"],
   ]);
 });
 

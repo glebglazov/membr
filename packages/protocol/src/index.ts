@@ -1,4 +1,4 @@
-export const VERSION = "1.0";
+export const VERSION = "2.0";
 
 export type Hello = { type: "hello"; version: string; kind: "web" | "term"; device: null; token: string | null };
 export type Pick = { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; fast: boolean };
@@ -12,7 +12,7 @@ export type ImportStatus = ImportEstimate & { id: string; phase: "running" | "pa
 export type ImportMark = { run: string; session: string; message: string };
 // One time, or a 5-field cron in a named zone. The zone is a name, never an offset, so DST moves with it.
 export type When = { kind: "once"; at: string } | { kind: "cron"; expr: string; zone: string };
-export type ScheduleSpec = { text: string; when: When; run: "turn" | "agent"; missed: "skip" | "once" };
+export type ScheduleSpec = { text: string; when: When; run: "turn" | "subagent"; missed: "skip" | "once" };
 // author is the voice of every fire. since is the latest move to active: no fire before it counts.
 export type Schedule = ScheduleSpec & {
   id: string;
@@ -36,7 +36,7 @@ export type Entry = {
 export const SCHEDULE_ACTS = ["schedule", "unschedule", "pause", "accept"] as const;
 export type Act = { type: "act"; id: string } & (
   | { act: "say"; text: string; images?: string[] }
-  | { act: "stop"; agent: string | null }
+  | { act: "stop"; subagent: string | null }
   | { act: "goal"; text: string | null }
   | { act: "pick"; pick: Pick }
   | { act: "reload" }
@@ -53,7 +53,7 @@ export type Read = { type: "read"; id: string } & (
   | { read: "zoom"; part: Part }
   | { read: "root" }
   | { read: "roots" }
-  | { read: "agent"; name: string }
+  | { read: "subagent"; name: string }
   | ({ read: "import" } & ImportInput)
   | { read: "when"; text: string; zone: string }
 );
@@ -63,8 +63,10 @@ export type Answer = { type: "answer"; id: string } & (
 );
 // a /name command from the harness that the agent runs when a user message starts with it
 export type Skill = { name: string; description: string; argumentHint: string };
+// One agent of the server, for the agent switcher. about is the first line of its prompt.
+export type AgentInfo = { name: string; busy: boolean; about: string };
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
-export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; agents: string[]; agentNames?: string[]; usage: Usage | null; compression?: Usage; context?: Context };
+export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; subagents: string[]; subagentNames?: string[]; usage: Usage | null; compression?: Usage; context?: Context };
 // how full the epoch was at the end of its last turn: `used` of the model's
 // `window` tokens, "overflow" when it no longer fit, null before a turn ends
 export type Context = { used: number; window: number } | "overflow" | null;
@@ -74,8 +76,8 @@ export type Event =
   | { type: "ready"; version: string }
   | { type: "refused"; reason: string }
   | { type: "entry"; entry: Entry }
-  | { type: "agent-entry"; name: string; entry: Entry }
-  | { type: "live"; text: string; agent: string | null }
+  | { type: "subagent-entry"; name: string; entry: Entry }
+  | { type: "live"; text: string; subagent: string | null }
   | { type: "view"; parts: Part[]; lines?: MemoryLine[]; turn?: number }
   | { type: "ask"; id: string; tool: string; input: Record<string, unknown> }
   | { type: "ask-closed"; id: string }
@@ -86,6 +88,7 @@ export type Event =
   | { type: "import-estimate"; id: string; estimate: ImportEstimate }
   | { type: "imports"; imports: ImportStatus[] }
   | { type: "skills"; skills: Skill[] }
+  | { type: "agents"; agents: AgentInfo[] }
   | { type: "schedules"; schedules: ScheduleView[] }
   | { type: "when"; id: string; when: When; text: string; next: string[] }
   | { type: "error"; id: string | null; reason: string };
@@ -150,9 +153,14 @@ export function parseWhen(value: unknown): When {
     default: throw new Error("Unknown when");
   }
 }
+// Schedules persisted before the rename say "agent" for what is now a "subagent".
+function parseRun(value: unknown): ScheduleSpec["run"] {
+  return oneOf(value === "agent" ? "subagent" : value, ["turn", "subagent"]);
+}
+
 export function parseScheduleSpec(value: unknown): ScheduleSpec {
   const v = object(value);
-  return { text: string(v.text), when: parseWhen(v.when), run: oneOf(v.run, ["turn", "agent"]), missed: oneOf(v.missed, ["skip", "once"]) };
+  return { text: string(v.text), when: parseWhen(v.when), run: parseRun(v.run), missed: oneOf(v.missed, ["skip", "once"]) };
 }
 export function parseSchedule(value: unknown): Schedule {
   const v = object(value);
@@ -218,7 +226,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
     const base = { type: "act", id: requestId } as const;
     switch (v.act) {
       case "say": return { ...base, act: "say", text: string(v.text), ...(v.images === undefined ? {} : { images: list(v.images, string) }) };
-      case "stop": return { ...base, act: "stop", agent: nullable(v.agent, id) };
+      case "stop": return { ...base, act: "stop", subagent: nullable(v.subagent, id) };
       case "goal": return { ...base, act: "goal", text: nullable(v.text, string) };
       case "pick": return { ...base, act: "pick", pick: parsePick(v.pick) };
       case "reload": return { ...base, act: "reload" };
@@ -238,7 +246,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "zoom": return { ...base, read: "zoom", part: part(v.part) };
       case "root": return { ...base, read: "root" };
       case "roots": return { ...base, read: "roots" };
-      case "agent": return { ...base, read: "agent", name: id(v.name) };
+      case "subagent": return { ...base, read: "subagent", name: id(v.name) };
       case "import": return { ...base, read: "import", source: oneOf(v.source, ["claude-code", "codex", "claude.ai", "chatgpt"]), path: string(v.path), ...(v.files === undefined ? {} : { files: importFiles(v.files) }) };
       case "when": return { ...base, read: "when", text: string(v.text), zone: string(v.zone) };
       default: throw new Error("Unknown read");
@@ -252,8 +260,8 @@ export function parseEvent(value: unknown): Event {
     case "ready": return { type: "ready", version: version(v.version) };
     case "refused": return { type: "refused", reason: string(v.reason) };
     case "entry": return { type: "entry", entry: parseEntry(v.entry) };
-    case "agent-entry": return { type: "agent-entry", name: id(v.name), entry: parseEntry(v.entry) };
-    case "live": return { type: "live", text: string(v.text), agent: nullable(v.agent, string) };
+    case "subagent-entry": return { type: "subagent-entry", name: id(v.name), entry: parseEntry(v.entry) };
+    case "live": return { type: "live", text: string(v.text), subagent: nullable(v.subagent, string) };
     case "view": return { type: "view", parts: list(v.parts, part), ...(v.lines === undefined ? {} : { lines: list(v.lines, memoryLine) }), ...(v.turn === undefined ? {} : { turn: integer(v.turn) }) };
     case "ask": return { type: "ask", id: id(v.id), tool: id(v.tool), input: object(v.input) };
     case "ask-closed": return { type: "ask-closed", id: id(v.id) };
@@ -266,6 +274,7 @@ export function parseEvent(value: unknown): Event {
     case "import-estimate": return { type: "import-estimate", id: id(v.id), estimate: importEstimate(v.estimate) };
     case "imports": return { type: "imports", imports: list(v.imports, (item) => { const run = object(item); return { ...importEstimate(run), id: id(run.id), phase: oneOf(run.phase, ["running", "paused", "complete"]) }; }) };
     case "error": return { type: "error", id: nullable(v.id, id), reason: string(v.reason) };
+    case "agents": return { type: "agents", agents: list(v.agents, (item) => { const a = object(item); return { name: id(a.name), busy: boolean(a.busy), about: string(a.about) }; }) };
     case "skills": return { type: "skills", skills: list(v.skills, (item) => { const k = object(item); return { name: id(k.name), description: string(k.description), argumentHint: string(k.argumentHint) }; }) };
     case "schedules": return { type: "schedules", schedules: list(v.schedules, scheduleView) };
     case "when": return { type: "when", id: id(v.id), when: parseWhen(v.when), text: string(v.text), next: list(v.next, instant) };
@@ -275,7 +284,7 @@ export function parseEvent(value: unknown): Event {
         const u = object(value);
         return { input: integer(u.input), cacheRead: integer(u.cacheRead), cacheWrite: integer(u.cacheWrite), output: integer(u.output) };
       };
-      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), agents: list(s.agents, id), ...(s.agentNames === undefined ? {} : { agentNames: list(s.agentNames, id) }), usage: nullable(s.usage, usage), ...(s.compression === undefined ? {} : { compression: usage(s.compression) }), ...(s.context === undefined ? {} : { context: s.context === "overflow" ? "overflow" : nullable(s.context, (value) => { const c = object(value); return { used: integer(c.used), window: integer(c.window) }; }) }) } };
+      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), subagents: list(s.subagents, id), ...(s.subagentNames === undefined ? {} : { subagentNames: list(s.subagentNames, id) }), usage: nullable(s.usage, usage), ...(s.compression === undefined ? {} : { compression: usage(s.compression) }), ...(s.context === undefined ? {} : { context: s.context === "overflow" ? "overflow" : nullable(s.context, (value) => { const c = object(value); return { used: integer(c.used), window: integer(c.window) }; }) }) } };
     }
     default: throw new Error("Unknown event");
   }

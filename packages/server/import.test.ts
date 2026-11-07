@@ -7,6 +7,7 @@ import { serveHub } from "./src/hub.ts";
 import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
+import { defaultStore } from "./test/config.ts";
 
 const dirs: string[] = [], hubs: ReturnType<typeof serveHub>[] = [], clients: TestClient[] = [];
 afterEach(async () => {
@@ -79,7 +80,7 @@ test("S1 imports local sessions with estimates, original dates, no thinking, and
   expect(engine.calls).toHaveLength(13);
   expect(engine.peak).toBeLessThanOrEqual(4);
   const today = new Date().toISOString().slice(0, 10);
-  expect(fs.readdirSync(path.join(first.dir, "main"))).toEqual([today + ".jsonl"]);
+  expect(fs.readdirSync(path.join(defaultStore(first.dir), "main"))).toEqual([today + ".jsonl"]);
   for (const input of inputs) {
     expect(await plan(first.client, input)).toEqual({ sessions: 0, messages: 0, compactions: 0 });
     await act(first.client, { type: "act", act: "import", id: crypto.randomUUID(), ...input });
@@ -177,13 +178,13 @@ test("S1 retries an interrupted ingest from its durable entry identities and sav
   const first = await serve(new Compactor());
   await act(first.client, { type: "act", act: "import", id: "interrupted", ...input });
   await first.hub.close();
-  const journal = fs.readdirSync(path.join(first.dir, "main"))[0];
-  const lines = fs.readFileSync(path.join(first.dir, "main", journal), "utf8").trimEnd().split("\n");
+  const journal = fs.readdirSync(path.join(defaultStore(first.dir), "main"))[0];
+  const lines = fs.readFileSync(path.join(defaultStore(first.dir), "main", journal), "utf8").trimEnd().split("\n");
   const partial: string[] = []; let imported = 0;
   for (const line of lines) { partial.push(line); if (JSON.parse(line).imported && ++imported === 2) break; }
-  const recovered = dir(); fs.mkdirSync(path.join(recovered, "main"));
-  fs.copyFileSync(path.join(first.dir, "machine"), path.join(recovered, "machine"));
-  fs.writeFileSync(path.join(recovered, "main", journal), partial.join("\n") + "\n");
+  const recovered = dir(), store = defaultStore(recovered); fs.mkdirSync(path.join(store, "main"), { recursive: true });
+  fs.copyFileSync(path.join(defaultStore(first.dir), "machine"), path.join(store, "machine"));
+  fs.writeFileSync(path.join(store, "main", journal), partial.join("\n") + "\n");
   const next = await serve(new Compactor(), recovered);
   expect(entries(next.client)).toHaveLength(2);
   await act(next.client, { type: "act", act: "import", id: "interrupted", ...input });

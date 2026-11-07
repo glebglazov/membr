@@ -6,6 +6,7 @@ import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import type { Config } from "./src/config.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -22,13 +23,6 @@ function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(os.tmpd
   return { ...hub, dir, engine };
 }
 
-async function until(predicate: () => boolean): Promise<void> {
-  const end = Date.now() + 3000;
-  while (!predicate()) {
-    if (Date.now() > end) throw new Error("The after command did not finish");
-    await Bun.sleep(5);
-  }
-}
 async function connect(hub: ReturnType<typeof serve>) {
   const client = await TestClient.connect(hub.server.url.href.replace("http:", "ws:") + "ws", { token: hub.token });
   clients.push(client);
@@ -62,46 +56,24 @@ test("two clients get live text and each Engine block in order, with one send pe
   const entries = a.events.filter((event) => event.type === "entry").map((event) => event.entry);
   expect(JSON.parse(entries[2].text)).toEqual({ id: "call-1", name: "Read", input: { file_path: "/tmp/example" } });
   expect(JSON.parse(entries[3].text)).toEqual({ id: "call-1", text: "contents", error: false });
-  expect(Object.values(JSON.parse(fs.readFileSync(path.join(hub.dir, "epochs.json"), "utf8"))).map((record) => (record as { session: string }).session)).toEqual(["fake-session-1"]);
+  expect(Object.values(JSON.parse(fs.readFileSync(path.join(defaultStore(hub.dir), "epochs.json"), "utf8"))).map((record) => (record as { session: string }).session)).toEqual(["fake-session-1"]);
   expect(hub.engine.epochs[0].options.append).toContain("the server machine");
   expect(hub.engine.epochs[0].options.append).not.toContain("# Compactions");
 });
 
-test("config rules reach the Engine and after runs once per completed turn", async () => {
+test("the agent's prompt reaches the Engine after its name, and its home is the Engine's cwd", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-"));
-  const rules = path.join(dir, "rules.txt");
-  const output = path.join(dir, "after.txt");
-  fs.writeFileSync(rules, "Keep this standing rule.");
-  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({
-    rules,
-    after: `printf x >> '${output}'`,
-  }));
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ agents: { default: { prompt: ["Keep this standing rule.", "And this one."] } } }));
   const hub = serve(new FakeEngine((epoch) => epoch.emit(END)), dir);
-  expect(hub.engine.epochs[0].options.append).toContain("the server machine");
-  expect(hub.engine.epochs[0].options.append.endsWith("\n\nKeep this standing rule.")).toBe(true);
-  const client = await connect(hub);
-  for (let i = 0; i < 2; i++) {
-    const mark = client.events.length;
-    client.act({ type: "act", act: "say", id: `turn-${i}`, text: "Work" });
-    await client.wait("answer", mark, (event) => event.id === `turn-${i}`);
-    await client.wait("state", mark, (event) => !event.state.busy);
-  }
-  await until(() => fs.existsSync(output) && fs.readFileSync(output, "utf8") === "xx");
-  expect(fs.readFileSync(output, "utf8")).toBe("xx");
+  const { append, cwd } = hub.engine.epochs[0].options;
+  expect(append).toContain("the server machine");
+  expect(append.endsWith('\n\nIn membr, you are the agent "default".\n\nKeep this standing rule.\nAnd this one.')).toBe(true);
+  expect(cwd).toBe(path.join(dir, "agents", "default", "home"));
 });
 
-test("closing the server waits for a running after command", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-turns-"));
-  const output = path.join(dir, "after.txt");
-  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ after: `sleep 0.1; printf done > '${output}'` }));
-  const hub = serve(new FakeEngine((epoch) => epoch.emit(END)), dir);
-  const client = await connect(hub);
-  const mark = client.events.length;
-  client.act({ type: "act", act: "say", id: "closing-turn", text: "Work" });
-  await client.wait("answer", mark);
-  await client.wait("state", mark, (event) => !event.state.busy);
-  await hub.close();
-  expect(fs.readFileSync(output, "utf8")).toBe("done");
+test("an agent without a prompt gets only its name after the standard prompt", () => {
+  const hub = serve(new FakeEngine((epoch) => epoch.emit(END)));
+  expect(hub.engine.epochs[0].options.append.endsWith('\n\nIn membr, you are the agent "default".')).toBe(true);
 });
 
 test("input during a turn uses next and an older result cannot finish it", async () => {
@@ -155,7 +127,7 @@ test("stop logs one note and fences new input until interrupt completes", async 
   epoch.onInterrupt = () => interrupted.promise;
   a.act({ type: "act", act: "say", id: "run", text: "Work" });
   await a.wait("answer");
-  const stop = { type: "act", act: "stop", id: "stop", agent: null } as const;
+  const stop = { type: "act", act: "stop", id: "stop", subagent: null } as const;
   a.act(stop);
   const answer = await a.wait("answer", 0, (event) => event.id === "stop");
   b.act(stop);
@@ -219,7 +191,7 @@ test("a failed epoch cannot reopen when an earlier interrupt finishes", async ()
   epoch.onInterrupt = () => interrupt.promise;
   client.act({ type: "act", act: "say", id: "work", text: "Work" });
   await client.wait("answer");
-  client.act({ type: "act", act: "stop", id: "stop-failed", agent: null });
+  client.act({ type: "act", act: "stop", id: "stop-failed", subagent: null });
   await client.wait("answer", 0, (event) => event.id === "stop-failed");
   epoch.fail(new Error("Lost connection during stop"));
   await client.wait("error");

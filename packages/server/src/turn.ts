@@ -35,7 +35,7 @@ export type Input =
   | { kind: "reload" | "reopen" }
   | { kind: "idle" | "state" | "close" | "closing" | "closed" };
 export type Effect =
-  | { kind: "halt" | "afterHook" | "cancelApprovals" | "closeAgents" | "closeEpoch" | "state" | "closedAfterHook" }
+  | { kind: "halt" | "cancelApprovals" | "closeSubagents" | "closeEpoch" | "state" }
   | { kind: "dispatch" | "defer"; input: Input }
   | { kind: "finish"; id: number; reason?: string; source: "ended" | "stopped" | "interrupted" | "failed" }
   | { kind: "send"; input: PendingInput; priority: Priority }
@@ -124,8 +124,8 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
         ],
       };
     case "finished": {
-      if (input.source === "stopped" || input.source === "interrupted") return { turn: idle, effects: [{ kind: "afterHook" }, { kind: "state" }] };
-      const effects: Effect[] = [{ kind: "afterHook" }];
+      if (input.source === "stopped" || input.source === "interrupted") return { turn: idle, effects: [{ kind: "state" }] };
+      const effects: Effect[] = [];
       if (input.entry) effects.push({ kind: "record", entry: input.entry });
       if (input.source === "failed") return { turn, effects };
       const goal = input.error ? null : facts.goal.value;
@@ -167,7 +167,7 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
       return { turn, effects };
     }
     case "failed": {
-      const effects: Effect[] = [{ kind: "closeAgents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }];
+      const effects: Effect[] = [{ kind: "closeSubagents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }];
       const previous = input.previous;
       if (previous.phase === "running" || previous.phase === "stopping" || previous.phase === "summaries") effects.push({ kind: "finish", id: previous.id, reason: `The turn failed: ${input.reason}`, source: "failed" });
       effects.push({ kind: "error", reason: input.reason }, { kind: "state" });
@@ -180,7 +180,7 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
       return { turn, effects };
     }
     case "closing":
-      return { turn: { phase: "closing", attempt: turn.attempt }, effects: [{ kind: "closeAgents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }, { kind: "closedAfterHook" }] };
+      return { turn: { phase: "closing", attempt: turn.attempt }, effects: [{ kind: "closeSubagents" }, { kind: "cancelApprovals" }, { kind: "closeEpoch" }, { kind: "dispatch", input: { kind: "closed" } }] };
     case "closed": return { turn: { phase: "closed", attempt: turn.attempt }, effects: [] };
     case "reload": return { turn: closed(turn) || turn.phase === "failed" ? turn : { ...turn, reopen: true }, effects: [] };
     case "reopen": return { turn, effects: turn.phase === "idle" && turn.reopen ? [...reopen(facts.count), { kind: "state" }] : [] };

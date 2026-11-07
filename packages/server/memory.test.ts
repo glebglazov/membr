@@ -10,6 +10,7 @@ import { TestClient } from "./test/client.ts";
 import { seedMemory } from "./test/memory.ts";
 import type { Part } from "@membr/protocol";
 import type { ToolAnswer } from "./src/memory.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -46,7 +47,7 @@ function parts(answer: ToolAnswer): Part[] {
 
 test("a fake Engine opens message 3 through the same memory parts as a client in a 500-message chat", async () => {
   const dir = directory();
-  const entries = await seedMemory(dir);
+  const entries = await seedMemory(defaultStore(dir));
   const calls: Array<{ id: number; n: number; answer: ToolAnswer }> = [];
   const engine = new FakeEngine((epoch) => {
     const memory = epoch.options.memory;
@@ -108,11 +109,11 @@ test("a fake Engine opens message 3 through the same memory parts as a client in
 test("zoom pages retain all text, keep surrogate pairs, and include images only on the first page", async () => {
   const dir = directory();
   const image = "0123456789abcdef.png";
-  fs.mkdirSync(path.join(dir, "docs", "images"), { recursive: true });
-  fs.writeFileSync(path.join(dir, "docs", "images", image), "original");
-  fs.writeFileSync(path.join(dir, "docs", "images", image + ".jpg"), "fitted");
+  fs.mkdirSync(path.join(defaultStore(dir), "docs", "images"), { recursive: true });
+  fs.writeFileSync(path.join(defaultStore(dir), "docs", "images", image), "original");
+  fs.writeFileSync(path.join(defaultStore(dir), "docs", "images", image + ".jpg"), "fitted");
   const text = "head\n" + "x".repeat(29999) + "🌍" + "tail".repeat(8000);
-  const log = new Log(dir);
+  const log = new Log(defaultStore(dir));
   log.apply({ type: "act", act: "say", id: "image", text, images: [image] }, 0);
   log.finish(0);
   const { memory, client } = await start(dir, new FakeEngine());
@@ -143,7 +144,7 @@ test("zoom pages retain all text, keep surrogate pairs, and include images only 
   expect(memory.zoom(0, 1, -1).error).toBe(true);
   client.read({ type: "read", read: "zoom", id: "original", part: { l: 0, i: 0 } });
   expect((await client.wait("read")).entries[0]).toMatchObject({ text, images: [image] });
-  fs.rmSync(path.join(dir, "docs", "images", image + ".jpg"));
+  fs.rmSync(path.join(defaultStore(dir), "docs", "images", image + ".jpg"));
   expect(memory.zoom(0).images).toEqual([{ data: Buffer.from("original").toString("base64"), mimeType: "image/png" }]);
   const mark = client.events.length;
   client.act({ type: "act", act: "say", id: "bad-image", text: "Invalid image pointer", images: ["../private.txt"] });
@@ -153,7 +154,7 @@ test("zoom pages retain all text, keep surrogate pairs, and include images only 
 
 test("geometric roots and unbuilt summaries remain navigable while compaction waits", async () => {
   const dir = directory();
-  const log = new Log(dir);
+  const log = new Log(defaultStore(dir));
   for (let i = 0; i < 8; i++) log.append("user", "x".repeat(600));
   class Waiting extends FakeEngine { override compact(): Promise<Compaction> { return new Promise(() => {}); } }
   const { memory, client } = await start(dir, new Waiting());

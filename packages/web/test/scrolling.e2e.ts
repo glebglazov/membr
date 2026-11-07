@@ -145,29 +145,29 @@ async function briefTarget(browser: Browser) {
   } });
 }
 
-async function agentFollowing(browser: Browser) {
+async function subagentFollowing(browser: Browser) {
   const engine = new FakeEngine((epoch, message) => {
-    if (!epoch.options.agents) { epoch.emit({ kind: "delta", text: "Agent paragraph.\n\n".repeat(50) }); return; }
+    if (!epoch.options.subagents) { epoch.emit({ kind: "delta", text: "Subagent paragraph.\n\n".repeat(50) }); return; }
     if (message.from === "membr") { epoch.emit(END); return; }
     const tasks = [{ name: "reader", task: "Read the history." }];
     epoch.emit({ kind: "tool", id: "spawn", name: "mcp__memory__spawn", input: { tasks } });
-    epoch.emit({ kind: "echo", id: "spawn", text: epoch.options.agents.spawn(tasks), error: false }, END);
+    epoch.emit({ kind: "echo", id: "spawn", text: epoch.options.subagents.spawn(tasks), error: false }, END);
   });
   await withChat({ browser, engine, check: async (context, url) => {
     const page = await openChat(context, url);
     await send(page, "Start a reader.");
     await page.locator("details.brief.spawn > summary").click();
     await page.getByRole("button", { name: "Open reader's chat", exact: true }).click();
-    await expect(page.getByLabel("Live agent reply", { exact: true })).toContainText("Agent paragraph.");
+    await expect(page.getByLabel("Live subagent reply", { exact: true })).toContainText("Subagent paragraph.");
     await expect.poll(() => gap(page)).toBeLessThanOrEqual(2);
-    const agent = engine.epochs.find((epoch) => !epoch.options.agents)!;
-    agent.emit({ kind: "delta", text: "More agent details.\n\n".repeat(20) });
-    await expect(page.getByLabel("Live agent reply", { exact: true })).toContainText("More agent details.");
-    await expect.poll(() => gap(page), { message: "The selected agent log still follows new text." }).toBeLessThanOrEqual(2);
+    const subagent = engine.epochs.find((epoch) => !epoch.options.subagents)!;
+    subagent.emit({ kind: "delta", text: "More subagent details.\n\n".repeat(20) });
+    await expect(page.getByLabel("Live subagent reply", { exact: true })).toContainText("More subagent details.");
+    await expect.poll(() => gap(page), { message: "The selected subagent log still follows new text." }).toBeLessThanOrEqual(2);
     await page.mouse.move(400, 400);
     await page.mouse.wheel(0, -650);
     await expect.poll(() => gap(page)).toBeGreaterThan(500);
-    agent.emit({ kind: "delta", text: "Unread agent text.\n\n".repeat(20) });
+    subagent.emit({ kind: "delta", text: "Unread subagent text.\n\n".repeat(20) });
     await expect(page.getByRole("button", { name: "New messages", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "← Main chat", exact: true }).click();
     await expect(page.getByRole("button", { name: "New messages", exact: true })).toHaveCount(0);
@@ -180,8 +180,8 @@ try {
   console.log("PASS Streaming, diagram rendering, and footer growth follow the document bottom.");
   await reading(browser);
   console.log("PASS Reading stays in place, and New messages opens the first unseen reply after finalization.");
-  await agentFollowing(browser);
-  console.log("PASS Agent logs follow new text without sharing unseen targets with the main chat.");
+  await subagentFollowing(browser);
+  console.log("PASS Subagent logs follow new text without sharing unseen targets with the main chat.");
   await briefTarget(browser);
   console.log("PASS An unseen tool result opens its grouped brief.");
 } finally { await browser.close(); }

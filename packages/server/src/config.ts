@@ -4,32 +4,53 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// home is the directory the Engine runs in, which decides the harness. null means the server's working directory.
-// approvalTimeout (ms) is how long an unattended approval waits before membr denies it.
-export type ChatConfig = Readonly<{ home: string | null; afterCommand: string; rulesText: string; approvalTimeout: number }>;
+// One agent: an endless chat with its own store. home is the directory the Engine runs in, which decides its harness.
+// prompt is the agent's own system prompt text. approvalTimeout (ms) is how long an unattended approval waits.
+export type AgentConfig = Readonly<{ name: string; home: string; prompt: string; approvalTimeout: number }>;
 
 // Where the hub listens. tailscale puts the loopback port on the tailnet, so it needs host 127.0.0.1.
 export type Listen = Readonly<{ port: number; host: string; tailscale: boolean }>;
 
-export type Config = ChatConfig & Readonly<{ listen: Listen }>;
+export type Config = Readonly<{ listen: Listen; agents: ReadonlyMap<string, AgentConfig> }>;
 
+export const DEFAULT_AGENT = "default";
 export const APPROVAL_TIMEOUT = 10 * 60_000;
 const DAY = 24 * 60 * 60_000;
 const LOOPBACK = "127.0.0.1";
+const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+// The CLI reads its first word as an agent name unless it is one of its commands.
+const RESERVED = new Set(["server", "agent", "help"]);
+const AGENT_KEYS = new Set(["prompt", "home", "approvalTimeout"]);
+const MOVED: Record<string, string> = {
+  home: "home is now a key of each agent: move it to agents.default.home",
+  rules: "rules was removed: put the text of the rules file in agents.default.prompt",
+  after: "after was removed: membr no longer runs a command after each turn",
+};
 
 export function dataDir(env: Readonly<Record<string, string | undefined>> = process.env): string {
-  return env.MEMBR_DIR || path.join(os.homedir(), ".membr");
+  return env.MEMBR_DIR || path.join(os.homedir(), ".local", "share", "membr");
+}
+
+// The agent directory: it holds the agent's store, and its default home in home/.
+export function storeDir(dir: string, name: string): string {
+  return path.join(dir, "agents", name);
+}
+
+export function agentNameError(name: string): string | null {
+  if (!NAME.test(name)) return `agent name ${JSON.stringify(name)} must start with a letter and have only letters, digits, - and _ (64 at most)`;
+  if (RESERVED.has(name)) return `${name} is a membr command, so it cannot be an agent name`;
+  return null;
 }
 
 function expand(value: string): string { return value.startsWith("~/") ? os.homedir() + value.slice(1) : value; }
 
-function duration(value: unknown): number {
+function duration(value: unknown, key: string): number {
   if (value === undefined) return APPROVAL_TIMEOUT;
   const match = typeof value === "string" ? /^(\d+)(s|m|h)$/.exec(value) : null;
-  if (!match) throw new Error('config.json: approvalTimeout must be a number and a unit, such as "90s", "10m" or "2h"');
+  if (!match) throw new Error(`config.json: ${key} must be a number and a unit, such as "90s", "10m" or "2h"`);
   const ms = Number(match[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[match[2] as "s" | "m" | "h"];
-  if (ms === 0) throw new Error("config.json: approvalTimeout must be more than 0");
-  if (ms > DAY) throw new Error("config.json: approvalTimeout must be 24h or less");
+  if (ms === 0) throw new Error(`config.json: ${key} must be more than 0`);
+  if (ms > DAY) throw new Error(`config.json: ${key} must be 24h or less`);
   return ms;
 }
 
@@ -42,27 +63,34 @@ function listen(values: Record<string, unknown>): Listen {
   return { port, host, tailscale };
 }
 
-// Relative paths start at the data directory, because a launchd service starts there and not where the user typed membr.
+function object(value: unknown, key: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`config.json: ${key} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+// A relative home starts at the base directory, because a launchd service starts there and not where the user typed membr.
+function agent(dir: string, name: string, raw: unknown): AgentConfig {
+  const key = `agents.${name}`;
+  const values = object(raw, key);
+  for (const unknown of Object.keys(values).filter((k) => !AGENT_KEYS.has(k))) throw new Error(`config.json: ${key}.${unknown} is not a key of an agent (use prompt, home or approvalTimeout)`);
+  const { prompt = "", home } = values;
+  if (typeof prompt !== "string" && !(Array.isArray(prompt) && prompt.every((line) => typeof line === "string"))) throw new Error(`config.json: ${key}.prompt must be a string or a list of strings`);
+  if (home !== undefined && (typeof home !== "string" || home === "")) throw new Error(`config.json: ${key}.home must be a path`);
+  const homePath = home === undefined ? path.join(storeDir(dir, name), "home") : path.resolve(dir, expand(home));
+  if (home !== undefined && !fs.statSync(homePath, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`config.json: ${key}.home: ${homePath} is not a directory`);
+  return { name, home: homePath, prompt: Array.isArray(prompt) ? prompt.join("\n") : prompt, approvalTimeout: duration(values.approvalTimeout, `${key}.approvalTimeout`) };
+}
+
 export function readConfig(dir: string): Config {
   const file = path.join(dir, "config.json");
-  const raw: unknown = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("config.json must be an object");
-  const values = raw as Record<string, unknown>;
-  function get(key: "after" | "rules" | "home"): string {
-    const value = values[key] ?? "";
-    if (typeof value !== "string") throw new Error(`config.json: ${key} must be a string`);
-    return value;
+  const values = object(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}, "the file");
+  for (const key of Object.keys(MOVED)) if (key in values) throw new Error(`config.json: ${MOVED[key]}`);
+  const entries = object(values.agents ?? {}, "agents");
+  const agents = new Map<string, AgentConfig>();
+  for (const [name, raw] of Object.entries({ [DEFAULT_AGENT]: {}, ...entries })) {
+    const error = agentNameError(name);
+    if (error) throw new Error(`config.json: agents: ${error}`);
+    agents.set(name, agent(dir, name, raw));
   }
-
-  const home = get("home");
-  const homePath = home ? path.resolve(dir, expand(home)) : null;
-  if (homePath !== null && !fs.statSync(homePath, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`config.json: home: ${homePath} is not a directory`);
-  const rules = get("rules");
-  return {
-    home: homePath,
-    afterCommand: get("after"),
-    rulesText: rules ? fs.readFileSync(path.resolve(dir, expand(rules)), "utf8") : "",
-    approvalTimeout: duration(values.approvalTimeout),
-    listen: listen(values),
-  };
+  return { listen: listen(values), agents };
 }

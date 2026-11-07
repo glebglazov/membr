@@ -1,18 +1,18 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import { NEW_EPOCH_SHARE, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
+import { NEW_EPOCH_SHARE, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
-export type AgentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
+export type SubagentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
 export type Proposal = { when: When; text: string; next: string[] };
 export type Page = "chat" | "tree" | "schedules";
 export type Model = {
   importPlan: { id: string; input: ImportInput; estimate: ImportEstimate | null } | null;
   imports: ImportStatus[];
-  agent: string | null;
-  agents: ReadonlyMap<string, AgentLog>;
+  subagent: string | null;
+  subagents: ReadonlyMap<string, SubagentLog>;
   attachments: Attachment[];
   uploads: ReadonlyMap<string, Upload>;
   connection: "offline" | "connecting" | "ready" | "refused";
@@ -33,6 +33,8 @@ export type Model = {
   info: string | null;
   approvals: ReadonlyMap<string, Extract<Event, { type: "ask" }>>;
   skills: Skill[];
+  // every agent of the server, for the switcher
+  agents: AgentInfo[];
   schedules: ScheduleView[];
   // One /schedule request: the read in flight, then what the server understood.
   preview: { id: string; text: string; proposal: Proposal | null } | null;
@@ -42,10 +44,10 @@ export type Input =
   | { type: "import-start"; id: string }
   | { type: "import-go"; id: string; run: string; paused: boolean }
   | { type: "send"; id: string; text: string }
-  | { type: "agent"; name: string | null }
+  | { type: "subagent"; name: string | null }
   | { type: "attach"; images: Attachment[] }
   | { type: "detach"; id: string }
-  | { type: "stop"; id: string; agent?: string | null }
+  | { type: "stop"; id: string; subagent?: string | null }
   | { type: "pick"; id: string; change: Partial<Pick> }
   | { type: "answer"; id: string; approval: string; choice: Extract<Act, { act: "answer" }>["choice"] }
   | { type: "dismiss-error" }
@@ -75,23 +77,23 @@ function end(part: Part): number { return (part.i + 1) * 2 ** part.l; }
 export function createModel(): Model {
   return {
     importPlan: null, imports: [],
-    agent: null, agents: new Map(), attachments: [], uploads: new Map(),
+    subagent: null, subagents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
-    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], schedules: [], preview: null,
-    state: { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null },
+    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], agents: [], schedules: [], preview: null,
+    state: { busy: false, wait: "", goal: null, pick: null, subagents: [], usage: null },
   };
 }
 
-function requestAgent(model: Model, name: string): Model {
-  const reads = new Map([...model.reads].filter(([, request]) => request.read !== "agent" || request.name !== name));
+function requestSubagent(model: Model, name: string): Model {
+  const reads = new Map([...model.reads].filter(([, request]) => request.read !== "subagent" || request.name !== name));
   const readSequence = model.readSequence + 1;
-  const request: Read = { type: "read", read: "agent", id: `agent-${readSequence}`, name };
+  const request: Read = { type: "read", read: "subagent", id: `subagent-${readSequence}`, name };
   reads.set(request.id, request);
   return { ...model, reads, readSequence };
 }
 
-function agentLog(model: Model, name: string): AgentLog {
-  return model.agents.get(name) ?? { entries: new Map(), live: "", loaded: false };
+function subagentLog(model: Model, name: string): SubagentLog {
+  return model.subagents.get(name) ?? { entries: new Map(), live: "", loaded: false };
 }
 
 function requestRoots(model: Model): Model {
@@ -106,6 +108,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
   switch (event.type) {
     case "imports": return { ...model, imports: event.imports };
     case "skills": return { ...model, skills: event.skills };
+    case "agents": return { ...model, agents: event.agents };
     case "schedules": return { ...model, schedules: event.schedules };
     case "when": {
       if (model.preview?.id !== event.id) return model;
@@ -118,8 +121,8 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       return { ...model, reads, importPlan: { ...model.importPlan, estimate: event.estimate } };
     }
     case "connecting": {
-      const next: Model = { ...model, connection: "connecting", live: "", approvals: new Map(), agents: new Map([...model.agents].map(([name, log]) => [name, { ...log, live: "" }])) };
-      return model.agent === null ? next : requestAgent(next, model.agent);
+      const next: Model = { ...model, connection: "connecting", live: "", approvals: new Map(), subagents: new Map([...model.subagents].map(([name, log]) => [name, { ...log, live: "" }])) };
+      return model.subagent === null ? next : requestSubagent(next, model.subagent);
     }
     case "offline": return { ...model, connection: model.connection === "refused" ? "refused" : "offline", live: "" };
     case "ready": return { ...model, connection: "ready" };
@@ -140,23 +143,23 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       entries.set(event.entry.i, event.entry);
       return { ...model, entries, live: event.entry.kind === "unii" ? "" : model.live };
     }
-    case "agent-entry": {
-      const log = agentLog(model, event.name), entries = new Map(log.entries), agents = new Map(model.agents);
+    case "subagent-entry": {
+      const log = subagentLog(model, event.name), entries = new Map(log.entries), subagents = new Map(model.subagents);
       entries.set(event.entry.i, event.entry);
-      agents.set(event.name, { ...log, entries, live: event.entry.kind === "unii" ? "" : log.live });
-      return { ...model, agents };
+      subagents.set(event.name, { ...log, entries, live: event.entry.kind === "unii" ? "" : log.live });
+      return { ...model, subagents };
     }
     case "live": {
-      if (event.agent === null) return { ...model, live: model.live + event.text };
-      const log = agentLog(model, event.agent), agents = new Map(model.agents);
-      agents.set(event.agent, { ...log, live: log.live + event.text });
-      return { ...model, agents };
+      if (event.subagent === null) return { ...model, live: model.live + event.text };
+      const log = subagentLog(model, event.subagent), subagents = new Map(model.subagents);
+      subagents.set(event.subagent, { ...log, live: log.live + event.text });
+      return { ...model, subagents };
     }
     case "state": {
-      const agents = new Map(model.agents);
-      for (const name of event.state.agentNames ?? event.state.agents) agents.set(name, agentLog(model, name));
-      for (const [name, log] of agents) if (!event.state.agents.includes(name)) agents.set(name, { ...log, live: "" });
-      return { ...model, agents, state: event.state, live: event.state.busy ? model.live : "" };
+      const subagents = new Map(model.subagents);
+      for (const name of event.state.subagentNames ?? event.state.subagents) subagents.set(name, subagentLog(model, name));
+      for (const [name, log] of subagents) if (!event.state.subagents.includes(name)) subagents.set(name, { ...log, live: "" });
+      return { ...model, subagents, state: event.state, live: event.state.busy ? model.live : "" };
     }
     case "view": {
       const nodes = new Map(model.nodes);
@@ -170,10 +173,10 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       const reads = new Map(model.reads);
       reads.delete(event.id);
       if (event.error) return readFailure({ ...model, reads }, request, event.error);
-      if (request.read === "agent") {
-        const agents = new Map(model.agents);
-        agents.set(request.name, { entries: new Map(event.entries.map((entry) => [entry.i, entry])), live: event.live ?? "", loaded: true });
-        return { ...model, reads, agents };
+      if (request.read === "subagent") {
+        const subagents = new Map(model.subagents);
+        subagents.set(request.name, { entries: new Map(event.entries.map((entry) => [entry.i, entry])), live: event.live ?? "", loaded: true });
+        return { ...model, reads, subagents };
       }
       const nodes = new Map(model.nodes), entries = new Map(model.entries);
       for (const line of event.lines) nodes.set(partKey(line), line);
@@ -216,10 +219,10 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     ? post(model, [{ type: "act", act: "import", id: input.id, ...model.importPlan.input }]) : output(model);
   if (input.type === "import-go") return post(model, [{ type: "act", act: "go", id: input.id, import: input.run, paused: input.paused }]);
   if (input.type === "flush") return output(model, [...model.pending.values()].filter((request) => !model.uploads.has(request.id)), [...model.reads.values()], [...model.uploads.values()]);
-  if (input.type === "agent") {
-    if (input.name !== null && !model.agents.has(input.name)) return output(model);
-    const next = { ...model, agent: input.name, page: "chat" as const };
-    const refreshed = input.name === null ? next : requestAgent(next, input.name);
+  if (input.type === "subagent") {
+    if (input.name !== null && !model.subagents.has(input.name)) return output(model);
+    const next = { ...model, subagent: input.name, page: "chat" as const };
+    const refreshed = input.name === null ? next : requestSubagent(next, input.name);
     return output(refreshed, [], [...refreshed.reads.values()]);
   }
   if (input.type === "attach") {
@@ -241,7 +244,7 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
   if (input.type === "schedule-accept") {
     const proposal = model.preview?.proposal;
     if (!proposal) return output(model);
-    const schedule = { text: proposal.text, when: proposal.when, run: input.run ?? "agent", missed: input.missed ?? "once" };
+    const schedule = { text: proposal.text, when: proposal.when, run: input.run ?? "subagent", missed: input.missed ?? "once" };
     return post(model, [{ type: "act", act: "schedule", id: input.id, schedule }]);
   }
   if (input.type === "schedule-act") {
@@ -254,9 +257,9 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
   if (input.type === "send" && input.text.trim().startsWith("/")) return model.attachments.length
     ? output({ ...model, error: "Remove images before you use a command." }) : command(model, input);
   if (input.type === "fold" || input.type === "page") {
-    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "agent" || request.read === "when")), error: null };
+    const next = { ...model, open: new Set<string>(), reads: new Map<string, Read>([...model.reads].filter(([, request]) => request.read === "subagent" || request.read === "when")), error: null };
     if (input.type === "fold") next.folded = !model.folded;
-    else { next.page = input.page; if (input.page !== "chat") next.agent = null; }
+    else { next.page = input.page; if (input.page !== "chat") next.subagent = null; }
     const refreshed = next.folded || next.page === "tree" ? requestRoots(next) : next;
     return output(refreshed, [], [...refreshed.reads.values()]);
   }
@@ -284,7 +287,7 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     const sent = post({ ...model, uploads, attachments: [] }, [{ type: "act", act: "say", id: input.id, text: input.text }]);
     return output(sent.model, [], [], [upload]);
   }
-  if (input.type === "stop") return post(model, [{ type: "act", act: "stop", id: input.id, agent: input.agent ?? null }]);
+  if (input.type === "stop") return post(model, [{ type: "act", act: "stop", id: input.id, subagent: input.subagent ?? null }]);
   if (input.type === "answer") {
     if (!model.approvals.has(input.approval) || answering(model, input.approval)) return output(model);
     return post(model, [{ type: "act", act: "answer", id: input.id, approval: input.approval, choice: input.choice }]);
@@ -300,7 +303,7 @@ export type Command = { name: string; hint: string; description: string };
 export const COMMANDS: Command[] = [
   { name: "/goal", hint: "<message>", description: "Set a goal and send the message." },
   { name: "/halt", hint: "", description: "Clear the goal. The current turn continues." },
-  { name: "/stop", hint: "[name]", description: "Stop all work, or one named agent." },
+  { name: "/stop", hint: "[name]", description: "Stop all work, or one named subagent." },
   { name: "/model", hint: "[name]", description: "Show models, or select one." },
   { name: "/effort", hint: "[level]", description: "Show effort levels, or select one." },
   { name: "/speed", hint: "[normal|fast]", description: "Show speeds, or select one." },
@@ -430,7 +433,7 @@ function command(model: Model, input: Extract<Input, { type: "send" }>): ReturnT
         { type: "act", act: "say", id: `${input.id}:say`, text: argument },
       ]) : fail("Use /goal <message>.");
     case "/halt": return argument ? fail("Use /halt without an argument.") : post(model, [{ type: "act", act: "goal", id: input.id, text: null }]);
-    case "/stop": return /\s/.test(argument) ? fail("Use /stop [name].") : act(model, { type: "stop", id: input.id, agent: argument || null });
+    case "/stop": return /\s/.test(argument) ? fail("Use /stop [name].") : act(model, { type: "stop", id: input.id, subagent: argument || null });
     case "/model":
       if (!argument) return info(`Models: ${MODELS.join(", ")}.`);
       return MODELS.includes(argument) ? act(model, { type: "pick", id: input.id, change: { model: argument } }) : fail(`Choose a model: ${MODELS.join(", ")}.`);

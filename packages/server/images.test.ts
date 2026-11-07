@@ -5,6 +5,7 @@ import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
+import { defaultStore } from "./test/config.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lWQAAAAASUVORK5CYII=", "base64");
 const dirs: string[] = [];
@@ -65,7 +66,7 @@ test("S1 an uploaded image reaches the Engine, zoom and the browser image route,
   const second = await post(hub, "picture", form(changed, "image/png", "Changed on retry"));
   expect(await second.json()).toEqual(answer);
   expect(hub.engine.epochs[0].messages).toHaveLength(1);
-  expect(fs.readdirSync(path.join(hub.dir, "docs/images"))).toEqual([name]);
+  expect(fs.readdirSync(path.join(defaultStore(hub.dir), "docs/images"))).toEqual([name]);
   await hub.close();
   const restarted = start(hub.dir);
   expect(await (await post(restarted, "picture", form(Buffer.from("invalid")))).json()).toEqual(answer);
@@ -85,7 +86,7 @@ test("S1 image-only inputs work, and large originals keep a fitted JPEG for Engi
   expect(zoom.images).toEqual(sent.images!);
   const modelImage = Buffer.from(zoom.images[0].data, "base64");
   expect(await new Bun.Image(modelImage).metadata()).toMatchObject({ width: 1568, height: 784, format: "jpeg" });
-  const files = fs.readdirSync(path.join(hub.dir, "docs/images"));
+  const files = fs.readdirSync(path.join(defaultStore(hub.dir), "docs/images"));
   expect(files).toHaveLength(2);
   expect(files.some((name) => name.endsWith(".png.jpg"))).toBe(true);
   expect(files.some((name) => name.endsWith(".tmp"))).toBe(false);

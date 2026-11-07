@@ -25,9 +25,9 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function serve(dir: string, command = ["bun", MAIN], config: Record<string, unknown> = {}, env: Record<string, string> = {}) {
+function serve(dir: string, command = ["bun", MAIN], config: Record<string, unknown> = {}, env: Record<string, string> = {}, run = ["server", "run"]) {
   fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port: 0, ...config }));
-  const proc = Bun.spawn([...command, "serve"], {
+  const proc = Bun.spawn([...command, ...run], {
     env: { ...process.env, MEMBR_DIR: dir, MEMBR_CLAUDE_CLI: path.join(dir, "fake-claude"), ...env },
     stdout: "pipe",
     stderr: "pipe",
@@ -66,20 +66,24 @@ async function contend(dir: string, command?: string[]) {
 }
 
 test("membr takes no server options, and --help shows the commands", async () => {
-  const flags = Bun.spawn(["bun", MAIN, "serve", "--port", "9000"], { env: { ...process.env, MEMBR_DIR: directory() }, stdout: "pipe", stderr: "pipe" });
+  const flags = Bun.spawn(["bun", MAIN, "server", "run", "--port", "9000"], { env: { ...process.env, MEMBR_DIR: directory() }, stdout: "pipe", stderr: "pipe" });
   expect(await flags.exited).toBe(2);
   expect(await new Response(flags.stderr).text()).toContain("Unknown option '--port'");
   const help = Bun.spawn(["bun", MAIN, "--help"], { stdout: "pipe", stderr: "pipe" });
   expect(await help.exited).toBe(0);
   const text = await new Response(help.stdout).text();
-  expect(text).toStartWith("usage: membr [URL] [--token TOKEN]");
-  expect(text).toContain("membr reload    read config.json again and show the result");
+  expect(text).toStartWith("usage: membr [AGENT | URL] [--token TOKEN]");
+  expect(text).toContain("membr server reload    read config.json again and show the result");
+  expect(text).toContain("membr agent new NAME");
 });
 
-test("serve listens on loopback", async () => {
+test("server run listens on loopback, and an old plist's serve still starts it", async () => {
   const url = await listening(serve(directory()));
   expect(new URL(url).hostname).toBe("127.0.0.1");
   expect((await fetch(url)).ok).toBe(true);
+  expect((await fetch(new URL("membr/default/", url))).ok).toBe(true);
+  const legacy = await listening(serve(directory(), undefined, {}, {}, ["serve"]));
+  expect((await fetch(legacy)).ok).toBe(true);
 });
 
 // A fake `tailscale` on PATH: it logs its arguments, and fails `serve` with the message in $FAIL.
@@ -104,11 +108,11 @@ test("serve with tailscale in config.json puts the loopback port on the tailnet"
   }
   const url = new URL(out.match(/serving .* at (\S+)/)![1]);
   expect(url.hostname).toBe("127.0.0.1");
-  expect(out).toContain(`on the tailnet at https://box.tail0.ts.net:${url.port}/`);
-  expect(fs.readFileSync(path.join(dir, "tailscale-calls"), "utf8")).toContain(`serve --bg --https=${url.port} http://127.0.0.1:${url.port}`);
+  expect(out).toContain("on the tailnet at https://box.tail0.ts.net/membr/");
+  expect(fs.readFileSync(path.join(dir, "tailscale-calls"), "utf8")).toContain(`serve --bg --https=443 --set-path=/membr http://127.0.0.1:${url.port}/membr`);
 });
 
-test("a reload to a new port puts the new port on the tailnet and records it in the lock", async () => {
+test("a reload to a new port points the tailnet path at the new port and records it in the lock", async () => {
   const dir = directory();
   const proc = serve(dir, undefined, { tailscale: true }, fakeTailscale(dir));
   await listening(proc);
@@ -116,9 +120,9 @@ test("a reload to a new port puts the new port on the tailnet and records it in 
   const port = free.port!;
   free.stop(true);
   fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port, tailscale: true }));
-  expect(await reloadServer(dir)).toEqual(["membr: config reloaded", `membr: the server now listens at http://127.0.0.1:${port}/`, `membr: on the tailnet at https://box.tail0.ts.net:${port}/`]);
-  expect(fs.readFileSync(path.join(dir, "tailscale-calls"), "utf8")).toContain(`serve --bg --https=${port} http://127.0.0.1:${port}`);
-  expect(holder(dir)).toEqual({ pid: proc.pid, url: `http://127.0.0.1:${port}/`, tailnet: `https://box.tail0.ts.net:${port}/` });
+  expect(await reloadServer(dir)).toEqual(["membr: config reloaded", `membr: the server now listens at http://127.0.0.1:${port}/`]);
+  expect(fs.readFileSync(path.join(dir, "tailscale-calls"), "utf8")).toContain(`serve --bg --https=443 --set-path=/membr http://127.0.0.1:${port}/membr`);
+  expect(holder(dir)).toEqual({ pid: proc.pid, url: `http://127.0.0.1:${port}/`, tailnet: "https://box.tail0.ts.net/membr/" });
 });
 
 test("serve exits and frees the data directory when tailscale fails", async () => {
@@ -157,27 +161,6 @@ test("a lock left by a crashed server is taken over", async () => {
 
   await contend(dir);
 }, 10000);
-
-test("SIGTERM waits for the after command before it releases the server", async () => {
-  const dir = directory();
-  const output = path.join(dir, "after.txt");
-  const proc = serve(dir, undefined, { after: `sleep 0.1; printf done > '${output}'` });
-  const url = await listening(proc);
-  const token = fs.readFileSync(path.join(dir, "token"), "utf8").trim();
-  const client = await TestClient.connect(url.replace("http:", "ws:") + "ws", { token });
-  try {
-    await client.wait("ready");
-    const mark = client.events.length;
-    client.act({ type: "act", act: "say", id: "before-shutdown", text: "Work" });
-    await client.wait("answer", mark);
-    await client.wait("state", mark, (event) => !event.state.busy);
-    proc.kill("SIGTERM");
-    expect(await proc.exited).toBe(0);
-    expect(fs.readFileSync(output, "utf8")).toBe("done");
-  } finally {
-    client.close();
-  }
-});
 
 test("the built binary refuses a live holder and takes over after a crash", async () => {
   const root = path.resolve(import.meta.dir, "../..");

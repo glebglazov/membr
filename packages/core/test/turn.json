@@ -14,7 +14,7 @@
         "effort": "high",
         "fast": false
       },
-      "agents": [],
+      "subagents": [],
       "usage": null
     }
   },
@@ -55,7 +55,7 @@
         "effort": "high",
         "fast": false
       },
-      "agents": [],
+      "subagents": [],
       "usage": null
     }
   },
@@ -68,12 +68,12 @@
   {
     "type": "live",
     "text": "I will ",
-    "agent": null
+    "subagent": null
   },
   {
     "type": "live",
     "text": "check.",
-    "agent": null
+    "subagent": null
   },
   {
     "type": "entry",
@@ -168,7 +168,7 @@
   {
     "type": "live",
     "text": "The folder is /project.",
-    "agent": null
+    "subagent": null
   },
   {
     "type": "entry",
@@ -219,7 +219,7 @@
         "effort": "high",
         "fast": false
       },
-      "agents": [],
+      "subagents": [],
       "usage": {
         "input": 20,
         "cacheRead": 10,

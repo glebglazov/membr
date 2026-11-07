@@ -23,7 +23,7 @@ async function upload(request: Upload) {
       const bytes = Uint8Array.from(atob(image.data), (byte) => byte.charCodeAt(0));
       form.append("images", new Blob([bytes], { type: image.type }), image.name);
     }
-    const response = await fetch(`/act/say?id=${encodeURIComponent(request.id)}`, { method: "POST", body: form });
+    const response = await fetch(`act/say?id=${encodeURIComponent(request.id)}`, { method: "POST", body: form });
     const event = response.headers.get("content-type")?.includes("application/json")
       ? parseEvent(await response.json())
       : { type: "answer", id: request.id, ok: false, reason: await response.text() || "The image upload failed." } as const;
@@ -55,7 +55,7 @@ function input(value: Input) {
 function connect() {
   model = hear(model, { type: "connecting" });
   changed();
-  const url = new URL("/ws", location.href);
+  const url = new URL("ws", location.href);
   url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const current = new WebSocket(url);
   socket = current;
@@ -91,7 +91,7 @@ function Block({ entry }: { entry: Entry }) {
   const label = { user: "You", unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note", ai: "Imported chat" }[entry.kind];
   return h("article", { class: `message ${entry.kind}`, "data-entry": entry.i },
     h("div", { class: "label" }, label), PROSE.has(entry.kind) ? h(Markdown, { text: entry.text }) : h("div", { class: "text" }, entry.text),
-    entry.images?.map((name) => h("a", { href: `/docs/images/${encodeURIComponent(name)}`, target: "_blank", rel: "noreferrer", key: name }, h("img", { class: "attached-image", src: `/docs/images/${encodeURIComponent(name)}`, alt: "Attached image", loading: "lazy" }))));
+    entry.images?.map((name) => h("a", { href: `docs/images/${encodeURIComponent(name)}`, target: "_blank", rel: "noreferrer", key: name }, h("img", { class: "attached-image", src: `docs/images/${encodeURIComponent(name)}`, alt: "Attached image", loading: "lazy" }))));
 }
 
 function rowKey(row: Row): string {
@@ -100,7 +100,7 @@ function rowKey(row: Row): string {
 
 function MemoryBlock({ row }: { row: Row }): ComponentChild {
   if (row.kind === "message") return h(Block, { entry: row.entry });
-  if (row.kind === "brief") return h(BriefRow, { brief: row.brief, working: model.state.agents, openAgent: (name) => input({ type: "agent", name }) });
+  if (row.kind === "brief") return h(BriefRow, { brief: row.brief, working: model.state.subagents, openSubagent: (name) => input({ type: "subagent", name }) });
   const { part } = row;
   const name = `${part.i * 2 ** part.l}+${2 ** part.l}`;
   if (row.kind === "summary") return h("button", {
@@ -129,6 +129,16 @@ function Usage() {
   return h("span", { class: "usage", title: "Tokens of the epoch after its last turn, of the size at which the next turn starts a new epoch" }, words);
 }
 
+// The agent of this page: /membr/<name>/, or the default agent at / as before there were many agents.
+const AGENT = decodeURIComponent(/^\/membr\/([^/]+)\//.exec(location.pathname)?.[1] ?? "default");
+document.title = `membr · ${AGENT}`;
+
+function AgentSwitch() {
+  if (model.agents.length < 2) return null;
+  return h("select", { class: "agent-switch", "aria-label": "Agent", value: AGENT, onChange: (event: Event) => { location.href = `/membr/${encodeURIComponent((event.currentTarget as HTMLSelectElement).value)}/`; } },
+    model.agents.map((agent) => h("option", { value: agent.name, key: agent.name }, agent.busy && agent.name !== AGENT ? `${agent.name} (working)` : agent.name)));
+}
+
 function Settings() {
   const panel = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -149,7 +159,7 @@ function Settings() {
         h("div", { "aria-label": "Cache share", title: "Cache reads as a share of all input tokens in the last completed turn, including cache writes." }, h("dt", null, "Turn cache"), h("dd", null, share === null ? "unavailable" : (share * 100).toFixed(1) + "%")),
         h("div", { "aria-label": "Goal", title: model.state.goal ?? "No goal" }, h("dt", null, "Goal"), h("dd", null, model.state.goal ?? "none"))),
       h(ImportPanel, null),
-      h("a", { class: "export", href: "/export" }, "Export memory")));
+      h("a", { class: "export", href: "export" }, "Export memory")));
 }
 
 function PickBar() {
@@ -230,7 +240,7 @@ function ImportPanel() {
 }
 
 function SchedulePreview() {
-  const [run, setRun] = useState<ScheduleSpec["run"]>("agent");
+  const [run, setRun] = useState<ScheduleSpec["run"]>("subagent");
   const [missed, setMissed] = useState<ScheduleSpec["missed"]>("once");
   const preview = model.preview;
   if (!preview) return null;
@@ -244,8 +254,8 @@ function SchedulePreview() {
     h("p", { class: "schedule-text" }, proposal.text),
     h("p", { class: "label" }, proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}` : "It does not fire again."),
     h("div", { class: "schedule-actions" },
-      h("label", null, "Run as", h("select", { "aria-label": "Run as", value: run, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setRun(event.currentTarget.value === "turn" ? "turn" : "agent"); } },
-        h("option", { value: "agent" }, "A subagent"), h("option", { value: "turn" }, "A turn in the chat"))),
+      h("label", null, "Run as", h("select", { "aria-label": "Run as", value: run, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setRun(event.currentTarget.value === "turn" ? "turn" : "subagent"); } },
+        h("option", { value: "subagent" }, "A subagent"), h("option", { value: "turn" }, "A turn in the chat"))),
       h("label", null, "If missed", h("select", { "aria-label": "If missed", value: missed, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setMissed(event.currentTarget.value === "skip" ? "skip" : "once"); } },
         h("option", { value: "once" }, "Run once when back"), h("option", { value: "skip" }, "Skip"))),
       h("span", { class: "grow" }),
@@ -315,8 +325,8 @@ function App() {
   const field = useRef<HTMLTextAreaElement>(null);
   const [readingImages, setReadingImages] = useState(false);
   const files = useRef<HTMLInputElement>(null);
-  const agent = model.agent === null ? null : model.agents.get(model.agent);
-  const scroll = useChatScroll(model.page === "chat" && (model.agent !== null || !model.folded), { log: model.agent ?? "", entries: agent?.entries ?? model.entries, live: agent?.live ?? model.live, ready: model.connection === "ready" && (model.agent === null || agent?.loaded === true) });
+  const subagent = model.subagent === null ? null : model.subagents.get(model.subagent);
+  const scroll = useChatScroll(model.page === "chat" && (model.subagent !== null || !model.folded), { log: model.subagent ?? "", entries: subagent?.entries ?? model.entries, live: subagent?.live ?? model.live, ready: model.connection === "ready" && (model.subagent === null || subagent?.loaded === true) });
   changed = () => update((value) => value + 1);
   useEffect(() => {
     const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : location.hash === "#schedules" ? "schedules" : "chat" });
@@ -365,33 +375,34 @@ function App() {
   const status = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready" : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages will send when connected.";
   const tone = model.connection === "ready" ? model.state.busy ? "busy" : "ready" : model.connection === "refused" ? "refused" : "offline";
   const body = rows(model);
-  const chatting = model.page === "chat" && model.agent === null;
+  const chatting = model.page === "chat" && model.subagent === null;
   return h("div", { class: "app" },
     h("header", { ref: scroll.header },
       h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
+      h(AgentSwitch, null),
       h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory"), h("a", { href: "#schedules", "aria-current": model.page === "schedules" ? "page" : undefined }, "Schedules")),
       h("div", { class: "meta" },
         h("span", { class: `pulse ${tone}`, "aria-hidden": "true" }),
         h("span", { role: "status" }, status),
         model.imports.some((run) => run.phase === "running") && h("span", { class: "importing" }, "Importing"),
-        model.state.agents.length > 0 && h("span", { class: "at-work" }, `${model.state.agents.length} agent${model.state.agents.length === 1 ? "" : "s"} at work`),
+        model.state.subagents.length > 0 && h("span", { class: "at-work" }, `${model.state.subagents.length} subagent${model.state.subagents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.agent === null ? "Chat" : `${model.agent} log` },
+    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.subagent === null ? "Chat" : `${model.subagent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.page === "schedules" && h("h2", null, "Schedules"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
       chatting && body.length > 0 && h("div", { class: "fold-bar" },
         model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
         h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
-      model.page === "schedules" ? h(SchedulesPage, null) : agent ? [
-        h("div", { key: "title", class: "agent-title" },
-          h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "agent", name: null }) }, "← Main chat"),
-          h("h2", null, model.agent),
-          model.agent !== null && model.state.agents.includes(model.agent) && h("span", { class: "label" }, "at work")),
-        !agent.loaded && h("p", { key: "loading", role: "status" }, "Loading agent log..."),
-        brief([...agent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
-        agent.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live agent reply" }, h("div", { class: "label" }, model.agent), h(Markdown, { text: agent.live, diagrams: false })),
+      model.page === "schedules" ? h(SchedulesPage, null) : subagent ? [
+        h("div", { key: "title", class: "subagent-title" },
+          h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "subagent", name: null }) }, "← Main chat"),
+          h("h2", null, model.subagent),
+          model.subagent !== null && model.state.subagents.includes(model.subagent) && h("span", { class: "label" }, "at work")),
+        !subagent.loaded && h("p", { key: "loading", role: "status" }, "Loading subagent log..."),
+        brief([...subagent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
+        subagent.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live subagent reply" }, h("div", { class: "label" }, model.subagent), h(Markdown, { text: subagent.live, diagrams: false })),
       ] : [
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
         body.map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
@@ -403,7 +414,7 @@ function App() {
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),
       chatting && h(SchedulePreview, null),
-      model.page === "chat" && model.agent !== null && h("div", { class: "agent-bar" }, h("button", { type: "button", class: "ghost", disabled: !model.state.agents.includes(model.agent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), agent: model.agent }) }, `Stop ${model.agent}`)),
+      model.page === "chat" && model.subagent !== null && h("div", { class: "subagent-bar" }, h("button", { type: "button", class: "ghost", disabled: !model.state.subagents.includes(model.subagent) || model.connection !== "ready", onClick: () => input({ type: "stop", id: id(), subagent: model.subagent }) }, `Stop ${model.subagent}`)),
       chatting && h("form", { class: "composer", onSubmit: (event: SubmitEvent) => { event.preventDefault(); send(); } },
         model.attachments.length > 0 && h("div", { class: "attachments", "aria-label": "Image attachments" }, model.attachments.map((image) => h("div", { key: image.id }, h("img", { class: "attached-image", src: `data:${image.type};base64,${image.data}`, alt: image.name }), h("button", { type: "button", class: "ghost small", "aria-label": `Remove ${image.name}`, onClick: () => input({ type: "detach", id: image.id }) }, "Remove")))),
         commands.length > 0 && h(CommandMenu, { commands, selected: current, choose: insert }),

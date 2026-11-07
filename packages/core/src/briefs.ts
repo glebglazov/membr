@@ -5,8 +5,8 @@ export type Call = { i: number; tool: string; what: string; input: unknown; resu
 // A brief stands for technical entries in the chat: it reads as one line and opens to the detail.
 export type Brief =
   | { kind: "tools"; i: number; calls: Call[] }
-  | { kind: "spawn"; i: number; call: Call; agents: { name: string; task: string }[] }
-  | { kind: "report"; i: number; agent: string; text: string }
+  | { kind: "spawn"; i: number; call: Call; subagents: { name: string; task: string }[] }
+  | { kind: "report"; i: number; subagent: string; text: string }
   | { kind: "note"; i: number; text: string };
 export type Item = { kind: "message"; entry: Entry } | { kind: "brief"; brief: Brief };
 
@@ -75,7 +75,7 @@ function spawned(call: Call): { name: string; task: string }[] {
 function report(entry: Entry): Brief {
   const head = /^\[([^\]]+)\] (?:report|reply)\n/.exec(entry.text);
   if (!head) return { kind: "note", i: entry.i, text: entry.text };
-  return { kind: "report", i: entry.i, agent: head[1], text: entry.text.slice(head[0].length).replace(/\nFull chat: zoom\("[^"]*"\)$/, "") };
+  return { kind: "report", i: entry.i, subagent: head[1], text: entry.text.slice(head[0].length).replace(/\nFull chat: zoom\("[^"]*"\)$/, "") };
 }
 
 // Folds each run of tool and echo entries into one brief, with each spawn call as a brief of its own,
@@ -90,7 +90,7 @@ export function brief(entries: Entry[]): Item[] {
       if (call.tool !== "spawn") { calls.push(call); continue; }
       if (calls.length) add({ kind: "tools", i: calls[0].i, calls });
       calls = [];
-      add({ kind: "spawn", i: call.i, call, agents: spawned(call) });
+      add({ kind: "spawn", i: call.i, call, subagents: spawned(call) });
     }
     if (calls.length) add({ kind: "tools", i: calls[0].i, calls });
     run = [];

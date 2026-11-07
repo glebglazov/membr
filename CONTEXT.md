@@ -1,8 +1,28 @@
 # membr
 
-membr is a chat with one agent whose memory keeps every message. A hub serves the chat to web clients on this machine, on the tailnet, and on the local network.
+membr is a set of chats with agents whose memory keeps every message. One hub serves every agent to web and terminal clients on this machine, on the tailnet, and on the local network.
 
 ## Language
+
+**Agent**:
+One chat that never ends, with a name, its own store, its own home and its own prompt. An agent exists when config.json has an entry for it under `agents`. The agent `default` always exists. Its web app is at `/membr/<name>/`.
+_Avoid_: bot, persona, chat (for the whole thing)
+
+**Subagent**:
+A short run that an agent starts with its `spawn` tool for one task. It reports back to the agent that started it, and then it is gone.
+_Avoid_: agent (for this), worker, child
+
+**Base directory**:
+The directory of the server: `~/.local/share/membr`, or the one that `MEMBR_DIR` names. It holds config.json, the token, the lock, serve.log, and the agent directories under `agents/`.
+_Avoid_: data directory, membr home
+
+**Store**:
+One agent's own files: its log, tree, epochs, subagent logs and images. It is the agent directory `agents/<name>/` in the base directory. Only membr reads and writes it, and no setting moves it.
+_Avoid_: data directory, home
+
+**Home**:
+The directory that the Engine of one agent runs in, and where Claude Code finds the harness. It is the agent's `home` key, or `agents/<name>/home/` when the key is not set.
+_Avoid_: working directory, workspace, store
 
 **Access**:
 The way a request is allowed to reach the hub. It is local (this machine, or the tailnet through `tailscale serve`), token (the request carries the token), deferred (a WebSocket with no token, which must send the token in its hello), or refused.
@@ -13,11 +33,11 @@ One input from the user or from membr, and the agent work that answers it, up to
 _Avoid_: request, round
 
 **Epoch**:
-One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of home or rules, and when a turn ends with the session at 80% or more of the model's context window or over it. The status shows the epoch's size after its last turn, of that 80%.
+One engine session. It starts from the current view. A new epoch replaces it after a summary batch, after a change of the agent's home or prompt, and when a turn ends with the session at 80% or more of the model's context window or over it. The status shows the epoch's size after its last turn, of that 80%.
 _Avoid_: session, conversation
 
 **Harness**:
-The Claude Code settings, skills, plugins and MCP servers that the Engine loads from the server's working directory and the user's settings.
+The Claude Code settings, skills, plugins and MCP servers that the Engine loads from the agent's home and the user's settings.
 _Avoid_: config, environment
 
 **Skill**:
@@ -36,7 +56,7 @@ _Avoid_: compaction, compression
 The phase of a turn in which membr waits for compression to write the lines that the summary batch needs, before it starts a new epoch.
 
 **Schedule**:
-A task text with a time (one ISO time, or a cron and a time zone name), stored in the log. It runs as a turn or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
+A task text with a time (one ISO time, or a cron and a time zone name), stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
 _Avoid_: job, cron, timer, reminder
 
 **Fire**:

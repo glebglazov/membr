@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { TestClient } from "./test/client.ts";
+import { defaultStore } from "./test/config.ts";
 
 const dirs: string[] = [];
 const processes: Bun.Subprocess[] = [];
@@ -47,7 +48,7 @@ async function connect(server: Awaited<ReturnType<typeof serve>>, options: Param
 }
 
 function records(dir: string, all = false) {
-  return fs.readdirSync(path.join(dir, "main")).flatMap((file) => fs.readFileSync(path.join(dir, "main", file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((record) => all || "act" in record));
+  return fs.readdirSync(path.join(defaultStore(dir), "main")).flatMap((file) => fs.readFileSync(path.join(defaultStore(dir), "main", file), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((record) => all || "act" in record));
 }
 
 test("two clients see one durable entry and simultaneous resends get its first answer", async () => {
@@ -65,7 +66,7 @@ test("two clients see one durable entry and simultaneous resends get its first a
   expect(first.entry.text).toBe(say.text);
   expect(records(server.dir)).toHaveLength(1);
   expect(records(server.dir)[0].from).toEqual(first.entry.from);
-  expect(first.entry.from.machine).toBe(fs.readFileSync(path.join(server.dir, "machine"), "utf8").trim());
+  expect(first.entry.from.machine).toBe(fs.readFileSync(path.join(defaultStore(server.dir), "machine"), "utf8").trim());
   expect(first.entry.from.seq).toBe(0);
   expect(a.events.filter((event) => event.type === "entry")).toHaveLength(1);
   expect(b.events.filter((event) => event.type === "entry")).toHaveLength(1);
@@ -77,7 +78,7 @@ test("two clients see one durable entry and simultaneous resends get its first a
   expect(await a.wait("read")).toEqual({ type: "read", id: "roots", entries: [], parts: [{ l: 0, i: 0 }], lines: [{ l: 0, i: 0, text: "user: " + say.text }] });
   a.read({ type: "read", id: "zoom", read: "zoom", part: { l: 0, i: 0 } });
   expect((await a.wait("read", 0, (event) => event.id === "zoom")).entries).toEqual([first.entry]);
-  expect(fs.existsSync(path.join(server.dir, "main.index"))).toBe(false);
+  expect(fs.existsSync(path.join(defaultStore(server.dir), "main.index"))).toBe(false);
 });
 
 test("a process restart preserves messages, answers and source sequence", async () => {
@@ -99,14 +100,14 @@ test("a process restart preserves messages, answers and source sequence", async 
   expect(records(after.dir).map((record) => record.from)).toEqual([
     entry.entry.from, { machine: entry.entry.from.machine, seq: entry.entry.from.seq + 1 },
   ]);
-  expect(fs.existsSync(path.join(after.dir, "main.index"))).toBe(false);
+  expect(fs.existsSync(path.join(defaultStore(after.dir), "main.index"))).toBe(false);
   expect(fs.statSync(path.join(after.dir, "token")).mode & 0o777).toBe(0o600);
 });
 
 test("header, query and cookie bearer tokens authorize the same protocol", async () => {
   const server = await serve();
   const header = await connect(server, { headers: { Authorization: `Bearer ${server.token}` } });
-  const cookie = await connect(server, { kind: "web", headers: { Cookie: `other=x; token=${server.token}` }, version: "1.20.3" });
+  const cookie = await connect(server, { kind: "web", headers: { Cookie: `other=x; token=${server.token}` }, version: "2.20.3" });
   const query = await TestClient.connect(`${server.url}?token=${server.token}`);
   clients.push(query);
   await query.wait("ready");
@@ -121,7 +122,7 @@ test("bad credentials and incompatible versions have reasons and reveal no log",
   const good = await connect(server);
   good.act({ type: "act", id: "private", act: "say", text: "Private" });
   await good.wait("answer");
-  for (const options of [{ token: "wrong" }, { token: server.token, version: "2.0" }, { token: "wrong", headers: { Authorization: `Bearer ${server.token}` } }]) {
+  for (const options of [{ token: "wrong" }, { token: server.token, version: "1.0" }, { token: "wrong", headers: { Authorization: `Bearer ${server.token}` } }]) {
     const client = await TestClient.connect(server.url, options);
     clients.push(client);
     const refused = await client.wait("refused");
@@ -174,21 +175,21 @@ test("an incomplete final line is removed before the next durable append", async
   await a.wait("answer");
   before.proc.kill("SIGKILL");
   await before.proc.exited;
-  const file = path.join(before.dir, "main", fs.readdirSync(path.join(before.dir, "main"))[0]);
+  const file = path.join(defaultStore(before.dir), "main", fs.readdirSync(path.join(defaultStore(before.dir), "main"))[0]);
   fs.appendFileSync(file, '{"act":"torn');
-  fs.writeFileSync(path.join(before.dir, "main.index"), "stale index");
+  fs.writeFileSync(path.join(defaultStore(before.dir), "main.index"), "stale index");
   const after = await serve(before.dir);
   const b = await connect(after);
   b.act({ type: "act", id: "after", act: "say", text: "After recovery" });
   await b.wait("answer");
   expect(records(after.dir).map((record) => record.text)).toEqual(["Complete", "After recovery"]);
-  expect(fs.existsSync(path.join(after.dir, "main.index"))).toBe(false);
+  expect(fs.existsSync(path.join(defaultStore(after.dir), "main.index"))).toBe(false);
 });
 
 test("a committed entry survives a directory sync failure without a second append", async () => {
   const before = await serve();
   const client = await connect(before);
-  const main = path.join(before.dir, "main");
+  const main = path.join(defaultStore(before.dir), "main");
   fs.chmodSync(main, 0o300);
   const act = { type: "act", id: "sync-failure", act: "say", text: "Still durable" } as const;
   client.act(act);
@@ -217,7 +218,7 @@ test("recovery uses message indexes when a clock change reverses daily file orde
   before.proc.kill("SIGKILL");
   await before.proc.exited;
   const saved = records(before.dir, true);
-  const main = path.join(before.dir, "main");
+  const main = path.join(defaultStore(before.dir), "main");
   for (const file of fs.readdirSync(main)) fs.rmSync(path.join(main, file));
   fs.writeFileSync(path.join(main, "2026-10-23.jsonl"), saved.filter((record) => record.turn?.id === 0).map((record) => JSON.stringify(record)).join("\n") + "\n");
   fs.writeFileSync(path.join(main, "2026-10-22.jsonl"), saved.filter((record) => record.turn?.id === 1).map((record) => JSON.stringify(record)).join("\n") + "\n");

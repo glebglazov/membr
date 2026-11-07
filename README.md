@@ -1,7 +1,9 @@
 # membr
 
-One chat with an agent that never ends: UniiChat's memory design, with Claude
-Code as the engine through the Claude Agent SDK, on your own `claude` login.
+Chats with agents that never end: UniiChat's memory design, with Claude Code
+as the engine through the Claude Agent SDK, on your own `claude` login. One
+server holds many agents. Each agent has its own memory, its own system prompt
+and its own home, which gives it its own skills and MCP servers.
 
 ## Start membr
 
@@ -12,45 +14,57 @@ bun install
 bun packages/server/src/main.ts      # or: membr, after you install the binary
 ```
 
-`membr` opens the chat in this terminal. If no server runs, membr starts one
-and waits until it listens. On macOS, launchd runs the server, so the server
-also starts at login and after a crash, and schedules fire when no terminal is
-open. On other systems, run `membr serve` in a terminal, then
-`membr ws://127.0.0.1:8788/ws` in another one.
+`membr` opens the chat with the agent `default` in this terminal.
+`membr research` opens the chat with the agent `research`. If no server runs,
+membr starts one and waits until it listens. On macOS, launchd runs the
+server, so the server also starts at login and after a crash, and schedules
+fire when no terminal is open. On other systems, run `membr server run` in a
+terminal, then `membr ws://127.0.0.1:8788/membr/default/ws` in another one.
 
-The server listens on `127.0.0.1:8788`. Open that address to chat in your
-browser. The page follows your OS light or dark setting. The server builds the
-Preact assets on the first page request. `bun run build:web` also builds them
-in `packages/web/dist`. To change the address, set `port`, `host` or
-`tailscale` in `config.json` (see [Configure the server](#configure-the-server)).
+The server listens on `127.0.0.1:8788`. Open `http://127.0.0.1:8788/membr/` in
+your browser to see the agents, and `http://127.0.0.1:8788/membr/research/` to
+chat with one. The header of the chat has a list to change to another agent.
+The page follows your OS light or dark setting. The server builds the Preact
+assets on the first page request. `bun run build:web` also builds them in
+`packages/web/dist`. To change the address, set `port`, `host` or `tailscale`
+in `config.json` (see [Configure the server](#configure-the-server)).
 
 Local connections need no token. For access from another device, set `host` to
 the server's Tailscale or network address. Open the sign-in link that
-`membr status` prints. It sets an HttpOnly cookie and removes the token from
-the address bar.
+`membr server status` prints. It sets an HttpOnly cookie for all agents and
+removes the token from the address bar.
 
-With `"tailscale": true`, the server is also on your tailnet. It runs
-`tailscale serve` to forward HTTPS on the machine's `ts.net` name and the same
-port to `127.0.0.1`. `membr status` shows that address. Tailnet requests
-through it need no sign-in. The `tailscale serve` setting stays after membr
-stops, and the next run uses it again. Turn it off with
-`tailscale serve --https=PORT off`.
+With `"tailscale": true`, the server is also on your tailnet, at
+`https://<machine>.ts.net/membr/<name>/`. membr runs
+`tailscale serve --https=443 --set-path=/membr` to forward that path to
+`127.0.0.1`. `membr server status` shows the address of each agent. Tailnet
+requests through it need no sign-in. The `tailscale serve` setting stays after
+membr stops, and the next run uses it again. Turn it off with
+`tailscale serve --https=443 --set-path=/membr off`.
 
 These are the commands:
 
-- `membr` opens the chat, and starts the server first if it does not run.
+- `membr [AGENT]` opens the chat with an agent, `default` when you give no
+  name, and starts the server first if it does not run.
 - `membr URL [--token TOKEN]` connects to another server and starts nothing.
   The URL is the server's `ws://` or `http://` address, or the sign-in link
-  that `membr status` prints on that machine.
-- `membr reload` reads `config.json` again. It prints the result. If the file
-  has an error, it prints the error and exits with status 1.
-- `membr status` shows the PID, the address, the tailnet address, the sign-in
-  link, the launchd agent and the path of the log.
-- `membr stop` stops the server and removes the launchd agent. Then nothing
-  starts the server until the next `membr`, also not a login. It also stops a
-  server that `make run` started.
-- `membr serve` runs the server in the foreground. launchd and `make run` use
-  this command. It takes no options.
+  that `membr server status` prints on that machine. A URL with
+  `/membr/NAME` opens that agent; any other URL opens `default`.
+- `membr agent list` shows each agent, whether it works on a turn now, its
+  home and the first line of its prompt.
+- `membr agent new NAME` adds the agent to `config.json`, opens the file in
+  `$VISUAL` or `$EDITOR` so that you write its prompt, and reloads the server.
+- `membr server start` starts the server with no chat.
+- `membr server reload` reads `config.json` again. It prints the result. If
+  the file has an error, it prints the error and exits with status 1.
+- `membr server status` shows the PID, the address, the tailnet address, the
+  sign-in link, the address of each agent, the launchd agent and the path of
+  the log.
+- `membr server stop` stops the server and removes the launchd agent. Then
+  nothing starts the server until the next `membr`, also not a login. It also
+  stops a server that `make run` started.
+- `membr server run` runs the server in the foreground. launchd and
+  `make run` use this command. It takes no options.
 
 In the terminal chat, Enter sends a message. Shift+Enter, Ctrl+J, or a `\` at
 the end of the line adds a new line. Ctrl+G opens the text in `$VISUAL`, or
@@ -65,84 +79,117 @@ erases to the start of the line. The mouse wheel, Page Up and Page Down scroll t
 then g goes back to the bottom. Because membr reads the mouse, hold Option
 (iTerm2, Terminal) or Shift (Ghostty, kitty, WezTerm) to select text. Press o,
 a or d to answer an approval. Esc stops the turn, and Ctrl+C quits. The memory
-tree, the agents view, imports and images are only in the web view.
+tree, the subagent logs, imports and images are only in the web view.
 
-membr keeps its data in `~/.membr`, or in the directory that `MEMBR_DIR`
-names. One server at a time can use a data directory. A second server on the
-same directory exits with status 1 and names the process that holds the lock.
-`membr` uses a server that runs already, also one that `make run` started.
+membr keeps its data in `~/.local/share/membr`, the base directory, or in the
+directory that `MEMBR_DIR` names. The base directory holds `config.json`, the
+token, the lock, `serve.log`, and one directory for each agent under
+`agents/`. One server at a time can use a base directory. A second server on
+the same directory exits with status 1 and names the process that holds the
+lock. `membr` uses a server that runs already, also one that `make run`
+started.
 
-Each data directory has its own launchd agent: `dev.membr.serve` for
-`~/.membr`, and `dev.membr.serve.` with 8 hexadecimal characters for another
-directory. The agent's plist is in `~/Library/LaunchAgents`. It keeps your
-`PATH`, `MEMBR_DIR` and `MEMBR_CLAUDE_CLI` from the shell that runs `membr`,
-because launchd starts with a short `PATH` and the server needs `claude` (and
-`tailscale`) on it. When no server runs, `membr` writes the plist again if it
-changed, for example after you move the repository or use a shell with another
-`PATH`. membr never stops a server that runs to do this. To use a new build,
-run `membr stop`, then `membr`.
+Before membr held many agents, it kept its data in `~/.membr`. The first
+server that starts in the default base directory moves that data one time:
+the chat becomes the agent `default`, and `config.json` changes to the new
+form (see [Configure the server](#configure-the-server)). If the base
+directory has a `config.json` already, for example one that a dotfiles tool
+wrote, membr keeps it and does not use the old one. If an old server
+still runs on `~/.membr`, the new server stops with a message. Run
+`membr server stop` with the old build, then `membr`.
 
-The server writes its output to `serve.log` in the data directory. If the
+Each base directory has its own launchd agent: `dev.membr.serve` for
+`~/.local/share/membr`, and `dev.membr.serve.` with 8 hexadecimal characters
+for another directory. The agent's plist is in `~/Library/LaunchAgents`. It
+keeps your `PATH`, `MEMBR_DIR` and `MEMBR_CLAUDE_CLI` from the shell that runs
+`membr`, because launchd starts with a short `PATH` and the server needs
+`claude` (and `tailscale`) on it. When no server runs, `membr` writes the plist
+again if it changed, for example after you move the repository or use a shell
+with another `PATH`. membr never stops a server that runs to do this. To use a
+new build, run `membr server stop`, then `membr`.
+
+The server writes its output to `serve.log` in the base directory. If the
 server does not start within 15 seconds, `membr` prints the end of that log.
 launchd starts the server again after an exit that is not a clean exit, and
 waits 10 seconds between starts. That includes a crash and a start that fails,
 for example when Tailscale is not up yet after login.
 
-`make run` installs the packages when they changed and runs `membr serve` in
-the terminal. It cannot run beside a launchd server on the same data
-directory, because the lock stops the second server. Run `membr stop` first,
-or set another `MEMBR_DIR`.
+`make run` installs the packages when they changed and runs
+`membr server run` in the terminal. It cannot run beside a launchd server on
+the same base directory, because the lock stops the second server. Run
+`membr server stop` first, or set another `MEMBR_DIR`.
 
 ## Configure the server
 
-The server reads `config.json` in the data directory. All keys are optional:
+The server reads `config.json` in the base directory. All keys are optional:
 
 ```json
 {
-  "home": "~/Documents/vault",
-  "rules": "rules.md",
-  "after": "git -C ~/Documents/vault commit -qam membr || true",
-  "approvalTimeout": "10m",
   "port": 8788,
   "host": "127.0.0.1",
-  "tailscale": true
+  "tailscale": true,
+  "agents": {
+    "default": {
+      "home": "~/Documents/vault"
+    },
+    "research": {
+      "prompt": [
+        "You research papers for me.",
+        "Write a one-page summary of each paper."
+      ],
+      "approvalTimeout": "30m"
+    }
+  }
 }
 ```
 
-- `home` is the directory that the agent works in. Claude Code loads the
-  harness from it: `CLAUDE.md`, the `.claude/` settings, skills, plugins and
-  `.mcp.json`. A relative path starts at the data directory. If you do not set
-  `home`, the agent works in the directory that the server starts in. For a
-  server that launchd runs, that is the data directory. If `home` is not a
-  directory, the server does not start.
-- `rules` is a file. The server adds its text after the system prompt. A
-  relative path starts at the data directory.
-- `after` is a shell command. The server runs it after each turn.
-- `approvalTimeout` is how long a scheduled run waits for an approval. After
-  that time, membr denies the tool call and writes a note in the chat. Write a
-  number and a unit: `90s`, `10m` or `2h`. The default is `10m`, and the
-  maximum is `24h`. An approval in a turn that you started waits until you
-  answer it.
 - `port` is the port that the server listens on. The default is `8788`.
 - `host` is the address that the server listens on. The default is
   `127.0.0.1`.
 - `tailscale` puts the server on your tailnet when it is `true`. The default is
   `false`. It needs `host` to be `127.0.0.1`.
+- `agents` has one entry for each agent. The key is the agent's name: a letter,
+  then letters, digits, `-` or `_`, 64 characters at most. `server`, `agent`
+  and `help` are membr commands, so they cannot be names. The agent `default`
+  exists also when it has no entry.
 
-To read `config.json` again while the server runs, run `membr reload`, or type
-`/reload` in a client. `SIGHUP` to the server also reads it again. Then all
-clients show an error in the file.
+The keys of an agent:
+
+- `prompt` is the agent's system prompt, for example its task. Write a string,
+  or a list of strings that membr joins with new lines. membr adds it after its
+  own prompt, which teaches the agent to read its memory.
+- `home` is the directory that the agent works in. Claude Code loads the
+  harness from it: `CLAUDE.md`, the `.claude/` settings, skills, plugins and
+  `.mcp.json`. A relative path starts at the base directory. If you do not set
+  `home`, it is `agents/<name>/home/` in the base directory, so you can give a
+  new agent its own skills and MCP servers there. If `home` is not a
+  directory, the server does not start.
+- `approvalTimeout` is how long a scheduled run waits for an approval. After
+  that time, membr denies the tool call and writes a note in the chat. Write a
+  number and a unit: `90s`, `10m` or `2h`. The default is `10m`, and the
+  maximum is `24h`. An approval in a turn that you started waits until you
+  answer it.
+
+The agent's own files, its store, are in `agents/<name>/` in the base
+directory, outside its home. No key moves them. Two agents can have the same
+home.
+
+To read `config.json` again while the server runs, run `membr server reload`,
+or type `/reload` in any chat. `SIGHUP` to the server also reads it again. Then
+all clients show an error in the file.
 
 A new `port`, `host` or `tailscale` applies at once. The server moves to the
 new address, and a turn that runs continues. Open clients lose the connection,
 so open the chat again at the new address. If the server cannot listen on the
-new address, it keeps the old config and `membr reload` shows why. A new
-`after` command applies at once. A new `home` or new rules apply in a new
-epoch. If a turn runs, the new epoch starts when the turn ends. The server
-writes a note in the chat that tells the agent what changed. The first turn in
-the new epoch reads the full view without the prompt cache, so it costs more.
-If the file has an error, the server keeps the old config. `membr reload` and
-`/reload` show the error.
+new address, it keeps the old config and `membr server reload` shows why. A new
+agent entry starts the agent at once. A removed entry stops the agent and
+closes its clients; its files stay in `agents/<name>/`. A new `approvalTimeout`
+applies at once. A new `home` or `prompt` applies in a new epoch of that agent
+only. If a turn runs, the new epoch starts when the turn ends. The server
+writes a note in the agent's chat that tells the agent what changed. The first
+turn in the new epoch reads the full view without the prompt cache, so it costs
+more. If the file has an error, the server keeps the old config.
+`membr server reload` and `/reload` show the error.
 
 Large tool output stays in the epoch until the next summary batch. When a turn
 ends with the epoch at 80% or more of the model's context window, the next
@@ -194,7 +241,7 @@ bun run build
 
 The build writes one executable to `dist/membr`. Copy that file to a directory
 on your `PATH`, then run `membr`. The binary contains the web view and
-needs no other project files. It stores data in `~/.membr`, or in the directory
+needs no other project files. It stores data in `~/.local/share/membr`, or in the directory
 that `MEMBR_DIR` names.
 
 Install Claude Code and sign in on the host. The binary runs `claude` from your
@@ -247,15 +294,16 @@ They write their measurements to `docs/p0-results.json`. The P0 report,
 
 ## WebSocket protocol
 
-Connect to `/ws`. `membr status` prints a sign-in link with the bearer token.
+Connect to `/membr/<name>/ws` for an agent. `/ws` is the agent `default`.
+`membr server status` prints a sign-in link with the bearer token.
 Supply that token in `Authorization: Bearer TOKEN`, the `token` query parameter,
 the `token` cookie, or the hello message. If you supply more than one token,
-all must match. The token stays in the data directory with mode `0600`.
+all must match. The token stays in the base directory with mode `0600`.
 
 Send hello first:
 
 ```json
-{"type":"hello","version":"1.0","kind":"term","device":null,"token":"TOKEN"}
+{"type":"hello","version":"2.0","kind":"term","device":null,"token":"TOKEN"}
 ```
 
 The server replays logged `entry` events, then sends `ready`. A different major
@@ -295,6 +343,16 @@ earlier list. To run a skill, send a `say` act whose text starts with `/name`.
 A skill named elsewhere in the text runs too, through the Skill tool.
 The server sends that text to the agent as it is, with no notes added.
 
+Before `ready`, the server also sends an `agents` event with every agent of the
+server, and sends it again to all clients when an agent starts or ends a turn:
+
+```json
+{"type":"agents","agents":[{"name":"default","busy":false,"about":""},{"name":"research","busy":true,"about":"You research papers for me."}]}
+```
+
+`about` is the first line of the agent's prompt. `GET /membr/agents.json` gives
+the same list.
+
 Before `ready`, the server also sends a `schedules` event, and it sends the
 event again after each change and each fire. Each event replaces the earlier
 list. A schedule has `id`, `text`, `when` (`{"kind":"once","at":ISO}` or
@@ -312,7 +370,7 @@ without the time words, and `next`. A text that membr cannot read gets an
 `error` event with that id. Four acts change schedules:
 
 ```json
-{"type":"act","id":"s-1","act":"schedule","schedule":{"text":"read the notes","when":{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"},"run":"agent","missed":"once"}}
+{"type":"act","id":"s-1","act":"schedule","schedule":{"text":"read the notes","when":{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"},"run":"subagent","missed":"once"}}
 {"type":"act","id":"s-2","act":"accept","schedule":"k3x9q2"}
 {"type":"act","id":"s-3","act":"pause","schedule":"k3x9q2","paused":true}
 {"type":"act","id":"s-4","act":"unschedule","schedule":"k3x9q2"}

@@ -37,7 +37,7 @@ function fakeHost(agentsDir: string, loaded = false) {
   return { host, calls, state };
 }
 
-test("plist for a source run names bun, main.ts and serve, with no options", () => {
+test("plist for a source run names bun, main.ts and server run, with no options", () => {
   const spec = serviceSpec({
     dir: "/data",
     env: { PATH: "/opt/bin:/usr/bin", MEMBR_CLAUDE_CLI: "/opt/bin/claude", MEMBR_DIR: "/data", HOME: "/h" },
@@ -54,7 +54,8 @@ test("plist for a source run names bun, main.ts and serve, with no options", () 
   <array>
     <string>/opt/bun</string>
     <string>/repo/packages/server/src/main.ts</string>
-    <string>serve</string>
+    <string>server</string>
+    <string>run</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -85,7 +86,7 @@ test("plist for a source run names bun, main.ts and serve, with no options", () 
 
 test("plist for the compiled binary runs the binary itself", () => {
   const spec = serviceSpec({ dir: "/data", env: { PATH: "/usr/bin" }, execPath: "/usr/local/bin/membr", entry: null });
-  expect(spec.program).toEqual(["/usr/local/bin/membr", "serve"]);
+  expect(spec.program).toEqual(["/usr/local/bin/membr", "server", "run"]);
   expect(spec.env).toEqual({ PATH: "/usr/bin" });
 });
 
@@ -98,7 +99,7 @@ test("plist escapes XML characters in every value", () => {
 });
 
 test("the default data directory keeps the label dev.membr.serve, and another one gets its own", () => {
-  expect(serviceLabel(path.join(os.homedir(), ".membr"))).toBe(LABEL);
+  expect(serviceLabel(path.join(os.homedir(), ".local", "share", "membr"))).toBe(LABEL);
   expect(serviceLabel("/data")).toMatch(/^dev\.membr\.serve\.[0-9a-f]{8}$/);
   expect(serviceLabel("/data")).not.toBe(serviceLabel("/other"));
 });

@@ -2,11 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AgentInfo } from "@membr/protocol";
 import { serveHub } from "./src/hub.ts";
 import { Log } from "./src/log.ts";
-import { NO_USAGE } from "./src/engine.ts";
+import { storeDir, type Config } from "./src/config.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
+import { testConfig } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -16,225 +18,150 @@ afterEach(async () => {
   await Promise.all(hubs.splice(0).map((hub) => hub.close()));
   dirs.splice(0).forEach((dir) => fs.rmSync(dir, { recursive: true, force: true }));
 });
-async function start(engine = new FakeEngine(), existing?: string) {
-  const dir = existing ?? fs.mkdtempSync(path.join(os.tmpdir(), "membr-agents-"));
-  if (!existing) dirs.push(dir);
-  const hub = serveHub({ dir, port: 0, engine, config: () => ({ home: null, rulesText: "Keep the project rules.", afterCommand: "", approvalTimeout: 600_000, listen: { port: 0, host: "127.0.0.1", tailscale: false } }) });
-  hubs.push(hub);
-  const client = await TestClient.connect(hub.server.url.href.replace("http:", "ws:") + "ws", { token: hub.token });
-  clients.push(client);
-  await client.wait("ready");
-  const main = engine.epochs[0];
-  const agents = main.options.agents;
-  if (!agents || !main.options.memory) throw new Error("Missing tools");
-  return { dir, hub, client, engine, main, agents, memory: main.options.memory };
+
+// The Engine holds a turn open on "hold" and ends it on any other message.
+const engine = () => new FakeEngine((epoch, message) => { if (message.text !== "hold") epoch.emit(END); });
+
+function start(agents: Array<{ name: string; prompt?: string; home?: string }>) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "membr-agents-")));
+  dirs.push(dir);
+  const fake = engine();
+  let config: Config = testConfig(dir, agents);
+  const hub = serveHub({ dir, port: 0, engine: fake, config: () => config }); hubs.push(hub);
+  return { dir, hub, fake, url: hub.server.url, setConfig: (next: Array<{ name: string; prompt?: string; home?: string }>) => { config = testConfig(dir, next); } };
 }
-async function say(client: TestClient, text = "Work") {
+async function join(server: ReturnType<typeof start>, agent: string | null) {
+  const socket = new URL(agent === null ? "/ws" : `/membr/${agent}/ws`, server.url);
+  socket.protocol = "ws:";
+  const client = await TestClient.connect(socket.href, { token: server.hub.token }); clients.push(client);
+  await client.wait("ready");
+  return client;
+}
+async function say(client: TestClient, text: string) {
   const id = crypto.randomUUID();
   client.act({ type: "act", act: "say", id, text });
   await client.wait("answer", 0, (event) => event.id === id);
 }
-async function stop(client: TestClient, agent: string | null) {
-  const id = crypto.randomUUID();
-  client.act({ type: "act", act: "stop", id, agent });
-  expect((await client.wait("answer", 0, (event) => event.id === id)).ok).toBe(true);
-}
+const listed = async (server: ReturnType<typeof start>): Promise<AgentInfo[]> => (await fetch(new URL("/membr/agents.json", server.url))).json();
+const epochIn = (server: ReturnType<typeof start>, home: string) => server.fake.epochs.find((epoch) => epoch.options.cwd === home)!;
 
-test("an agent report starts a main turn after the main turn ends", async () => {
-  const { client, main, agents, engine, dir } = await start();
-  await say(client);
-  expect(agents.spawn([{ name: "helper", task: "Find the answer" }], "low")).toStartWith("Started helper.");
-  const child = engine.epochs[1];
-  expect(child.options.agents).toBeUndefined();
-  expect(child.options.append).toContain("Keep the project rules.");
-  expect(child.options.append).toContain("Your final reply is your report to membr.");
-  expect(child.options.pick.effort).toBe("low");
-  expect(child.messages[0]).toEqual({ text: "Find the answer", priority: "now", from: "membr" });
-  expect(fs.readFileSync(path.join(dir, "docs/agent/helper.jsonl"), "utf8")).toContain("Find the answer");
-  main.emit(END);
-  await client.wait("state", 0, (event) => !event.state.busy && event.state.agents.includes("helper"));
-  const mark = client.events.length;
-  child.emit({ kind: "text", text: "The answer is 42." }, { ...END, reply: "The answer is 42." });
-  const report = await client.wait("entry", mark, (event) => event.entry.kind === "work");
-  expect(report.entry.text).toContain('[helper] report\nThe answer is 42.\nFull chat: zoom("helper")');
-  await client.wait("state", mark, (event) => event.state.busy && !event.state.agents.length);
-  expect(main.messages[1]).toEqual({ text: report.entry.text, priority: "now", from: "membr" });
-  expect(new Log(dir).interrupted).toEqual([report.entry.i]);
-  const finished = client.events.length;
-  main.emit(END);
-  await client.wait("state", finished, (event) => !event.state.busy && !event.state.agents.length);
-  expect(new Log(dir).interrupted).toEqual([]);
+test("a message to an agent lands only in its own store, and each agent's Engine has its own home and prompt", async () => {
+  const server = start([{ name: "default", prompt: "I am the first." }, { name: "research", prompt: "I find sources.\nCite each one." }]);
+  const research = await join(server, "research");
+  await say(research, "Find the paper");
+  await research.wait("entry", 0, (event) => event.entry.text === "Find the paper");
+  const mine = new Log(storeDir(server.dir, "research")).entries.map((entry) => entry.text);
+  expect(mine).toContain("Find the paper");
+  expect(new Log(storeDir(server.dir, "default")).entries.map((entry) => entry.text)).not.toContain("Find the paper");
+
+  const researchHome = path.join(storeDir(server.dir, "research"), "home"), defaultHome = path.join(storeDir(server.dir, "default"), "home");
+  expect(server.fake.epochs.map((epoch) => epoch.options.cwd).sort()).toEqual([defaultHome, researchHome].sort());
+  expect(epochIn(server, researchHome).options.append).toEndWith('In membr, you are the agent "research".\n\nI find sources.\nCite each one.');
+  expect(epochIn(server, defaultHome).options.append).toEndWith('In membr, you are the agent "default".\n\nI am the first.');
+  expect(epochIn(server, researchHome).messages.map((message) => message.text)).toEqual(["Find the paper"]);
+  expect(epochIn(server, defaultHome).messages).toEqual([]);
 });
 
-test("tell joins running input and stale completion does not report early", async () => {
-  const { client, agents, engine, main, dir } = await start();
-  await say(client);
-  agents.spawn([{ name: "helper", task: "First task" }]);
-  const child = engine.epochs[1];
-  child.emit({ kind: "tool", id: "one", name: "Read", input: { file: "first" } });
-  await client.wait("agent-entry", 0, (event) => event.entry.kind === "tool");
-  expect(agents.tell("helper", "Second task")).toContain("between its tool calls");
-  expect(child.messages[1]).toEqual({ text: "Second task", priority: "next", from: "membr" });
-  child.emit({ ...END, through: 1, reply: "First result" }, { kind: "tool", id: "two", name: "Read", input: {} });
-  await client.wait("agent-entry", 0, (event) => event.entry.text.includes('"two"'));
-  expect(client.events.filter((event) => event.type === "entry" && event.entry.kind === "work")).toHaveLength(0);
-  child.emit({ ...END, through: 2, reply: "Second result" });
-  const report = await client.wait("entry", 0, (event) => event.entry.kind === "work");
-  expect(report.entry.text).toContain("First result\n\nSecond result");
-  expect(main.messages[1].priority).toBe("next");
-  main.emit(END);
-  await client.wait("state", 0, (event) => !event.state.busy && !event.state.agents.length && event.state.usage !== null);
-  expect(new Log(dir).interrupted).toEqual([]);
+test("a path outside /membr/ is the default agent's", async () => {
+  const server = start([{ name: "default" }, { name: "research" }]);
+  const client = await join(server, null);
+  await say(client, "Old client");
+  expect(new Log(storeDir(server.dir, "default")).entries.map((entry) => entry.text)).toContain("Old client");
+  expect(new Log(storeDir(server.dir, "research")).entries).toEqual([]);
 });
 
-test("named zoom and client reads use the saved agent log and live snapshot", async () => {
-  const { client, agents, engine, memory } = await start();
-  agents.spawn([{ name: "helper", task: "Read this" }]);
-  const child = engine.epochs[1];
-  child.emit({ kind: "text", text: "Saved reply" }, { kind: "delta", text: "Live reply" });
-  expect((await client.wait("live", 0, (event) => event.agent === "helper")).text).toBe("Live reply");
-  client.read({ type: "read", read: "agent", id: "agent", name: "helper" });
-  const log = await client.wait("read", 0, (event) => event.id === "agent");
-  expect(log.live).toBe("Live reply");
-  expect(memory.zoom("helper").text).toBe(log.entries.map((entry) => `${entry.i}|${entry.kind}: ${entry.text}`).join("\n\n"));
-  expect(client.events.some((event) => event.type === "entry" && event.entry.text === "Saved reply")).toBe(false);
-  expect(memory.zoom("../secret").error).toBe(true);
-  expect(agents.tell("../secret", "read")).toBe("No agent ../secret to tell.");
-  child.emit({ kind: "text", text: "x".repeat(40000) });
-  await client.wait("agent-entry", 0, (event) => event.entry.text.length === 40000);
-  const first = memory.zoom("helper").text;
-  const more = /go on with at (\d+)\]/.exec(first);
-  expect(more).not.toBeNull();
-  const at = Number(more?.[1]);
-  expect(memory.zoom("helper", 1, at).text.length).toBeGreaterThan(0);
+test("the list of agents is JSON and a page with a link to each, an unknown agent is 404, and a name without a slash redirects", async () => {
+  const server = start([{ name: "default" }, { name: "research", prompt: "\nFinds sources.\nMore." }]);
+  const research = await join(server, "research");
+  await say(research, "hold");
+  await research.wait("state", 0, (event) => event.state.busy);
+  expect(await listed(server)).toEqual([{ name: "default", busy: false, about: "" }, { name: "research", busy: true, about: "Finds sources." }]);
+
+  const page = await fetch(new URL("/membr/", server.url));
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  const html = await page.text();
+  expect(html).toContain('href="./research/"');
+  expect(html).toContain('href="./default/"');
+  expect(html).toContain("Finds sources.");
+
+  expect((await fetch(new URL("/membr/nope/ws", server.url))).status).toBe(404);
+  expect((await fetch(new URL("/membr/nope/", server.url))).status).toBe(404);
+  const redirect = await fetch(new URL("/membr/research", server.url), { redirect: "manual" });
+  expect(redirect.status).toBe(301);
+  expect(redirect.headers.get("location")).toBe("/membr/research/");
+  expect((await fetch(new URL("/membr/research/", server.url))).status).toBe(200);
 });
 
-test("named stop cancels only its agent and its approvals, all stop cancels every session", async () => {
-  const { client, main, agents, engine } = await start();
-  await say(client);
-  agents.spawn([{ name: "One", task: "One" }, { name: "Two", task: "Two" }]);
-  const one = engine.epochs[1], two = engine.epochs[2];
-  const decisions = [main.options.ask!("Bash", { command: "main" }), one.options.ask!("Bash", { command: "one" }), two.options.ask!("Bash", { command: "two" })];
-  await client.wait("ask", 0, (event) => event.input.command === "two");
-  const mark = client.events.length;
-  await stop(client, "one");
-  expect(await decisions[1]).toBe(false);
-  expect(one.interrupts).toBe(1);
-  expect(two.interrupts).toBe(0);
-  expect(main.interrupts).toBe(0);
-  await client.wait("entry", mark, (event) => event.entry.kind === "work" && event.entry.text.includes("Stopped."));
-  expect(main.messages).toHaveLength(1);
-  expect(client.events.filter((event) => event.type === "ask-closed")).toHaveLength(1);
-  const end = client.events.length;
-  await stop(client, null);
-  expect(await decisions[0]).toBe(false);
-  expect(await decisions[2]).toBe(false);
-  await client.wait("state", end, (event) => !event.state.busy && !event.state.agents.length);
-  expect(main.interrupts).toBe(1);
-  expect(two.interrupts).toBe(1);
-  expect(main.messages).toHaveLength(1);
-});
-
-test("a stale stop failure does not report the agent twice", async () => {
-  const { client, agents, engine } = await start();
-  agents.spawn([{ name: "helper", task: "First task" }]);
-  const old = engine.epochs[1];
-  const interrupt = Promise.withResolvers<void>();
-  old.onInterrupt = () => interrupt.promise;
-
-  await stop(client, "helper");
-  old.fail(new Error("Old session failed"));
-  await client.wait("entry", 0, (event) => event.entry.kind === "work" && event.entry.text.includes("Old session failed"));
-  interrupt.reject(new Error("Old interrupt failed"));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  expect(old.closed).toBe(true);
-  expect(client.events.filter((event) => event.type === "entry" && event.entry.kind === "work")).toHaveLength(1);
-});
-
-test("a finished agent closes its session and takes no more work", async () => {
-  const { client, agents, engine } = await start();
-  expect(agents.spawn([{ name: "Store Reader!", task: "Initial task" }], "medium")).toStartWith("Started store-reader.");
-  const child = engine.epochs[1];
-  expect(child.view).toEndWith("You are subagent store-reader.");
-  child.emit({ kind: "text", text: "Saved result" }, { ...END, reply: "Saved result" });
-  await client.wait("entry", 0, (event) => event.entry.kind === "work");
-  expect(child.closed).toBe(true);
-  expect(agents.tell("store-reader", "Resume")).toBe("store-reader has finished. Spawn a new agent with the context it needs.");
-  expect(engine.epochs).toHaveLength(2);
-  expect(agents.spawn([{ name: "store-reader", task: "Next task" }, { name: "42", task: "Odd name" }])).toStartWith("Started store-reader-2, agent.");
-});
-
-test("a restart records once each agent it stopped mid-run", async () => {
-  const { client, agents, engine, hub, dir } = await start();
-  agents.spawn([{ name: "done", task: "Short task" }, { name: "reader", task: "Long task" }]);
-  engine.epochs[1].emit({ ...END, reply: "Done" });
-  engine.epochs[2].emit({ kind: "tool", id: "one", name: "Read", input: {} });
-  await client.wait("agent-entry", 0, (event) => event.name === "reader" && event.entry.kind === "tool");
-  await hub.close();
-  fs.appendFileSync(path.join(dir, "docs/agent/reader.jsonl"), '{"partial":');
-
-  const reports = () => new Log(dir).entries.filter((entry) => entry.kind === "work").map((entry) => entry.text);
-  const next = await start(new FakeEngine(), dir);
-  expect(reports()).toEqual(["[done] report\nDone\nFull chat: zoom(\"done\")", '[reader] report\nStopped: the server restarted.\nFull chat: zoom("reader")']);
-  expect(next.main.messages).toEqual([]);
-  expect(next.agents.tell("reader", "Go on")).toBe("reader has finished. Spawn a new agent with the context it needs.");
-  await next.hub.close();
-
-  await start(new FakeEngine(), dir);
-  expect(reports()).toHaveLength(2);
-});
-
-test("a report cancels a goal check before starting its turn", async () => {
-  const engine = new FakeEngine();
-  engine.onCheck = () => new Promise(() => {});
-  const { client, agents, main } = await start(engine);
-  client.act({ type: "act", act: "goal", id: "goal", text: "Finish" });
-  await client.wait("answer", 0, (event) => event.id === "goal");
-  await say(client);
-  agents.spawn([{ name: "helper", task: "Help" }]);
-  main.emit(END);
-  await client.wait("state", 0, (event) => event.state.wait === "goal");
-  engine.epochs[1].emit({ ...END, reply: "Done" });
-  await client.wait("entry", 0, (event) => event.entry.kind === "work");
-  expect(engine.checks[0].signal.aborted).toBe(true);
-  expect(main.messages[1].from).toBe("membr");
-});
-
-test("new main input names active agents and stop-all blocks late delegation", async () => {
-  const { client, agents, main, engine } = await start();
-  agents.spawn([{ name: "helper", task: "Background" }]);
-  await say(client, "Continue");
-  expect(main.messages[0].text).toBe("Continue\n\nAgents at work now: helper.");
-  const stopped = Promise.withResolvers<void>();
-  main.onInterrupt = () => stopped.promise;
-  await stop(client, null);
-  expect(() => agents.spawn([{ name: "helper", task: "Too late" }])).toThrow("The chat cannot start agent work now");
-  expect(() => agents.tell("helper", "Too late")).toThrow("The chat cannot start agent work now");
-  expect(engine.epochs).toHaveLength(2);
-  stopped.resolve();
-});
-
-test("an agent report joins a summary wait and reaches the replacement epoch", async () => {
-  const held = Promise.withResolvers<string>();
-  const engine = new FakeEngine((epoch) => { if (epoch.options.agents) epoch.emit(END); });
-  engine.compact = () => held.promise.then((line) => ({ line, usage: NO_USAGE }));
-  const { client, agents, dir } = await start(engine);
-  let waiting = false;
-  for (let i = 0; i < 300; i++) {
-    const mark = client.events.length;
-    await say(client, String(i).padEnd(500, "x"));
-    if (client.events.slice(mark).some((event) => event.type === "state" && event.state.wait === "summaries")) { waiting = true; break; }
-    await client.wait("state", mark, (event) => !event.state.busy);
+test("a page with a token sets the cookie and redirects to the same path without it", async () => {
+  const server = start([{ name: "default" }, { name: "research" }]);
+  for (const route of ["/membr/", "/membr/research/"]) {
+    const response = await fetch(new URL(`${route}?token=${server.hub.token}`, server.url), { redirect: "manual" });
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(route);
+    expect(response.headers.get("set-cookie")).toContain(`token=${server.hub.token}`);
   }
-  expect(waiting).toBe(true);
-  agents.spawn([{ name: "helper", task: "Work during batch" }]);
-  engine.epochs[1].emit({ ...END, reply: "Batch result" });
-  const report = await client.wait("entry", 0, (event) => event.entry.kind === "work");
-  expect(engine.epochs[0].messages.some((message) => message.text.includes("Batch result"))).toBe(false);
-  const mark = client.events.length;
-  held.resolve("small summary");
-  await client.wait("state", mark, (event) => !event.state.busy, 10000);
-  expect(engine.epochs[2].messages.at(-1)).toEqual({ text: report.entry.text, from: "membr", priority: "next" });
-  expect(new Log(dir).interrupted).toEqual([]);
-}, 15000);
+});
+
+test("every client learns each agent's busy state before ready and when it changes in another agent", async () => {
+  const server = start([{ name: "default" }, { name: "research" }]);
+  const first = await join(server, null);
+  const replay = first.events.map((event) => event.type);
+  expect(replay.at(-1)).toBe("ready");
+  expect(replay.at(-2)).toBe("agents");
+  expect(first.events.find((event) => event.type === "agents")).toMatchObject({ agents: [{ name: "default", busy: false }, { name: "research", busy: false }] });
+
+  const mark = first.events.length;
+  await say(await join(server, "research"), "hold");
+  const busy = await first.wait("agents", mark, (event) => event.agents.some((agent) => agent.name === "research" && agent.busy));
+  expect(busy.agents.find((agent) => agent.name === "default")?.busy).toBe(false);
+});
+
+test("a reload opens a room for a new agent and closes the room of a removed one with 1001", async () => {
+  const server = start([{ name: "default" }, { name: "research" }]);
+  const main = await join(server, null);
+  const research = await join(server, "research");
+  await say(research, "Keep this");
+  expect((await fetch(new URL("/membr/notes/", server.url))).status).toBe(404);
+
+  server.setConfig([{ name: "default" }, { name: "notes", prompt: "I take notes." }]);
+  const mark = main.events.length;
+  main.act({ type: "act", act: "reload", id: "reload" });
+  expect(await main.wait("answer", mark, (event) => event.id === "reload")).toMatchObject({ ok: true });
+
+  expect((await research.closed).code).toBe(1001);
+  expect((await fetch(new URL("/membr/research/", server.url))).status).toBe(404);
+  expect((await listed(server)).map((agent) => agent.name)).toEqual(["default", "notes"]);
+  expect((await main.wait("agents", mark)).agents.map((agent) => agent.name)).toEqual(["default", "notes"]);
+  const notes = await join(server, "notes");
+  await say(notes, "Hello notes");
+  expect(new Log(storeDir(server.dir, "notes")).entries.map((entry) => entry.text)).toContain("Hello notes");
+  expect(server.fake.epochs.find((epoch) => epoch.options.append.endsWith("I take notes."))).toBeDefined();
+  expect(new Log(storeDir(server.dir, "research")).entries.map((entry) => entry.text)).toContain("Keep this");
+});
+
+test("a reload that changes one agent's prompt writes a note in that agent only", async () => {
+  const server = start([{ name: "default" }, { name: "research", prompt: "Old." }]);
+  const main = await join(server, null);
+  const research = await join(server, "research");
+  server.setConfig([{ name: "default" }, { name: "research", prompt: "New." }]);
+  main.act({ type: "act", act: "reload", id: "reload" });
+  await research.wait("entry", 0, (event) => event.entry.text === "Config reloaded: the prompt changed.");
+  await main.wait("answer", 0, (event) => event.id === "reload");
+  expect(main.events.some((event) => event.type === "entry" && event.entry.text.startsWith("Config reloaded"))).toBe(false);
+});
+
+test("a reload that cannot open a new agent answers the reason from any agent and keeps the agents it had", async () => {
+  const server = start([{ name: "default" }, { name: "research" }]);
+  const research = await join(server, "research");
+  const file = path.join(server.dir, "file");
+  fs.writeFileSync(file, "");
+  server.setConfig([{ name: "default" }, { name: "research" }, { name: "broken", home: path.join(file, "inside") }]);
+  const mark = research.events.length;
+  research.act({ type: "act", act: "reload", id: "reload" });
+  const answer = await research.wait("answer", mark, (event) => event.id === "reload");
+  expect(answer.ok).toBe(false);
+  expect(answer.ok ? "" : answer.reason).toStartWith("The config was not reloaded: ");
+  expect((await listed(server)).map((agent) => agent.name)).toEqual(["default", "research"]);
+  expect((await fetch(new URL("/membr/broken/", server.url))).status).toBe(404);
+});

@@ -2,7 +2,7 @@ import { h, type ComponentChild } from "preact";
 import type { Brief, Call } from "@membr/core";
 import { Markdown } from "./markdown.ts";
 
-type Props = { brief: Brief; working: readonly string[]; openAgent: (name: string) => void };
+type Props = { brief: Brief; working: readonly string[]; openSubagent: (name: string) => void };
 
 const chevron = h("svg", { class: "chevron", viewBox: "0 0 24 24", "aria-hidden": "true" }, h("path", { d: "M9 6l6 6-6 6" }));
 
@@ -12,12 +12,12 @@ function preview(text: string): string {
   return text.trim().split("\n")[0].replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[#>\-\s]+/, "").replace(/[*_`~]/g, "");
 }
 
-function Agent({ name, working }: { name: string; working: readonly string[] }) {
-  return h("span", { class: working.includes(name) ? "agent-name working" : "agent-name" }, name);
+function Subagent({ name, working }: { name: string; working: readonly string[] }) {
+  return h("span", { class: working.includes(name) ? "subagent-name working" : "subagent-name" }, name);
 }
 
-function OpenAgent({ name, openAgent }: { name: string; openAgent: (name: string) => void }) {
-  return h("button", { type: "button", class: "ghost small", onClick: () => openAgent(name) }, `Open ${name}'s chat`);
+function OpenSubagent({ name, openSubagent }: { name: string; openSubagent: (name: string) => void }) {
+  return h("button", { type: "button", class: "ghost small", onClick: () => openSubagent(name) }, `Open ${name}'s chat`);
 }
 
 function status(call: Call): ComponentChild {
@@ -44,7 +44,7 @@ function chips(calls: Call[]): ComponentChild[] {
   ];
 }
 
-export function BriefRow({ brief, working, openAgent }: Props) {
+export function BriefRow({ brief, working, openSubagent }: Props) {
   let line: ComponentChild[], body: ComponentChild;
   switch (brief.kind) {
     case "tools":
@@ -52,15 +52,15 @@ export function BriefRow({ brief, working, openAgent }: Props) {
       body = brief.calls.map((call) => h(CallRow, { call, key: call.i }));
       break;
     case "spawn":
-      line = [h("span", { class: "brief-what" }, brief.call.result ? `Started ${plural(brief.agents.length, "agent")}` : "Starting agents"), h("span", { class: "chips" }, brief.agents.map((agent) => h(Agent, { name: agent.name, working, key: agent.name })))];
-      body = brief.agents.map((agent) => h("div", { class: "spawned", key: agent.name },
-        h("div", { class: "spawned-head" }, h(Agent, { name: agent.name, working }), brief.call.result && !brief.call.result.error && h(OpenAgent, { name: agent.name, openAgent })),
-        h(Markdown, { text: agent.task })));
+      line = [h("span", { class: "brief-what" }, brief.call.result ? `Started ${plural(brief.subagents.length, "subagent")}` : "Starting subagents"), h("span", { class: "chips" }, brief.subagents.map((subagent) => h(Subagent, { name: subagent.name, working, key: subagent.name })))];
+      body = brief.subagents.map((subagent) => h("div", { class: "spawned", key: subagent.name },
+        h("div", { class: "spawned-head" }, h(Subagent, { name: subagent.name, working }), brief.call.result && !brief.call.result.error && h(OpenSubagent, { name: subagent.name, openSubagent })),
+        h(Markdown, { text: subagent.task })));
       if (brief.call.result?.error) body = [body, h("pre", { key: "error" }, brief.call.result.text)];
       break;
     case "report":
-      line = [h(Agent, { name: brief.agent, working }), h("span", { class: "brief-what" }, "reported"), h("span", { class: "brief-preview" }, preview(brief.text))];
-      body = [h(Markdown, { text: brief.text, key: "text" }), h(OpenAgent, { name: brief.agent, openAgent, key: "open" })];
+      line = [h(Subagent, { name: brief.subagent, working }), h("span", { class: "brief-what" }, "reported"), h("span", { class: "brief-preview" }, preview(brief.text))];
+      body = [h(Markdown, { text: brief.text, key: "text" }), h(OpenSubagent, { name: brief.subagent, openSubagent, key: "open" })];
       break;
     case "note":
       line = [h("span", { class: "brief-what" }, "Note"), h("span", { class: "brief-preview" }, preview(brief.text))];

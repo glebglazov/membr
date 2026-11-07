@@ -37,8 +37,8 @@ function briefLine(brief: Brief): Line {
       const chips = [...[...counts].map(([tool, count]) => count > 1 ? `${tool} x${count}` : tool), ...failed ? [`${failed} failed`] : [], ...running ? ["running"] : []];
       return { text: `> Made ${plural(brief.calls.length, "tool call")}: ${chips.join(", ")}`, tone: failed ? "warn" : "dim" };
     }
-    case "spawn": return { text: `> ${brief.call.result ? `Started ${plural(brief.agents.length, "agent")}` : "Starting agents"}: ${brief.agents.map((agent) => agent.name).join(", ")}`, tone: "dim" };
-    case "report": return { text: `> Report from ${brief.agent}: ${preview(brief.text)}`, tone: "dim" };
+    case "spawn": return { text: `> ${brief.call.result ? `Started ${plural(brief.subagents.length, "subagent")}` : "Starting subagents"}: ${brief.subagents.map((subagent) => subagent.name).join(", ")}`, tone: "dim" };
+    case "report": return { text: `> Report from ${brief.subagent}: ${preview(brief.text)}`, tone: "dim" };
     case "note": return { text: `> Note: ${preview(brief.text)}`, tone: "dim" };
   }
 }
@@ -63,13 +63,15 @@ export function transcript(model: Model, width: number): Line[] {
   return lines;
 }
 
-export function status(model: Model): Line {
+// agent names the chat when the server has more than one, so the user sees which agent they talk to.
+export function status(model: Model, agent?: string): Line {
   const connection = model.connection === "ready" ? model.state.busy ? model.state.wait || "Working" : "Ready"
     : model.connection === "connecting" ? "Connecting" : model.connection === "refused" ? "Access refused" : "Offline. Messages send when connected";
   const pick = effectivePick(model);
   const parts = [
+    agent ?? null,
     connection,
-    model.state.agents.length ? `${plural(model.state.agents.length, "agent")} at work` : null,
+    model.state.subagents.length ? `${plural(model.state.subagents.length, "subagent")} at work` : null,
     model.state.goal ? `goal: ${model.state.goal}` : null,
     pick ? `${pick.model} ${pick.effort}${pick.fast ? " fast" : ""}` : null,
     epochWords(model.state.context),

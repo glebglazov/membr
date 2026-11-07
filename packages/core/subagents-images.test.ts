@@ -6,34 +6,34 @@ const entry = (i: number, text: string): Entry => ({ i, text, kind: "unii", date
 const image: Attachment = { id: "image-1", name: "screen.png", type: "image/png", data: "aW1hZ2U=" };
 function ready() { return hear(createModel(), { type: "ready", version: "1.0" }); }
 
-test("S2 agent tabs keep independent live logs, refresh on switching, and recover finished agents", () => {
-  let model = hear(ready(), parseEvent({ type: "state", state: { busy: true, wait: "", goal: null, pick: null, agents: ["Agent1"], agentNames: ["Agent1", "Agent2"], usage: null } }));
+test("S2 subagent tabs keep independent live logs, refresh on switching, and recover finished subagents", () => {
+  let model = hear(ready(), parseEvent({ type: "state", state: { busy: true, wait: "", goal: null, pick: null, subagents: ["Agent1"], subagentNames: ["Agent1", "Agent2"], usage: null } }));
   model = hear(model, { type: "entry", entry: entry(0, "Main answer") });
-  model = hear(model, { type: "agent-entry", name: "Agent1", entry: entry(0, "Agent answer") });
-  model = hear(model, { type: "live", agent: "Agent1", text: "Next " });
-  model = hear(model, { type: "live", agent: "Agent1", text: "part" });
-  model = hear(model, { type: "live", agent: null, text: "Main partial" });
+  model = hear(model, { type: "subagent-entry", name: "Agent1", entry: entry(0, "Subagent answer") });
+  model = hear(model, { type: "live", subagent: "Agent1", text: "Next " });
+  model = hear(model, { type: "live", subagent: "Agent1", text: "part" });
+  model = hear(model, { type: "live", subagent: null, text: "Main partial" });
   expect(model.entries.get(0)?.text).toBe("Main answer");
   expect(model.live).toBe("Main partial");
-  let selected = act(model, { type: "agent", name: "Agent1" });
-  expect(selected.model.agent).toBe("Agent1");
-  expect(selected.model.agents.get("Agent1")?.live).toBe("Next part");
-  expect(selected.reads[0]).toMatchObject({ read: "agent", name: "Agent1" });
-  model = hear(selected.model, { type: "read", id: selected.reads[0].id, entries: [entry(0, "Agent answer"), entry(1, "Tool answer")], live: "Next part", parts: [], lines: [] });
-  expect(model.agents.get("Agent1")?.entries.size).toBe(2);
+  let selected = act(model, { type: "subagent", name: "Agent1" });
+  expect(selected.model.subagent).toBe("Agent1");
+  expect(selected.model.subagents.get("Agent1")?.live).toBe("Next part");
+  expect(selected.reads[0]).toMatchObject({ read: "subagent", name: "Agent1" });
+  model = hear(selected.model, { type: "read", id: selected.reads[0].id, entries: [entry(0, "Subagent answer"), entry(1, "Tool answer")], live: "Next part", parts: [], lines: [] });
+  expect(model.subagents.get("Agent1")?.entries.size).toBe(2);
   expect(model.entries.size).toBe(1);
-  model = hear(model, { type: "agent-entry", name: "Agent1", entry: entry(2, "Next part") });
-  expect(model.agents.get("Agent1")?.live).toBe("");
-  selected = act(model, { type: "agent", name: "Agent2" });
-  expect(selected.reads.at(-1)).toMatchObject({ read: "agent", name: "Agent2" });
-  expect(act(selected.model, { type: "agent", name: null }).model.agent).toBeNull();
-  expect(act(model, { type: "agent", name: "Missing" }).model).toBe(model);
+  model = hear(model, { type: "subagent-entry", name: "Agent1", entry: entry(2, "Next part") });
+  expect(model.subagents.get("Agent1")?.live).toBe("");
+  selected = act(model, { type: "subagent", name: "Agent2" });
+  expect(selected.reads.at(-1)).toMatchObject({ read: "subagent", name: "Agent2" });
+  expect(act(selected.model, { type: "subagent", name: null }).model.subagent).toBeNull();
+  expect(act(model, { type: "subagent", name: "Missing" }).model).toBe(model);
   model = hear(hear(model, { type: "offline" }), { type: "connecting" });
   model = hear(model, { type: "ready", version: "1.0" });
-  const refresh = act(model, { type: "flush" }).reads.find((read) => read.read === "agent" && read.name === "Agent1");
+  const refresh = act(model, { type: "flush" }).reads.find((read) => read.read === "subagent" && read.name === "Agent1");
   expect(refresh).toBeDefined();
-  expect(model.agents.get("Agent1")?.live).toBe("");
-  expect([...model.agents.keys()]).toEqual(["Agent1", "Agent2"]);
+  expect(model.subagents.get("Agent1")?.live).toBe("");
+  expect([...model.subagents.keys()]).toEqual(["Agent1", "Agent2"]);
 });
 
 test("S2 image attachment state removes previews and retries the same upload without a WebSocket say", () => {

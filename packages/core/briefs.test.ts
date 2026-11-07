@@ -28,18 +28,18 @@ test("a run of tool calls folds into one brief that pairs each call with its res
   ]);
 });
 
-test("a spawn call is its own brief and names the agents the server started", () => {
+test("a spawn call is its own brief and names the subagents the server started", () => {
   next = 0;
   const found = briefs([
     tool("a", "Grep", { pattern: "spawn", path: "packages/server" }),
-    echo("a", "agents.ts:61"),
+    echo("a", "subagents.ts:61"),
     tool("s", "mcp__memory__spawn", { tasks: [{ name: "Store Reader", task: "Read log.ts" }, { name: "store-reader", task: "Read view.ts" }] }),
     echo("s", "Started store-reader, store-reader-2. Each one's report will reach you as a message when it finishes."),
     tool("t", "mcp__memory__tell", { name: "store-reader", message: "Look at tree.ts too\nthanks" }),
     echo("t", "Sent."),
   ]);
   expect(found.map((item) => item.kind)).toEqual(["tools", "spawn", "tools"]);
-  expect(found[1].kind === "spawn" && found[1].agents).toEqual([{ name: "store-reader", task: "Read log.ts" }, { name: "store-reader-2", task: "Read view.ts" }]);
+  expect(found[1].kind === "spawn" && found[1].subagents).toEqual([{ name: "store-reader", task: "Read log.ts" }, { name: "store-reader-2", task: "Read view.ts" }]);
   expect(found[2].kind === "tools" && found[2].calls[0].what).toBe("store-reader: Look at tree.ts too");
 });
 
@@ -53,8 +53,8 @@ test("reports and notes are briefs, and imported calls pair with the next result
     entry("echo", "README.md"),
   ]);
   expect(found).toEqual([
-    { kind: "report", i: 0, agent: "store-reader", text: "The log is append-only.\n\nIt is the source of truth." },
-    { kind: "report", i: 1, agent: "Agent1", text: "Old reply" },
+    { kind: "report", i: 0, subagent: "store-reader", text: "The log is append-only.\n\nIt is the source of truth." },
+    { kind: "report", i: 1, subagent: "Agent1", text: "Old reply" },
     { kind: "note", i: 2, text: "after: hook failed" },
     { kind: "tools", i: 3, calls: [{ i: 3, tool: "shell", what: "ls", input: { command: "ls" }, result: { i: 4, text: "README.md", error: false } }] },
   ]);

@@ -5,7 +5,7 @@ import { imageMarks, readImage } from "./images.ts";
 import { flat } from "./view.ts";
 import type { Entry, Part, MemoryLine } from "@membr/protocol";
 import type { Log } from "./log.ts";
-import type { Agents } from "./agents.ts";
+import type { Subagents } from "./subagents.ts";
 import type { Tree } from "./tree.ts";
 
 export type ToolAnswer = { text: string; error: boolean; images: Array<{ data: string; mimeType: string }> };
@@ -34,7 +34,7 @@ function page(text: string, at: number): string {
 }
 
 export class Memory implements MemoryTools {
-  agents?: Agents;
+  subagents?: Subagents;
   constructor(private readonly log: Log, private readonly tree: Tree, private readonly dir: string) {}
 
   roots(): MemoryLine[] {
@@ -52,8 +52,8 @@ export class Memory implements MemoryTools {
   zoom(id: number | string, n = 1, at = 0): ToolAnswer {
     if (!Number.isSafeInteger(at) || at < 0) return { text: "Invalid character offset " + at + ".", error: true, images: [] };
     if (typeof id === "string" && /^[A-Za-z]/.test(id)) {
-      const agent = this.agents?.read(id);
-      return { text: agent ? page(agent.entries.map((entry) => `${entry.i}|${entry.kind}: ${entry.text}`).join("\n\n"), at) : "No agent " + id + ".", error: !agent, images: [] };
+      const subagent = this.subagents?.read(id);
+      return { text: subagent ? page(subagent.entries.map((entry) => `${entry.i}|${entry.kind}: ${entry.text}`).join("\n\n"), at) : "No subagent " + id + ".", error: !subagent, images: [] };
     }
     const opened = this.open(typeof id === "string" && id.trim() === "" ? NaN : Number(id), n);
     if (opened.kind === "missing") return { text: opened.reason, error: true, images: [] };

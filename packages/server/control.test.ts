@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ensureServer, reloadServer, serverStatus, stopServer } from "./src/control.ts";
+import { agentList, agentNew, ensureServer, reloadServer, serverStatus, stopServer } from "./src/control.ts";
 import { holder } from "./src/lock.ts";
 import { serviceLabel, serviceSpec, type ServiceHost } from "./src/service.ts";
 
@@ -114,7 +114,8 @@ test("membr status shows the server, its sign-in link, the agent and the log", a
   const token = fs.readFileSync(path.join(dir, "token"), "utf8").trim();
   expect(serverStatus(dir, launchd.host)).toEqual([
     `membr: the server runs (pid ${running.pid}) at ${running.url}`,
-    `membr: sign in at ${running.url}?token=${encodeURIComponent(token)}`,
+    `membr: sign in at ${running.url}membr/?token=${encodeURIComponent(token)}`,
+    `membr: agent default at ${running.url}membr/default/`,
     `membr: launchd agent ${serviceLabel(dir)} loaded, plist ${path.join(dir, "LaunchAgents", serviceLabel(dir) + ".plist")}`,
     `membr: log ${path.join(dir, "serve.log")}`,
   ]);
@@ -137,4 +138,18 @@ test("membr stop also stops a server that launchd did not start", async () => {
   for (let i = 0; i < 100 && !holder(dir)?.url; i++) await Bun.sleep(50);
   expect(await stopServer(dir, null)).toEqual(["membr: the server stopped"]);
   expect(await proc.exited).toBe(0);
+});
+
+test("membr agent new adds an entry to config.json, and membr agent list shows each agent and its state", async () => {
+  const dir = directory();
+  const launchd = fakeLaunchd(dir);
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port: 0 }));
+  const added = await agentNew(dir, "research");
+  expect(added[0]).toBe(`membr: added the agent research to ${path.join(dir, "config.json")}`);
+  expect(JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"))).toEqual({ port: 0, agents: { research: { prompt: "" } } });
+  await expect(agentNew(dir, "research")).rejects.toThrow("the agent research is in config.json already");
+  await expect(agentNew(dir, "server")).rejects.toThrow("server is a membr command");
+  expect((await agentList(dir)).map((line) => line.split("  ").slice(0, 2).join(" "))).toEqual(["default stopped", "research stopped"]);
+  await ensureServer({ dir, host: launchd.host, spec: specFor(dir) });
+  expect((await agentList(dir)).map((line) => line.split("  ").slice(0, 2).join(" "))).toEqual(["default idle", "research idle"]);
 });

@@ -41,7 +41,7 @@ test.skipIf(process.env.MEMBR_REAL_SDK !== "1")("S1 real stop cancels queued inp
     await client.wait("entry", 0, (event) => event.entry.kind === "tool" && JSON.parse(event.entry.text).name === "Bash", 180_000);
     const mark = client.events.length;
     client.act({ type: "act", act: "say", id: "queued", text: "After the sleep, reply QUEUED-SHOULD-NOT-RUN." });
-    client.act({ type: "act", act: "stop", id: "stop", agent: null });
+    client.act({ type: "act", act: "stop", id: "stop", subagent: null });
     await client.wait("answer", mark, (event) => event.id === "stop");
     await client.wait("state", mark, (event) => !event.state.busy, 180_000);
     const next = client.events.length;

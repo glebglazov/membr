@@ -125,7 +125,7 @@ for (const ending of ["abort", "stop", "close", "failure"] as const) {
     if (ending === "failure") epoch.fail(new Error("Scripted failure"));
     if (ending === "stop") {
       epoch.onInterrupt = () => interrupt.promise;
-      a.act({ type: "act", act: "stop", id: "stop", agent: null });
+      a.act({ type: "act", act: "stop", id: "stop", subagent: null });
       await a.wait("answer", 0, (event) => event.id === "stop");
     }
     expect(await pending).toBe(false);

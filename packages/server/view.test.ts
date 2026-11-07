@@ -10,6 +10,7 @@ import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine, type FakeEpoch } from "./test/engine.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -35,7 +36,7 @@ async function say(hub: Awaited<ReturnType<typeof serve>>, id: string, text: str
   await hub.client.wait("state", mark, (event) => !event.state.busy, 10000);
 }
 function saved(dir: string): { lines: Array<{ l: number; i: number; text: string }>; pick: unknown; goal: string | null } {
-  return JSON.parse(fs.readFileSync(path.join(dir, "view.json"), "utf8"));
+  return JSON.parse(fs.readFileSync(path.join(defaultStore(dir), "view.json"), "utf8"));
 }
 function bytes(seed: number, n: number): string {
   let text = "";
@@ -128,10 +129,10 @@ test("3000 protocol messages retain at least 95% prompt prefixes and rotate only
   console.log(`prefix reuse: turns ${(100 * turns.share).toFixed(2)}%, compactions ${(100 * compactions.share).toFixed(2)}%; ${engine.epochs.length - 1} batches, ${compactions.samples.length} compactions, ${messages} messages`);
   expect(turns.share).toBeGreaterThanOrEqual(0.95);
   expect(compactions.share).toBeGreaterThanOrEqual(0.95);
-  const before = fs.readFileSync(path.join(dir, "view.json"), "utf8");
+  const before = fs.readFileSync(path.join(defaultStore(dir), "view.json"), "utf8");
   hub.close();
   const after = await serve(new FakeEngine(), dir);
-  expect(fs.readFileSync(path.join(dir, "view.json"), "utf8")).toBe(before);
+  expect(fs.readFileSync(path.join(defaultStore(dir), "view.json"), "utf8")).toBe(before);
   expect(after.engine.epochs[0].view).toContain("<chat>\n");
 }, 120000);
 
@@ -150,15 +151,15 @@ test("restart keeps placeholders, pick and goal in the saved view", async () => 
   await before.client.wait("answer", 0, (event) => event.id === "goal");
   expect(saved(before.dir).goal).toBe("Keep the saved view");
   held.resolve("The tree summary is complete.");
-  const treeDir = path.join(before.dir, "tree");
+  const treeDir = path.join(defaultStore(before.dir), "tree");
   for (let attempt = 0; attempt < 100 && fs.readdirSync(treeDir).length === 0; attempt++) await Bun.sleep(10);
   const summaries = fs.readdirSync(treeDir).map((file) => fs.readFileSync(path.join(treeDir, file), "utf8"));
   expect(summaries.join("\n")).toContain("The tree summary is complete.");
   expect(saved(before.dir).lines[0].text).toBe("(not summarized yet: zoom it)");
-  const bytes = fs.readFileSync(path.join(before.dir, "view.json"));
+  const bytes = fs.readFileSync(path.join(defaultStore(before.dir), "view.json"));
   await before.close();
   const after = await serve(new FakeEngine(), before.dir);
-  expect(fs.readFileSync(path.join(before.dir, "view.json"))).toEqual(bytes);
+  expect(fs.readFileSync(path.join(defaultStore(before.dir), "view.json"))).toEqual(bytes);
   expect(after.engine.epochs[0].view).toContain("0+1|(not summarized yet: zoom it)");
   expect(after.engine.epochs[0].options.pick).toEqual(pick);
   expect((await after.client.wait("state")).state.goal).toBe("Keep the saved view");
@@ -236,7 +237,7 @@ test("a batch fits the complete view with a large pending tail and sends every i
 
 test("a permanent tree write failure ends the summary wait", async () => {
   const hub = await waitingBatch();
-  const tree = path.join(hub.dir, "tree");
+  const tree = path.join(defaultStore(hub.dir), "tree");
   const file = path.join(tree, new Date().toISOString().slice(0, 10) + ".jsonl");
   fs.renameSync(file, file + ".saved");
   fs.mkdirSync(file);
@@ -251,7 +252,7 @@ test("a permanent tree write failure ends the summary wait", async () => {
 test("stop cancels a summary wait without opening or sending to another epoch", async () => {
   const hub = await waitingBatch();
   const mark = hub.client.events.length;
-  hub.client.act({ type: "act", act: "stop", id: "stop", agent: null });
+  hub.client.act({ type: "act", act: "stop", id: "stop", subagent: null });
   expect((await hub.client.wait("answer", mark)).ok).toBe(true);
   await hub.client.wait("state", mark, (event) => !event.state.busy);
   const sent = hub.engine.epochs[0].messages.length;
@@ -264,18 +265,18 @@ test("stop cancels a summary wait without opening or sending to another epoch", 
 
 test("close cancels a summary wait and late summaries do not rewrite the view", async () => {
   const hub = await waitingBatch();
-  const before = fs.readFileSync(path.join(hub.dir, "view.json"));
+  const before = fs.readFileSync(path.join(defaultStore(hub.dir), "view.json"));
   hub.close();
   hub.held.resolve("s".repeat(400));
   await Bun.sleep(20);
   expect(hub.engine.epochs).toHaveLength(1);
-  expect(fs.readFileSync(path.join(hub.dir, "view.json"))).toEqual(before);
+  expect(fs.readFileSync(path.join(defaultStore(hub.dir), "view.json"))).toEqual(before);
 });
 
 test("a failed view save fails the chat after the input reaches the log", async () => {
   const hub = await serve(new FakeEngine());
   expect(saved(hub.dir).pick).toEqual({ model: "sonnet", effort: "high", fast: false });
-  fs.mkdirSync(path.join(hub.dir, "view.json.tmp"));
+  fs.mkdirSync(path.join(defaultStore(hub.dir), "view.json.tmp"));
   hub.client.act({ type: "act", act: "say", id: "failed-save", text: "Keep this durable input" });
   expect((await hub.client.wait("answer", 0, (event) => event.id === "failed-save")).ok).toBe(true);
   await hub.client.wait("error");
@@ -284,7 +285,7 @@ test("a failed view save fails the chat after the input reaches the log", async 
   expect(hub.engine.epochs[0].messages).toHaveLength(0);
   expect(hub.engine.epochs[0].closed).toBe(true);
   hub.close();
-  fs.rmdirSync(path.join(hub.dir, "view.json.tmp"));
+  fs.rmdirSync(path.join(defaultStore(hub.dir), "view.json.tmp"));
   const after = await serve(new FakeEngine(), hub.dir);
   expect(after.engine.epochs[0].view).toContain("Keep this durable input");
   expect(after.client.events.filter((event) => event.type === "entry" && event.entry.kind === "note")).toHaveLength(1);

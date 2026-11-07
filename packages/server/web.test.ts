@@ -8,6 +8,7 @@ import { NO_USAGE } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { seedMemory } from "./test/memory.ts";
 import { TestClient } from "./test/client.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const dirs: string[] = [];
@@ -81,7 +82,7 @@ test("an empty export has no messages or summaries", async () => {
 test("the export JSON matches every saved message and summary before and after restart", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-export-"));
   dirs.push(dir);
-  await seedMemory(dir, 8);
+  await seedMemory(defaultStore(dir), 8);
   const compact = Promise.withResolvers<string>();
   const engine = new FakeEngine((epoch) => epoch.emit(
     { kind: "text", text: "A long reply. ".repeat(100) },
@@ -97,8 +98,8 @@ test("the export JSON matches every saved message and summary before and after r
   const mark = client.events.length;
   client.act({ type: "act", act: "say", id: "export-message", text: "Keep all of this in the export. ".repeat(100) });
   await client.wait("state", mark, (event) => !event.state.busy);
-  const records = (folder: string) => fs.readdirSync(path.join(dir, folder)).filter((name) => name.endsWith(".jsonl")).sort()
-    .flatMap((name) => fs.readFileSync(path.join(dir, folder, name), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)));
+  const records = (folder: string) => fs.readdirSync(path.join(defaultStore(dir), folder)).filter((name) => name.endsWith(".jsonl")).sort()
+    .flatMap((name) => fs.readFileSync(path.join(defaultStore(dir), folder, name), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)));
   const messages = records("main").filter((record) => "i" in record).map(parseEntry);
   expect(messages).toHaveLength(12);
   const savedLines = () => records("tree").map(({ l, i, text }): MemoryLine => ({ l, i, text })).sort((a, b) => a.l - b.l || a.i - b.i);
@@ -113,7 +114,7 @@ test("the export JSON matches every saved message and summary before and after r
     await Bun.sleep(5);
   }
   const response = await fetch(new URL("/export", hub.server.url));
-  expect(response.headers.get("content-disposition")).toContain("membr-memory.json");
+  expect(response.headers.get("content-disposition")).toContain("membr-default-memory.json");
   const value = await response.json();
   expect(value.messages).toEqual(messages);
   expect(value.lines).toEqual(savedLines());
@@ -136,7 +137,7 @@ test("a non-loopback request needs a token and the sign-in link sets a reusable 
   for (const route of ["/", "/main.js", "/main.css", "/ws"]) expect((await fetch(new URL(route, url))).status).toBe(401);
   const signIn = await fetch(hub.link, { redirect: "manual" });
   expect(signIn.status).toBe(303);
-  expect(signIn.headers.get("location")).toBe("/");
+  expect(signIn.headers.get("location")).toBe("/membr/");
   const cookie = signIn.headers.get("set-cookie")!;
   expect(cookie).toContain("HttpOnly");
   expect(cookie).toContain("SameSite=Strict");
@@ -200,7 +201,7 @@ test("a reconnect receives the current main text before the next delta", async (
 test("the view sends summary text at connect and after a new message", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-web-memory-"));
   dirs.push(dir);
-  await seedMemory(dir, 8);
+  await seedMemory(defaultStore(dir), 8);
   const hub = serveHub({ dir, port: 0, engine: new FakeEngine((epoch) => epoch.emit(END)) });
   hubs.push(hub);
   const client = await TestClient.connect(new URL("/ws", hub.server.url).href.replace("http:", "ws:"));
@@ -208,7 +209,7 @@ test("the view sends summary text at connect and after a new message", async () 
   await client.wait("ready");
   const initial = await client.wait("view");
   expect(initial.parts).toEqual([{ l: 3, i: 0 }]);
-  expect(initial.lines).toEqual(JSON.parse(fs.readFileSync(path.join(dir, "view.json"), "utf8")).lines);
+  expect(initial.lines).toEqual(JSON.parse(fs.readFileSync(path.join(defaultStore(dir), "view.json"), "utf8")).lines);
   expect(initial.lines?.[0]?.text).toContain("A compacted message.");
   const mark = client.events.length;
   client.act({ type: "act", act: "say", id: "new-memory", text: "A new memory" });
@@ -219,7 +220,7 @@ test("the view sends summary text at connect and after a new message", async () 
 test("the current turn cutoff reaches every client and survives restart", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-web-turn-"));
   dirs.push(dir);
-  await seedMemory(dir, 8);
+  await seedMemory(defaultStore(dir), 8);
   const text = "The final answer remains readable. ".repeat(80);
   const hub = serveHub({ dir, port: 0, engine: new FakeEngine((epoch) => epoch.emit({ kind: "text", text }, END)) });
   hubs.push(hub);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { END, FakeEngine } from "./test/engine.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -27,7 +28,7 @@ async function serve(engine = new FakeEngine(), dir = fs.mkdtempSync(path.join(o
 
 async function act(client: TestClient, id: string, kind: "goal" | "say" | "stop", text?: string | null) {
   const mark = client.events.length;
-  if (kind === "stop") client.act({ type: "act", act: "stop", id, agent: null });
+  if (kind === "stop") client.act({ type: "act", act: "stop", id, subagent: null });
   else if (kind === "goal") client.act({ type: "act", act: "goal", id, text: text ?? null });
   else client.act({ type: "act", act: "say", id, text: text ?? "" });
   expect((await client.wait("answer", mark, (event) => event.id === id)).ok).toBe(true);
@@ -59,9 +60,9 @@ test("two unmet checks produce three turns, then a met check clears the goal", a
   ]);
   expect(engine.checks[0].chat).toContain("0+1|user: Start the task");
   expect(engine.checks[0].chat).toContain("unii: Work done in this turn");
-  expect(JSON.parse(fs.readFileSync(path.join(hub.dir, "view.json"), "utf8")).goal).toBe(null);
+  expect(JSON.parse(fs.readFileSync(path.join(defaultStore(hub.dir), "view.json"), "utf8")).goal).toBe(null);
   hub.close();
-  fs.unlinkSync(path.join(hub.dir, "view.json"));
+  fs.unlinkSync(path.join(defaultStore(hub.dir), "view.json"));
   const after = await serve(new FakeEngine(), hub.dir);
   expect((await after.client.wait("state")).state.goal).toBe(null);
   expect(after.engine.epochs[0].messages).toHaveLength(0);
@@ -118,7 +119,7 @@ test("restart restores a goal but does not start work", async () => {
   after.close();
   const again = await serve(new FakeEngine(), before.dir);
   expect((await again.client.wait("state")).state.goal).toBe(null);
-  expect(JSON.parse(fs.readFileSync(path.join(before.dir, "view.json"), "utf8")).goal).toBe(null);
+  expect(JSON.parse(fs.readFileSync(path.join(defaultStore(before.dir), "view.json"), "utf8")).goal).toBe(null);
 });
 
 for (const ending of ["halt", "replace", "same text", "input", "stop", "close"] as const) {
@@ -146,7 +147,7 @@ for (const ending of ["halt", "replace", "same text", "input", "stop", "close"] 
     expect(engine.checks[0].signal.aborted).toBe(true);
     if (ending === "replace" || ending === "same text") {
       expect(entries(hub.client).some((entry) => entry.text === "Goal met.")).toBe(false);
-      expect(JSON.parse(fs.readFileSync(path.join(hub.dir, "view.json"), "utf8")).goal).toBe(kept);
+      expect(JSON.parse(fs.readFileSync(path.join(defaultStore(hub.dir), "view.json"), "utf8")).goal).toBe(kept);
       hub.close();
       const after = await serve(new FakeEngine(), hub.dir);
       expect((await after.client.wait("state")).state.goal).toBe(kept);
@@ -162,13 +163,13 @@ test("a failed view save during a goal check ends the new durable turn", async (
   await act(hub.client, "goal", "goal", "Keep working");
   await act(hub.client, "start", "say", "Begin");
   await hub.client.wait("state", 0, (event) => event.state.wait === "goal");
-  fs.mkdirSync(path.join(hub.dir, "view.json.tmp"));
+  fs.mkdirSync(path.join(defaultStore(hub.dir), "view.json.tmp"));
   const mark = hub.client.events.length;
   await act(hub.client, "fresh", "say", "Keep this durable input");
   await hub.client.wait("error", mark);
   expect(engine.checks[0].signal.aborted).toBe(true);
   hub.close();
-  fs.rmdirSync(path.join(hub.dir, "view.json.tmp"));
+  fs.rmdirSync(path.join(defaultStore(hub.dir), "view.json.tmp"));
   const after = await serve(new FakeEngine(), hub.dir);
   expect(after.engine.epochs[0].view).toContain("Keep this durable input");
   expect(entries(after.client).filter((entry) => entry.text.includes("The turn failed:"))).toHaveLength(1);

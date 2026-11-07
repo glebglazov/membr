@@ -7,7 +7,7 @@ declare const MEMBR_STANDALONE: boolean | undefined;
 
 export const LABEL = "dev.membr.serve";
 
-// One launchd agent per data directory, so a second MEMBR_DIR gets its own server instead of replacing the first one's.
+// One launchd agent per base directory, so a second MEMBR_DIR gets its own server instead of replacing the first one's.
 export function serviceLabel(dir: string): string {
   if (path.resolve(dir) === path.resolve(dataDir({}))) return LABEL;
   return `${LABEL}.${createHash("sha256").update(path.resolve(dir)).digest("hex").slice(0, 8)}`;
@@ -37,7 +37,7 @@ function render(value: Plist, indent: string): string {
 }
 
 // KeepAlive restarts the server only after an exit that is not a clean exit 0. A crash, a kill and a held
-// lock (exit 1) restart it, so it waits for `make run` to let go of the data directory and for Tailscale to
+// lock (exit 1) restart it, so it waits for `make run` to let go of the base directory and for Tailscale to
 // come up after login. A SIGTERM from `launchctl bootout` exits 0, so uninstall and install stay stopped.
 export function plistXml(spec: ServiceSpec): string {
   const plist: Plist = {
@@ -68,7 +68,7 @@ export function serviceSpec(input: Readonly<{
   }
   return {
     label: serviceLabel(input.dir),
-    program: [input.execPath, ...(input.entry === null ? [] : [input.entry]), "serve"],
+    program: [input.execPath, ...(input.entry === null ? [] : [input.entry]), "server", "run"],
     env,
     logPath: path.join(input.dir, "serve.log"),
     workingDirectory: input.dir,

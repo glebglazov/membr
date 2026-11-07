@@ -242,12 +242,12 @@ async function diagramZoom(browser: Browser): Promise<void> {
 
 async function briefsAndAgents(browser: Browser): Promise<void> {
   const engine = new FakeEngine((epoch, message) => {
-    const agents = epoch.options.agents;
-    if (!agents) return epoch.emit({ kind: "text", text: "The log is **append-only**." }, { ...END, reply: "The log is **append-only**." });
+    const subagents = epoch.options.subagents;
+    if (!subagents) return epoch.emit({ kind: "text", text: "The log is **append-only**." }, { ...END, reply: "The log is **append-only**." });
     if (message.from === "membr") return epoch.emit(END);
     epoch.emit({ kind: "tool", id: "read", name: "Read", input: { file_path: "/repo/packages/server/src/log.ts" } }, { kind: "echo", id: "read", text: "export class Log", error: false });
     epoch.emit({ kind: "tool", id: "spawn", name: "mcp__memory__spawn", input: { tasks: [{ name: "store-reader", task: "Read log.ts" }] } });
-    epoch.emit({ kind: "echo", id: "spawn", text: agents.spawn([{ name: "store-reader", task: "Read log.ts" }]), error: false }, { kind: "text", text: "I asked store-reader." }, END);
+    epoch.emit({ kind: "echo", id: "spawn", text: subagents.spawn([{ name: "store-reader", task: "Read log.ts" }]), error: false }, { kind: "text", text: "I asked store-reader." }, END);
   });
   await withChat({ browser, engine, check: async (context, url) => {
     const page = await openChat(context, url);
@@ -258,18 +258,18 @@ async function briefsAndAgents(browser: Browser): Promise<void> {
     await expect(tools.locator(".call")).toBeHidden();
     await tools.locator(":scope > summary").click();
     await expect(tools.locator(".call-what")).toHaveText("…/server/src/log.ts");
-    await expect(chat.locator("details.brief.spawn summary")).toContainText("Started 1 agent");
+    await expect(chat.locator("details.brief.spawn summary")).toContainText("Started 1 subagent");
     const report = chat.locator("details.brief.report");
     await expect(report.locator(":scope > summary")).toContainText("store-reader reported");
     await report.locator(":scope > summary").click();
     await expect(report.locator("strong", { hasText: "append-only" })).toBeVisible();
-    await expect(page.locator(".agent-tabs")).toHaveCount(0);
+    await expect(page.locator(".subagent-tabs")).toHaveCount(0);
     await report.getByRole("button", { name: "Open store-reader's chat", exact: true }).click();
-    const agentChat = page.getByRole("main", { name: "store-reader log", exact: true });
-    await expect(agentChat.getByRole("heading", { name: "store-reader", exact: true })).toBeVisible();
-    await expect(agentChat.getByText("Read log.ts", { exact: true })).toBeVisible();
-    await expect(agentChat.locator("details.brief.note summary").last()).toContainText("Finished.");
-    await agentChat.getByRole("button", { name: "← Main chat", exact: true }).click();
+    const subagentChat = page.getByRole("main", { name: "store-reader log", exact: true });
+    await expect(subagentChat.getByRole("heading", { name: "store-reader", exact: true })).toBeVisible();
+    await expect(subagentChat.getByText("Read log.ts", { exact: true })).toBeVisible();
+    await expect(subagentChat.locator("details.brief.note summary").last()).toContainText("Finished.");
+    await subagentChat.getByRole("button", { name: "← Main chat", exact: true }).click();
     await expect(chat.getByText("I asked store-reader.", { exact: true })).toBeVisible();
   } });
 }
@@ -290,7 +290,7 @@ try {
   await diagramZoom(browser);
   console.log("PASS Diagram zoom responds to trackpad and touch pinch.");
   await briefsAndAgents(browser);
-  console.log("PASS Tool calls, an agent start and its report fold into briefs that open the agent's chat.");
+  console.log("PASS Tool calls, a subagent start and its report fold into briefs that open the subagent's chat.");
   console.log("7 browser checks passed.");
 } finally {
   await browser?.close();

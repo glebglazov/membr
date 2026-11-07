@@ -58,7 +58,7 @@ export async function lock(dir: string, holder: () => Holder): Promise<Taken> {
   }
 }
 
-// The live server of a data directory, read without taking the lock.
+// The live server of a base directory, read without taking the lock.
 export function holder(dir: string): Holder | null {
   return owner(path.join(dir, "lock"));
 }

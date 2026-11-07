@@ -77,8 +77,8 @@ main h2 { margin: 0; font: 600 24px/1.2 var(--serif); }
 .chip { padding: 3px 6px; border-radius: 6px; background: var(--block); font: 11px/1 var(--mono); color: var(--mid); }
 .chip.failed { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
 .chip.running { color: var(--busy); }
-.agent-name { flex: none; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: 600 12px/1 var(--sans); }
-.agent-name.working::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--busy); vertical-align: 1px; animation: pulse 1.4s ease-in-out infinite; }
+.subagent-name { flex: none; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: 600 12px/1 var(--sans); }
+.subagent-name.working::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--busy); vertical-align: 1px; animation: pulse 1.4s ease-in-out infinite; }
 .brief-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 6px 0 4px 4px; padding-left: 14px; border-left: 2px solid var(--line); }
 .brief-body > * { max-width: 100%; }
 .brief-body > .markdown { font-size: 14.5px; }
@@ -93,7 +93,7 @@ main h2 { margin: 0; font: 600 24px/1.2 var(--serif); }
 .call pre, .brief-body > pre { margin: 0; max-height: 260px; overflow: auto; padding: 8px 10px; border-top: 1px solid var(--line); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--mid); }
 .spawned { display: grid; gap: 4px; }
 .spawned-head { display: flex; align-items: center; gap: 8px; }
-.agent-title { display: flex; align-items: center; gap: 12px; }
+.subagent-title { display: flex; align-items: center; gap: 12px; }
 
 /* Markdown in messages */
 .markdown { white-space: normal; }
@@ -169,7 +169,7 @@ footer > * { width: min(680px, 100%); margin-left: auto; margin-right: auto; }
 .toast { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 10px 14px; border: 1px solid var(--red); border-radius: 12px; background: var(--surface); color: var(--red); }
 .pending { margin-bottom: 8px; }
 .new-messages { display: flex; justify-content: center; margin-bottom: 8px; }
-.agent-bar { display: flex; justify-content: center; }
+.subagent-bar { display: flex; justify-content: center; }
 .composer { position: relative; display: grid; gap: 8px; padding: 12px 12px 10px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .command-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5; margin: 0; padding: 4px; list-style: none; max-height: min(40vh, 320px); overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
@@ -223,3 +223,5 @@ footer > .schedule-preview { margin-bottom: 10px; }
   .narrow-hide { display: none; }
   .composer-row .ghost { padding: 5px 8px; }
 }
+
+.agent-switch { font: inherit; font-size: 0.9rem; color: var(--mid); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-right: 0.75rem; min-width: 0; max-width: 9rem; }

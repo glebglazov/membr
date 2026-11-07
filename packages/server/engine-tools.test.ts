@@ -26,13 +26,13 @@ async function call(tool: Tool, input: Input) {
   return { text: first?.type === "text" ? first.text : undefined, isError: result.isError === true };
 }
 
-test("the schedule tool defaults run to agent and missed to once", async () => {
+test("the schedule tool defaults run to subagent and missed to once", async () => {
   const fake = tools();
   const tool = scheduleTool(fake);
   const when = { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" } as const;
   expect(z.object(tool.inputSchema).safeParse({ action: "create", text: "Read the inbox.", when }).success).toBe(true);
   expect((await call(tool, { action: "create", text: "Read the inbox.", when })).text).toBe("Proposed schedule abc123.");
-  expect(fake.specs).toEqual([{ text: "Read the inbox.", when, run: "agent", missed: "once" }]);
+  expect(fake.specs).toEqual([{ text: "Read the inbox.", when, run: "subagent", missed: "once" }]);
 });
 
 test("the schedule tool refuses a cron with no zone, and a create with no text or when, as text the model can read", async () => {

@@ -16,7 +16,7 @@ test("the protocol has no runtime dependencies", async () => {
 
 test("state events parse optional epoch usage and reject invalid counts", async () => {
   const { parseEvent } = await import("./src/index.ts");
-  const state = { busy: false, wait: "", goal: null, pick: null, agents: [], usage: null };
+  const state = { busy: false, wait: "", goal: null, pick: null, subagents: [], usage: null };
   const usage = { input: 100, cacheRead: 700, cacheWrite: 200, output: 50 };
   expect(parseEvent({ type: "state", state })).toEqual({ type: "state", state });
   expect(parseEvent({ type: "state", state: { ...state, compression: usage } })).toEqual({ type: "state", state: { ...state, compression: usage } });
@@ -30,7 +30,7 @@ test("skills events parse each skill and reject a nameless one", async () => {
   expect(() => parseEvent({ type: "skills", skills: [{ ...skills[0], name: "" }] })).toThrow();
 });
 
-const spec = { text: "Read the inbox.", when: { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/Madrid" }, run: "agent", missed: "once" } as const;
+const spec = { text: "Read the inbox.", when: { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/Madrid" }, run: "subagent", missed: "once" } as const;
 
 test("schedule acts and the when read round trip, and isScheduleAct agrees with SCHEDULE_ACTS", async () => {
   const { parseClientMessage, isScheduleAct, SCHEDULE_ACTS } = await import("./src/index.ts");
@@ -52,13 +52,20 @@ test("schedule acts and the when read round trip, and isScheduleAct agrees with 
   expect(isScheduleAct(parseClientMessage({ type: "act", id: "s", act: "say", text: "hi" }))).toBe(false);
 });
 
+test("a schedule saved before the rename with run agent reads back as run subagent", async () => {
+  const { parseSchedule } = await import("./src/index.ts");
+  const saved = { ...spec, id: "k3x9q2", author: "user", phase: "active", since: "2026-11-06T09:00:00.000Z" };
+  expect(parseSchedule({ ...saved, run: "agent" }).run).toBe("subagent");
+  expect(parseSchedule({ ...saved, run: "subagent" }).run).toBe("subagent");
+});
+
 test("schedule messages refuse a bad shape", async () => {
   const { parseClientMessage } = await import("./src/index.ts");
   const act = (schedule: unknown) => ({ type: "act", id: "a", act: "schedule", schedule });
   expect(() => parseClientMessage(act({ ...spec, when: { kind: "daily", at: "08:30" } }))).toThrow("Unknown when");
   expect(() => parseClientMessage(act({ ...spec, when: { kind: "once", at: "tomorrow" } }))).toThrow("Expected a date");
   expect(() => parseClientMessage(act({ ...spec, when: { kind: "cron", expr: "* * * * *" } }))).toThrow("Expected a string");
-  expect(() => parseClientMessage(act({ ...spec, run: "now" }))).toThrow("Expected one of turn, agent");
+  expect(() => parseClientMessage(act({ ...spec, run: "now" }))).toThrow("Expected one of turn, subagent");
   expect(() => parseClientMessage(act({ ...spec, missed: undefined }))).toThrow("Expected a string");
   expect(() => parseClientMessage({ type: "act", id: "a", act: "pause", schedule: "k" })).toThrow("Expected a boolean");
   expect(() => parseClientMessage({ type: "act", id: "a", act: "accept", schedule: "" })).toThrow("Expected an id");

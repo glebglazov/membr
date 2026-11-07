@@ -5,12 +5,13 @@ import path from "node:path";
 import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { seedMemory } from "./test/memory.ts";
+import { defaultStore } from "./test/config.ts";
 
 test.skipIf(process.env.MEMBR_REAL_SDK !== "1")("S1 real Engine uses zoom to answer from an old message", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-real-memory-"));
   const secret = "ARCHIVE-" + crypto.randomUUID();
-  await seedMemory(dir, 500, secret);
-  expect(fs.readFileSync(path.join(dir, "view.json"), "utf8")).not.toContain(secret);
+  await seedMemory(defaultStore(dir), 500, secret);
+  expect(fs.readFileSync(path.join(defaultStore(dir), "view.json"), "utf8")).not.toContain(secret);
   const hub = serveHub({ dir, port: 0, epoch: { cwd: dir, pick: { model: "sonnet", effort: "low", fast: false } } });
   let client: TestClient | undefined;
   try {

@@ -6,6 +6,7 @@ import type { Pick } from "@membr/protocol";
 import { serveHub } from "./src/hub.ts";
 import { TestClient } from "./test/client.ts";
 import { FakeEngine } from "./test/engine.ts";
+import { defaultStore } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [];
 const clients: TestClient[] = [];
@@ -145,7 +146,7 @@ test("concurrent picks apply in order while stop remains available", async () =>
   await b.wait("answer");
   expect(epoch.picks).toEqual([OPUS]);
   const mark = a.events.length;
-  a.act({ type: "act", act: "stop", id: "stop", agent: null });
+  a.act({ type: "act", act: "stop", id: "stop", subagent: null });
   await a.wait("answer", mark);
   await a.wait("state", mark, (event) => !event.state.busy);
   expect(epoch.interrupts).toBe(1);
@@ -217,7 +218,7 @@ for (const source of ["stop", "stream"] as const) {
     client.act({ type: "act", act: "pick", id: "pick", pick: OPUS });
     await client.wait("answer", 0, (event) => event.id === "pick");
     if (source === "stop") {
-      client.act({ type: "act", act: "stop", id: "stop", agent: null });
+      client.act({ type: "act", act: "stop", id: "stop", subagent: null });
       await client.wait("answer", 0, (event) => event.id === "stop");
     }
     control.reject(new Error("The flags could not be applied"));
@@ -239,7 +240,7 @@ test("pick recovery follows revision when daily files sort in reverse order", as
     await client.wait("answer", 0, (event) => event.id === id);
   }
   before.close();
-  const main = path.join(before.dir, "main");
+  const main = path.join(defaultStore(before.dir), "main");
   const files = fs.readdirSync(main);
   const records = files.flatMap((file) => fs.readFileSync(path.join(main, file), "utf8").trim().split("\n"));
   expect(records).toHaveLength(2);

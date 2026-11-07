@@ -26,14 +26,14 @@ test("S2 replays entries and resends an unanswered act with its original id", ()
   const sent = act(model, { type: "send", id: "lost-answer", text: "Only once" });
   expect(sent.acts).toEqual([{ type: "act", act: "say", id: "lost-answer", text: "Only once" }]);
   model = hear(sent.model, entry(0, "user", "Only once"));
-  model = hear(model, { type: "live", text: "Old partial", agent: null });
+  model = hear(model, { type: "live", text: "Old partial", subagent: null });
   model = hear(model, { type: "offline" });
   const queued = act(model, { type: "send", id: "offline", text: "Next" });
   expect(queued.acts).toEqual([]);
   model = hear(queued.model, { type: "connecting" });
   expect(act(model, { type: "flush" }).acts).toEqual([]);
   model = hear(model, entry(0, "user", "Only once"));
-  model = hear(model, { type: "live", text: "Current partial", agent: null });
+  model = hear(model, { type: "live", text: "Current partial", subagent: null });
   model = hear(model, { type: "ready", version: "1.0" });
   expect(model.entries.size).toBe(1);
   expect(model.live).toBe("Current partial");

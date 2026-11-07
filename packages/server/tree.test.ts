@@ -7,6 +7,7 @@ import { serveHub } from "./src/hub.ts";
 import { NO_USAGE, type Compaction } from "./src/engine.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { TestClient } from "./test/client.ts";
+import { defaultStore } from "./test/config.ts";
 
 type SavedNode = Part & { text: string; size: number };
 const hubs: ReturnType<typeof serveHub>[] = [];
@@ -43,7 +44,7 @@ async function serve(engine = new Compactor(), dir = fs.mkdtempSync(path.join(os
 }
 
 function nodes(dir: string): SavedNode[] {
-  return fs.readdirSync(path.join(dir, "tree")).sort().flatMap((file) => fs.readFileSync(path.join(dir, "tree", file), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)));
+  return fs.readdirSync(path.join(defaultStore(dir), "tree")).sort().flatMap((file) => fs.readFileSync(path.join(defaultStore(dir), "tree", file), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)));
 }
 
 async function until(predicate: () => boolean, timeout = 3000): Promise<void> {
@@ -130,8 +131,8 @@ test("short sources need no call and LEAF and MERGE requests match UniiChat", as
   expect(nodes(hub.dir)[0].text).toBe("user: " + "x".repeat(506));
   expect(hub.engine.prompts).toHaveLength(0);
   const image = "a".repeat(64) + ".png";
-  fs.mkdirSync(path.join(hub.dir, "docs", "images"), { recursive: true });
-  fs.writeFileSync(path.join(hub.dir, "docs", "images", image), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lWQAAAAASUVORK5CYII=", "base64"));
+  fs.mkdirSync(path.join(defaultStore(hub.dir), "docs", "images"), { recursive: true });
+  fs.writeFileSync(path.join(defaultStore(hub.dir), "docs", "images", image), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lWQAAAAASUVORK5CYII=", "base64"));
   await say(hub, "long", "🌍".repeat(150), [image]);
   await settled(hub, 2);
   const ruler = "-".repeat(512);
@@ -210,9 +211,9 @@ test("restart rebuilds after a crash, resumes missing nodes and ignores an old c
   await until(() => before.engine.active === 1);
   before.close();
   const saved = nodes(before.dir);
-  const file = path.join(before.dir, "tree", fs.readdirSync(path.join(before.dir, "tree"))[0]);
+  const file = path.join(defaultStore(before.dir), "tree", fs.readdirSync(path.join(defaultStore(before.dir), "tree"))[0]);
   fs.appendFileSync(file, '{"l":0,"i":1');
-  fs.writeFileSync(path.join(before.dir, "tree.index"), "stale index");
+  fs.writeFileSync(path.join(defaultStore(before.dir), "tree.index"), "stale index");
   const after = await serve(new Compactor(), before.dir);
   await settled(after, 2);
   expect(nodes(after.dir).find((node) => node.l === 0 && node.i === 0)).toEqual(saved[0]);
@@ -223,7 +224,7 @@ test("restart rebuilds after a crash, resumes missing nodes and ignores an old c
   await until(() => before.engine.active === 0);
   expect(fs.readFileSync(file)).toEqual(bytes);
   await coverage(after, ["short", "keep ".repeat(150)]);
-  expect(fs.existsSync(path.join(after.dir, "tree.index"))).toBe(false);
+  expect(fs.existsSync(path.join(defaultStore(after.dir), "tree.index"))).toBe(false);
   after.close();
   const again = await serve(new Compactor(), before.dir);
   await settled(again, 2);

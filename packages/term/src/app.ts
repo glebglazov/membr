@@ -33,7 +33,7 @@ function previewLines(model: Model, width: number): Line[] {
   const next = proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}.` : "It does not fire again.";
   const waiting = [...model.pending.values()].some((request) => request.act === "schedule");
   return [
-    ...wrap(`Proposed: ${describeWhen(proposal.when)}, as a ${runLabel("agent")}.`, width).map((text): Line => ({ text, tone: "warn" })),
+    ...wrap(`Proposed: ${describeWhen(proposal.when)}, as a ${runLabel("subagent")}.`, width).map((text): Line => ({ text, tone: "warn" })),
     ...wrap(`${next}${waiting ? "" : "  [a] accept  [d] delete"}`, width).map((text): Line => ({ text, tone: waiting ? "dim" : "warn" })),
   ];
 }
@@ -46,7 +46,7 @@ function history(model: Model, sent: readonly string[]): string[] {
 }
 
 // `editor` opens the composer text in an external editor and gives back the saved text, or null.
-export function App({ session, wheel, editor }: { session: Session; wheel?: Wheel; editor?: (text: string) => string | null }): ReactElement {
+export function App({ session, agent, wheel, editor }: { session: Session; agent?: string; wheel?: Wheel; editor?: (text: string) => string | null }): ReactElement {
   const { suspendTerminal } = useApp();
   const model = useSyncExternalStore(session.subscribe, session.model);
   const size = useWindowSize();
@@ -82,7 +82,7 @@ export function App({ session, wheel, editor }: { session: Session; wheel?: Whee
   const offset = Math.min(scroll, maxScroll);
   scrollLimit.current = maxScroll;
   const visible = lines.slice(Math.max(0, lines.length - height - offset), lines.length - offset);
-  const state = status(model);
+  const state = status(model, agent);
 
   function send(text: string) {
     session.input({ type: "send", id: newId(), text });
@@ -102,7 +102,7 @@ export function App({ session, wheel, editor }: { session: Session; wheel?: Whee
     }
     if (key.ctrl && input === "x") { chord.current = true; return; }
     if (key.escape) {
-      if (current.state.busy || current.state.agents.length) session.input({ type: "stop", id: newId() });
+      if (current.state.busy || current.state.subagents.length) session.input({ type: "stop", id: newId() });
       return;
     }
     if (current.error) session.input({ type: "dismiss-error" });

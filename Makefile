@@ -1,6 +1,6 @@
 .PHONY: run
 
-# Runs the server in this terminal. config.json in the data directory sets its options.
+# Runs the server in this terminal. config.json in the base directory sets its options.
 run: node_modules
 	bun run serve
 

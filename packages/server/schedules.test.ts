@@ -8,6 +8,7 @@ import { Log } from "./src/log.ts";
 import { TestClient } from "./test/client.ts";
 import { FakeClock } from "./test/clock.ts";
 import { END, FakeEngine } from "./test/engine.ts";
+import { defaultStore, testConfig } from "./test/config.ts";
 
 const hubs: ReturnType<typeof serveHub>[] = [], clients: TestClient[] = [], dirs: string[] = [];
 afterEach(async () => {
@@ -25,7 +26,7 @@ const hourly = (over: Partial<ScheduleSpec> = {}): ScheduleSpec => ({ text: TEXT
 async function serve(dir = fs.mkdtempSync(path.join(os.tmpdir(), "membr-schedules-")), clock = new FakeClock(T0)) {
   if (!dirs.includes(dir)) dirs.push(dir);
   const engine = new FakeEngine();
-  const hub = serveHub({ dir, port: 0, engine, clock, config: () => ({ home: null, rulesText: "", afterCommand: "", approvalTimeout: 600_000, listen: { port: 0, host: "127.0.0.1", tailscale: false } }) });
+  const hub = serveHub({ dir, port: 0, engine, clock, config: () => testConfig(dir) });
   hubs.push(hub);
   const client = await TestClient.connect(hub.server.url.href.replace("http:", "ws:") + "ws", { token: hub.token });
   clients.push(client);
@@ -103,7 +104,7 @@ test("a user schedule fires once, on time, as the user's own message, and later 
   await settle(client);
   expect(fires(client)).toHaveLength(1);
   expect(entries(client).some((entry) => entry.text.includes("late"))).toBe(false);
-  expect(new Log(dir).lastFire(id)).toEqual({ at: "2026-11-09T09:00:00.000Z", result: "ran", entry: fired.i });
+  expect(new Log(defaultStore(dir)).lastFire(id)).toEqual({ at: "2026-11-09T09:00:00.000Z", result: "ran", entry: fired.i });
 });
 
 test("a chat busy for three slots fires once at the newest slot, and not late", async () => {
@@ -118,7 +119,7 @@ test("a chat busy for three slots fires once at the newest slot, and not late", 
   expect(fired.scheduled).toEqual({ schedule: id, late: false });
   await settle(client);
   expect(fires(client)).toHaveLength(1);
-  expect(new Log(dir).lastFire(id)?.at).toBe("2026-11-09T08:30:00.000Z");
+  expect(new Log(defaultStore(dir)).lastFire(id)?.at).toBe("2026-11-09T08:30:00.000Z");
 });
 
 test("after a gap, a reopened log gives one late fire for missed once and one skipped record for skip", async () => {
@@ -135,7 +136,7 @@ test("after a gap, a reopened log gives one late fire for missed once and one sk
     ["user", TEXT, { schedule: late, late: true }],
     ["note", `Schedule ${skipped} was due at 2026-11-09T11:00:00.000Z, but membr was not running then, so it was skipped.`, undefined],
   ]);
-  const log = new Log(dir);
+  const log = new Log(defaultStore(dir));
   expect(log.lastFire(late)?.result).toBe("late");
   expect(log.lastFire(skipped)).toEqual({ at: "2026-11-09T11:00:00.000Z", result: "skipped", entry: 2 });
 });
@@ -192,16 +193,16 @@ test("the agent cannot cancel the user's schedule, and can cancel its own", asyn
   expect(entries(client).map((entry) => entry.text).at(-1)).toBe(`membr cancelled schedule ${own}.`);
 });
 
-test("a run agent schedule spawns schedule-<id> in the author's voice, its asks have the limit, and its report starts a scheduled membr turn", async () => {
+test("a run subagent schedule spawns schedule-<id> in the author's voice, its asks have the limit, and its report starts a scheduled membr turn", async () => {
   const { client, clock, engine, main } = await serve();
-  const id = await schedule(client, hourly({ run: "agent" }));
+  const id = await schedule(client, hourly({ run: "subagent" }));
   clock.until(at("09:00:00"));
   await client.wait("entry", 0, (event) => event.entry.text === `Schedule ${id} started a subagent.`);
   const child = engine.epochs[1]!;
   expect(child.messages[0]).toEqual({ text: TEXT, priority: "now", from: "user" });
   expect(child.options.schedules).toBeUndefined();
-  expect(child.options.agents).toBeUndefined();
-  await client.wait("state", 0, (event) => event.state.agents.includes(`schedule-${id}`));
+  expect(child.options.subagents).toBeUndefined();
+  await client.wait("state", 0, (event) => event.state.subagents.includes(`schedule-${id}`));
 
   const childAsk = settled(child.options.ask!("Bash", { command: "child" }));
   clock.advance(600_000);

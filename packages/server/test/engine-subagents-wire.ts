@@ -35,11 +35,11 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
 }));
 const { claude } = await import("../src/engine.ts");
 const options = { cwd: process.cwd(), append: "rules", pick: { model: "sonnet", effort: "low" as const, fast: false }, memory: { zoom: () => ({ text: "chat", error: false, images: [] }), date: () => "date" } };
-const main = claude.open("view", { ...options, ask: async (tool) => { requests.push(tool); return tool === "mcp__memory__tell"; }, agents: { spawn(tasks, effort) { delegated.push({ tasks, effort }); return "Started reader."; }, tell(name, message) { delegated.push({ name, message }); return "Sent."; } } });
+const main = claude.open("view", { ...options, ask: async (tool) => { requests.push(tool); return tool === "mcp__memory__tell"; }, subagents: { spawn(tasks, effort) { delegated.push({ tasks, effort }); return "Started reader."; }, tell(name, message) { delegated.push({ name, message }); return "Sent."; } } });
 main.send("Work", "now", "user");
 for await (const event of main.events) if (event.kind === "end") break;
 main.close();
-const child = claude.open("view and saved agent chat", options);
+const child = claude.open("view and saved subagent chat", options);
 child.send("Agent task", "now", "membr");
 child.send("Agent correction", "next", "membr");
 for await (const event of child.events) if (event.kind === "end" && event.through === 2) break;

@@ -197,7 +197,7 @@ export class Log {
     if (previous) return { answer: previous, entry: null, fresh: false };
     const entry = refusal ? null : act.act === "say"
       ? this.entry("user", act.text, act.images)
-      : act.act === "stop" && act.agent === null ? this.entry("note", "The user stopped the turn.")
+      : act.act === "stop" && act.subagent === null ? this.entry("note", "The user stopped the turn.")
       : act.act === "goal" && act.text === null && this.savedGoal.value !== null ? this.entry("note", "Goal halted by the user.") : null;
     const pick = !refusal && act.act === "pick" ? { revision: (this.savedPick?.revision ?? 0) + 1, value: act.pick } : undefined;
     const goal = !refusal && act.act === "goal" ? { revision: this.savedGoal.revision + 1, value: act.text } : undefined;
