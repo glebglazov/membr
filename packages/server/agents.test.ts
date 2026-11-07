@@ -22,13 +22,13 @@ afterEach(async () => {
 // The Engine holds a turn open on "hold" and ends it on any other message.
 const engine = () => new FakeEngine((epoch, message) => { if (message.text !== "hold") epoch.emit(END); });
 
-function start(agents: Array<{ name: string; prompt?: string; home?: string }>) {
+function start(agents: Array<{ name: string; prompt?: string; common?: string; home?: string }>) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "membr-agents-")));
   dirs.push(dir);
   const fake = engine();
   let config: Config = testConfig(dir, agents);
   const hub = serveHub({ dir, port: 0, engine: fake, config: () => config }); hubs.push(hub);
-  return { dir, hub, fake, url: hub.server.url, setConfig: (next: Array<{ name: string; prompt?: string; home?: string }>) => { config = testConfig(dir, next); } };
+  return { dir, hub, fake, url: hub.server.url, setConfig: (next: Array<{ name: string; prompt?: string; common?: string; home?: string }>) => { config = testConfig(dir, next); } };
 }
 async function join(server: ReturnType<typeof start>, agent: string | null) {
   const socket = new URL(agent === null ? "/ws" : `/membr/${agent}/ws`, server.url);
@@ -138,6 +138,17 @@ test("a reload opens a room for a new agent and closes the room of a removed one
   expect(new Log(storeDir(server.dir, "notes")).entries.map((entry) => entry.text)).toContain("Hello notes");
   expect(server.fake.epochs.find((epoch) => epoch.options.append.endsWith("I take notes."))).toBeDefined();
   expect(new Log(storeDir(server.dir, "research")).entries.map((entry) => entry.text)).toContain("Keep this");
+});
+
+test("the top-level prompt comes first in every agent's system prompt, and a reload that changes it renews each agent's epoch", async () => {
+  const server = start([{ name: "default", common: "You are Ada." }, { name: "research", common: "You are Ada.", prompt: "I find sources." }]);
+  const main = await join(server, null);
+  const research = await join(server, "research");
+  for (const epoch of server.fake.epochs) expect(epoch.options.append).toStartWith("You are Ada.\n\nYou work in a single chat that never ends.");
+  server.setConfig([{ name: "default", common: "You are Bo." }, { name: "research", common: "You are Bo.", prompt: "I find sources." }]);
+  main.act({ type: "act", act: "reload", id: "reload" });
+  await main.wait("entry", 0, (event) => event.entry.text === "Config reloaded: the prompt changed.");
+  await research.wait("entry", 0, (event) => event.entry.text === "Config reloaded: the prompt changed.");
 });
 
 test("a reload that changes one agent's prompt writes a note in that agent only", async () => {

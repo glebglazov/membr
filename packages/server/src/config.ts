@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 // One agent: an endless chat with its own store. home is the directory the Engine runs in, which decides its harness.
-// prompt is the agent's own system prompt text. approvalTimeout (ms) is how long an unattended approval waits.
-export type AgentConfig = Readonly<{ name: string; home: string; prompt: string; approvalTimeout: number }>;
+// prompt is the agent's own system prompt text. common is the top-level prompt that every agent gets before membr's own.
+// approvalTimeout (ms) is how long an unattended approval waits.
+export type AgentConfig = Readonly<{ name: string; home: string; prompt: string; common: string; approvalTimeout: number }>;
 
 // Where the hub listens. tailscale puts the loopback port on the tailnet, so it needs host 127.0.0.1.
 export type Listen = Readonly<{ port: number; host: string; tailscale: boolean }>;
@@ -15,6 +16,9 @@ export type Config = Readonly<{ listen: Listen; agents: ReadonlyMap<string, Agen
 
 export const DEFAULT_AGENT = "default";
 export const APPROVAL_TIMEOUT = 10 * 60_000;
+// Who the agents are and how they work. membr's own prompt, which explains the view, zoom and the notebook, stays in code,
+// because it must change with the tools it describes.
+export const COMMON_PROMPT = "You are Unii, an AI agent that works for one user.\n\nDo the user's tasks yourself, with your tools, following the user's instructions. Use the latest information in the chat.";
 const DAY = 24 * 60 * 60_000;
 const LOOPBACK = "127.0.0.1";
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
@@ -69,16 +73,20 @@ function object(value: unknown, key: string): Record<string, unknown> {
 }
 
 // A relative home starts at the base directory, because a launchd service starts there and not where the user typed membr.
-function agent(dir: string, name: string, raw: unknown): AgentConfig {
+function promptText(value: unknown, key: string): string {
+  if (typeof value !== "string" && !(Array.isArray(value) && value.every((line) => typeof line === "string"))) throw new Error(`config.json: ${key} must be a string or a list of strings`);
+  return Array.isArray(value) ? value.join("\n") : value;
+}
+
+function agent(dir: string, name: string, raw: unknown, common: string): AgentConfig {
   const key = `agents.${name}`;
   const values = object(raw, key);
   for (const unknown of Object.keys(values).filter((k) => !AGENT_KEYS.has(k))) throw new Error(`config.json: ${key}.${unknown} is not a key of an agent (use prompt, home or approvalTimeout)`);
   const { prompt = "", home } = values;
-  if (typeof prompt !== "string" && !(Array.isArray(prompt) && prompt.every((line) => typeof line === "string"))) throw new Error(`config.json: ${key}.prompt must be a string or a list of strings`);
   if (home !== undefined && (typeof home !== "string" || home === "")) throw new Error(`config.json: ${key}.home must be a path`);
   const homePath = home === undefined ? path.join(storeDir(dir, name), "home") : path.resolve(dir, expand(home));
   if (home !== undefined && !fs.statSync(homePath, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`config.json: ${key}.home: ${homePath} is not a directory`);
-  return { name, home: homePath, prompt: Array.isArray(prompt) ? prompt.join("\n") : prompt, approvalTimeout: duration(values.approvalTimeout, `${key}.approvalTimeout`) };
+  return { name, home: homePath, prompt: promptText(prompt, `${key}.prompt`), common, approvalTimeout: duration(values.approvalTimeout, `${key}.approvalTimeout`) };
 }
 
 export function readConfig(dir: string): Config {
@@ -87,10 +95,11 @@ export function readConfig(dir: string): Config {
   for (const key of Object.keys(MOVED)) if (key in values) throw new Error(`config.json: ${MOVED[key]}`);
   const entries = object(values.agents ?? {}, "agents");
   const agents = new Map<string, AgentConfig>();
+  const common = values.prompt === undefined ? COMMON_PROMPT : promptText(values.prompt, "prompt");
   for (const [name, raw] of Object.entries({ [DEFAULT_AGENT]: {}, ...entries })) {
     const error = agentNameError(name);
     if (error) throw new Error(`config.json: agents: ${error}`);
-    agents.set(name, agent(dir, name, raw));
+    agents.set(name, agent(dir, name, raw, common));
   }
   return { listen: listen(values), agents };
 }

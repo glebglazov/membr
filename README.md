@@ -128,6 +128,10 @@ The server reads `config.json` in the base directory. All keys are optional:
   "port": 8788,
   "host": "127.0.0.1",
   "tailscale": true,
+  "prompt": [
+    "You are Unii, an AI agent that works for one user.",
+    "Use British spelling."
+  ],
   "agents": {
     "default": {
       "home": "~/Documents/vault"
@@ -148,6 +152,13 @@ The server reads `config.json` in the base directory. All keys are optional:
   `127.0.0.1`.
 - `tailscale` puts the server on your tailnet when it is `true`. The default is
   `false`. It needs `host` to be `127.0.0.1`.
+- `prompt` is the system prompt that every agent gets: who the agents are and
+  how they work. Write a string, or a list of strings that membr joins with
+  new lines. The default says that the agent is Unii, which does the user's
+  tasks itself and follows the user's instructions. An empty string gives no
+  such prompt. membr adds its own prompt after it, which teaches the agent to
+  read its memory and keep its notebook. That part is in membr's code, because
+  it changes with the tools that it explains.
 - `agents` has one entry for each agent. The key is the agent's name: a letter,
   then letters, digits, `-` or `_`, 64 characters at most. `server`, `agent`
   and `help` are membr commands, so they cannot be names. The agent `default`
@@ -156,8 +167,8 @@ The server reads `config.json` in the base directory. All keys are optional:
 The keys of an agent:
 
 - `prompt` is the agent's system prompt, for example its task. Write a string,
-  or a list of strings that membr joins with new lines. membr adds it after its
-  own prompt, which teaches the agent to read its memory.
+  or a list of strings that membr joins with new lines. membr adds it after the
+  top-level `prompt` and its own prompt.
 - `home` is the directory that the agent works in. Claude Code loads the
   harness from it: `CLAUDE.md`, the `.claude/` settings, skills, plugins and
   `.mcp.json`. A relative path starts at the base directory. If you do not set
@@ -184,8 +195,8 @@ so open the chat again at the new address. If the server cannot listen on the
 new address, it keeps the old config and `membr server reload` shows why. A new
 agent entry starts the agent at once. A removed entry stops the agent and
 closes its clients; its files stay in `agents/<name>/`. A new `approvalTimeout`
-applies at once. A new `home` or `prompt` applies in a new epoch of that agent
-only. If a turn runs, the new epoch starts when the turn ends. The server
+applies at once. A new `home` or `prompt` of an agent applies in a new epoch of that
+agent only. A new top-level `prompt` applies in a new epoch of every agent. If a turn runs, the new epoch starts when the turn ends. The server
 writes a note in the agent's chat that tells the agent what changed. The first
 turn in the new epoch reads the full view without the prompt cache, so it costs
 more. If the file has an error, the server keeps the old config.

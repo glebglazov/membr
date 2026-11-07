@@ -169,7 +169,7 @@ export class Chat {
   private opening(upto?: number): string { return block(this.notebook.current) + this.view.text(upto); }
 
   private harness(config: AgentConfig): { cwd: string; append: string } {
-    return { cwd: config.home, append: `${this.prompt}\n\nIn membr, you are the agent "${config.name}".` + (config.prompt ? "\n\n" + config.prompt : "") };
+    return { cwd: config.home, append: [config.common, this.prompt, `In membr, you are the agent "${config.name}".`, config.prompt].filter(Boolean).join("\n\n") };
   }
 
   // approvalTimeout takes effect at once. A new home or prompt needs a new epoch, because Claude Code reads both when a session starts.

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Entry } from "@membr/protocol";
 import { serveHub } from "./src/hub.ts";
-import { readConfig, storeDir } from "./src/config.ts";
+import { COMMON_PROMPT, readConfig, storeDir } from "./src/config.ts";
 import { TestClient } from "./test/client.ts";
 import { END, FakeEngine } from "./test/engine.ts";
 import { defaultStore } from "./test/config.ts";
@@ -57,9 +57,20 @@ test("an agent is read with its name, a prompt string or list of lines, and its 
   writeConfig(dir, { agents: { research: { prompt: ["You research.", "", "Cite sources."] }, notes: { prompt: "Take notes." } } });
   const config = readConfig(dir);
   expect([...config.agents.keys()]).toEqual(["default", "research", "notes"]);
-  expect(config.agents.get("research")).toEqual({ name: "research", home: path.join(dir, "agents", "research", "home"), prompt: "You research.\n\nCite sources.", approvalTimeout: 600_000 });
+  expect(config.agents.get("research")).toEqual({ name: "research", home: path.join(dir, "agents", "research", "home"), prompt: "You research.\n\nCite sources.", common: COMMON_PROMPT, approvalTimeout: 600_000 });
   expect(config.agents.get("notes")!.prompt).toBe("Take notes.");
   expect(config.agents.get("default")!.prompt).toBe("");
+});
+
+test("the top-level prompt reaches every agent, is the built-in one when unset, and may be empty", () => {
+  const dir = directory();
+  expect(agentOf(dir).common).toBe(COMMON_PROMPT);
+  writeConfig(dir, { prompt: ["You are Ada.", "Be brief."], agents: { research: {} } });
+  expect([...readConfig(dir).agents.values()].map((agent) => agent.common)).toEqual(["You are Ada.\nBe brief.", "You are Ada.\nBe brief."]);
+  writeConfig(dir, { prompt: "" });
+  expect(agentOf(dir).common).toBe("");
+  writeConfig(dir, { prompt: 7 });
+  expect(() => readConfig(dir)).toThrow("config.json: prompt must be a string or a list of strings");
 });
 
 test("a reserved or malformed agent name is refused", () => {

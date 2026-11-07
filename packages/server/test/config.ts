@@ -5,7 +5,7 @@ import { APPROVAL_TIMEOUT, DEFAULT_AGENT, storeDir, type AgentConfig, type Confi
 export function testConfig(dir: string, agents: Array<Partial<AgentConfig> & { name: string }> = [{ name: DEFAULT_AGENT }]): Config {
   return {
     listen: { port: 0, host: "127.0.0.1", tailscale: false },
-    agents: new Map(agents.map((agent) => [agent.name, { name: agent.name, home: agent.home ?? path.join(storeDir(dir, agent.name), "home"), prompt: agent.prompt ?? "", approvalTimeout: agent.approvalTimeout ?? APPROVAL_TIMEOUT }])),
+    agents: new Map(agents.map((agent) => [agent.name, { name: agent.name, home: agent.home ?? path.join(storeDir(dir, agent.name), "home"), prompt: agent.prompt ?? "", common: agent.common ?? "", approvalTimeout: agent.approvalTimeout ?? APPROVAL_TIMEOUT }])),
   };
 }
 
