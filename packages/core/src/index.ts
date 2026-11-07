@@ -1,13 +1,13 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import { epochLimit, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
+import { epochLimit, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Notebook, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
 export type SubagentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
 export type Proposal = { when: When; text: string; next: string[] };
-export type Page = "chat" | "tree" | "schedules";
+export type Page = "chat" | "tree" | "schedules" | "notebook";
 export type Model = {
   importPlan: { id: string; input: ImportInput; estimate: ImportEstimate | null } | null;
   imports: ImportStatus[];
@@ -36,6 +36,7 @@ export type Model = {
   // every agent of the server, for the switcher
   agents: AgentInfo[];
   schedules: ScheduleView[];
+  notebook: Notebook | null;
   // One /schedule request: the read in flight, then what the server understood.
   preview: { id: string; text: string; proposal: Proposal | null } | null;
 };
@@ -60,6 +61,7 @@ export type Input =
   | { type: "schedule-accept"; id: string; run?: ScheduleSpec["run"]; missed?: ScheduleSpec["missed"] }
   | { type: "schedule-discard" }
   | { type: "schedule-act"; id: string; schedule: string; change: "accept" | "pause" | "resume" | "unschedule" }
+  | { type: "notebook-save"; id: string; text: string; base: number }
   | { type: "flush" }
   | { type: "reads" };
 export type ConnectionEvent = { type: "connecting" | "offline" };
@@ -79,7 +81,7 @@ export function createModel(): Model {
     importPlan: null, imports: [],
     subagent: null, subagents: new Map(), attachments: [], uploads: new Map(),
     connection: "offline", entries: new Map(), live: "", parts: [], turn: null, nodes: new Map(), open: new Set(),
-    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], agents: [], schedules: [], preview: null,
+    roots: null, page: "chat", folded: false, reads: new Map(), readSequence: 0, pending: new Map(), error: null, info: null, approvals: new Map(), skills: [], agents: [], schedules: [], notebook: null, preview: null,
     state: { busy: false, wait: "", goal: null, pick: null, subagents: [], usage: null },
   };
 }
@@ -110,6 +112,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
     case "skills": return { ...model, skills: event.skills };
     case "agents": return { ...model, agents: event.agents };
     case "schedules": return { ...model, schedules: event.schedules };
+    case "notebook": return event.notebook.revision < (model.notebook?.revision ?? 0) ? model : { ...model, notebook: event.notebook };
     case "when": {
       if (model.preview?.id !== event.id) return model;
       const reads = new Map(model.reads); reads.delete(event.id);
@@ -253,6 +256,7 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
       : input.change === "unschedule" ? { type: "act", act: "unschedule", id, schedule }
       : { type: "act", act: "pause", id, schedule, paused: input.change === "pause" }]);
   }
+  if (input.type === "notebook-save") return post(model, [{ type: "act", act: "notebook", id: input.id, text: input.text, base: input.base }]);
   if (input.type === "dismiss-info") return output({ ...model, info: null });
   if (input.type === "send" && input.text.trim().startsWith("/")) return model.attachments.length
     ? output({ ...model, error: "Remove images before you use a command." }) : command(model, input);

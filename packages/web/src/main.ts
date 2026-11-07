@@ -1,7 +1,7 @@
 import { h, render, type ComponentChild } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { accept, act, brief, complete, createModel, hear, rows, partKey, effectivePick, answering, cacheShare, inputTokens, epochWords, epochLimit, clientZone, describeWhen, fireTime, runLabel, MODELS, EFFORTS, type Attachment, type Upload, type Input, type Row, type Command } from "@membr/core";
-import { VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
+import { NOTEBOOK_CAP, VERSION, parseEvent, type Entry, type ImportSource, type ScheduleSpec, type ScheduleView } from "@membr/protocol";
 import "./style.css";
 import { readExport } from "./export.ts";
 import { Markdown } from "./markdown.ts";
@@ -304,6 +304,49 @@ function SchedulesPage() {
     schedules.map((schedule) => h(ScheduleCard, { schedule, key: schedule.id })));
 }
 
+const bytesOf = (text: string) => new TextEncoder().encode(text).length;
+
+function NotebookPage() {
+  // from: the revision the edit started from. saving: the act in flight, so a refusal keeps the draft.
+  const [editing, setEditing] = useState<{ from: number; draft: string } | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  useEffect(() => {
+    if (saving === null || model.pending.has(saving)) return;
+    setSaving(null);
+    if (!model.error) setEditing(null);
+  });
+  const notebook = model.notebook;
+  if (!notebook) return h("p", { class: "empty" }, "Loading the notebook...");
+  const used = editing ? bytesOf(editing.draft) : bytesOf(notebook.text);
+  const newer = editing !== null && notebook.revision > editing.from;
+  const by = notebook.by === null ? "" : ` · changed by ${notebook.by === "agent" ? "the agent" : "you"}`;
+  const save = () => {
+    if (!editing || used > NOTEBOOK_CAP || model.connection !== "ready") return;
+    const request = id();
+    setSaving(request);
+    input({ type: "notebook-save", id: request, text: editing.draft, base: notebook.revision });
+  };
+  return h("div", { class: "notebook" },
+    h("div", { class: "notebook-bar" },
+      h("span", { class: "label" }, `Revision ${notebook.revision}${by}`),
+      h("span", { class: "grow" }),
+      h("a", { class: "ghost small", href: "notebook.md", download: "" }, "Download"),
+      !editing && h("button", { type: "button", class: "primary small", onClick: () => setEditing({ from: notebook.revision, draft: notebook.text }) }, "Edit")),
+    editing
+      ? h("div", { class: "notebook-edit" },
+        newer && h("section", { class: "notebook-newer", "aria-label": "Newer notebook" },
+          h("p", { class: "label" }, `${notebook.by === "agent" ? "The agent" : "Someone"} changed the notebook to revision ${notebook.revision} while you edited. Your draft is kept. Save replaces this text with your draft.`),
+          h("pre", null, notebook.text)),
+        h("textarea", { "aria-label": "Notebook text", value: editing.draft, rows: 18, onInput: (event: Event) => { if (event.currentTarget instanceof HTMLTextAreaElement) setEditing({ ...editing, draft: event.currentTarget.value }); } }),
+        h("div", { class: "notebook-bar" },
+          h("span", { class: used > NOTEBOOK_CAP ? "over" : "label", role: "status", "aria-label": "Notebook size" }, `${used} / ${NOTEBOOK_CAP}`),
+          h("span", { class: "grow" }),
+          h("button", { type: "button", class: "ghost", onClick: () => setEditing(null) }, "Cancel"),
+          h("button", { type: "button", class: "primary", disabled: used > NOTEBOOK_CAP || saving !== null || model.connection !== "ready", onClick: save }, "Save")))
+      : notebook.text === "" ? h("p", { class: "empty" }, "The notebook is empty.") : h(Markdown, { text: notebook.text, diagrams: false }),
+    !editing && h("p", { class: "label" }, `${used} / ${NOTEBOOK_CAP} bytes`));
+}
+
 function CommandMenu({ commands, selected, choose }: { commands: Command[]; selected: number; choose: (command: Command) => void }) {
   const list = useRef<HTMLUListElement>(null);
   useEffect(() => { list.current?.children[selected]?.scrollIntoView({ block: "nearest" }); }, [selected, commands]);
@@ -329,7 +372,7 @@ function App() {
   const scroll = useChatScroll(model.page === "chat" && (model.subagent !== null || !model.folded), { log: model.subagent ?? "", entries: subagent?.entries ?? model.entries, live: subagent?.live ?? model.live, ready: model.connection === "ready" && (model.subagent === null || subagent?.loaded === true) });
   changed = () => update((value) => value + 1);
   useEffect(() => {
-    const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : location.hash === "#schedules" ? "schedules" : "chat" });
+    const page = () => input({ type: "page", page: location.hash === "#tree" ? "tree" : location.hash === "#schedules" ? "schedules" : location.hash === "#notebook" ? "notebook" : "chat" });
     page();
     window.addEventListener("hashchange", page);
     return () => { window.removeEventListener("hashchange", page); };
@@ -380,7 +423,7 @@ function App() {
     h("header", { ref: scroll.header },
       h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
       h(AgentSwitch, null),
-      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory"), h("a", { href: "#schedules", "aria-current": model.page === "schedules" ? "page" : undefined }, "Schedules")),
+      h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory"), h("a", { href: "#schedules", "aria-current": model.page === "schedules" ? "page" : undefined }, "Schedules"), h("a", { href: "#notebook", "aria-current": model.page === "notebook" ? "page" : undefined }, "Notebook")),
       h("div", { class: "meta" },
         h("span", { class: `pulse ${tone}`, "aria-hidden": "true" }),
         h("span", { role: "status" }, status),
@@ -388,14 +431,15 @@ function App() {
         model.state.subagents.length > 0 && h("span", { class: "at-work" }, `${model.state.subagents.length} subagent${model.state.subagents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.subagent === null ? "Chat" : `${model.subagent} log` },
+    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.page === "notebook" ? "Notebook" : model.subagent === null ? "Chat" : `${model.subagent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.page === "schedules" && h("h2", null, "Schedules"),
+      model.page === "notebook" && h("h2", null, "Notebook"),
       model.info && h("section", { class: "info", "aria-label": "Command information" }, h("pre", null, model.info), h("button", { type: "button", class: "ghost", onClick: () => input({ type: "dismiss-info" }) }, "Close command information")),
       chatting && body.length > 0 && h("div", { class: "fold-bar" },
         model.folded && h("span", { class: "label" }, "The whole chat in the fewest blocks."),
         h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "fold" }) }, model.folded ? "Unfold all" : "Fold all")),
-      model.page === "schedules" ? h(SchedulesPage, null) : subagent ? [
+      model.page === "schedules" ? h(SchedulesPage, null) : model.page === "notebook" ? h(NotebookPage, null) : subagent ? [
         h("div", { key: "title", class: "subagent-title" },
           h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "subagent", name: null }) }, "← Main chat"),
           h("h2", null, model.subagent),

@@ -19,11 +19,13 @@ const SUB_HEAD = `You are a subagent of membr, an AI agent that works for one us
 single chat that never ends. membr gave you a task. Do it yourself, with
 your tools, following the user's instructions in this prompt.
 
-Your first message holds the main view, then your chat with membr so far,
-its lines as "i|kind: text". Use the view as context only. Do what your task
-says, not what the user's last message says. membr may have given you only
-part of the work. Your final reply is your report to membr. membr may send
-you more messages while you work. Answer the last message.`;
+Your first message holds the main agent's notebook, then the main view, then
+your chat with membr so far, its lines as "i|kind: text". Use the view as
+context only. The notebook is read-only for you: when it needs a change, say so
+in your report. Do what your task says, not what the user's last message says.
+membr may have given you only part of the work.
+Your final reply is your report to membr. membr may send you more messages
+while you work. Answer the last message.`;
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const RESTARTED = "Stopped: the server restarted.";
 
@@ -34,7 +36,7 @@ export class Subagents implements SubagentTools {
   private closed = false;
   private readonly restarted: Subagent[] = [];
 
-  constructor(dir: string, private readonly engine: Engine, private readonly options: () => EpochOptions, private readonly view: () => string, private readonly ask: Ask, private readonly emit: (event: Event) => void, private readonly change: () => void, private readonly report: (text: string, stopped: boolean, schedule?: string) => void) {
+  constructor(dir: string, private readonly engine: Engine, private readonly options: () => EpochOptions, private readonly opening: () => string, private readonly ask: Ask, private readonly emit: (event: Event) => void, private readonly change: () => void, private readonly report: (text: string, stopped: boolean, schedule?: string) => void) {
     this.dir = path.join(dir, "docs", "subagent");
     // Logs written before the rename live in docs/agent: move that folder over once.
     const legacy = path.join(dir, "docs", "agent");
@@ -141,8 +143,8 @@ export class Subagents implements SubagentTools {
 
   private start(subagent: Subagent, task: Task, effort: Effort | undefined, unattended: boolean): void {
     const halt = new AbortController();
-    const { subagents: _, schedules: __, ...options } = this.options();
-    const session = this.engine.open(this.view() + `\n\nYou are subagent ${subagent.name}.`, { ...options, append: options.append + "\n\n" + SUB_HEAD, pick: { ...options.pick, effort: effort ?? options.pick.effort }, ask: (tool, input, signal) => {
+    const { subagents: _, schedules: __, notebook: ___, ...options } = this.options();
+    const session = this.engine.open(this.opening() + `\n\nYou are subagent ${subagent.name}.`, { ...options, append: options.append + "\n\n" + SUB_HEAD, pick: { ...options.pick, effort: effort ?? options.pick.effort }, ask: (tool, input, signal) => {
       if (subagent.state.phase !== "running") return Promise.resolve(false);
       return this.ask(tool, input, signal ? AbortSignal.any([signal, halt.signal]) : halt.signal, unattended);
     } });

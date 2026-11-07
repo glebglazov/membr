@@ -10,9 +10,10 @@ import { query, createSdkMcpServer, tool, type Query, type SDKMessage, type Slas
 import { z } from "zod";
 import type { SubagentTools } from "./subagents.ts";
 import type { ScheduleTools } from "./schedules.ts";
+import type { NotebookTools } from "./notebook.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
-import { parseScheduleSpec, parseWhen, type Skill, type When } from "@membr/protocol";
+import { NOTEBOOK_CAP, parseScheduleSpec, parseWhen, type Skill, type When } from "@membr/protocol";
 
 declare const MEMBR_STANDALONE: boolean | undefined;
 
@@ -36,6 +37,7 @@ export type EpochOptions = {
   memory?: MemoryTools;
   subagents?: SubagentTools;
   schedules?: ScheduleTools;
+  notebook?: NotebookTools;
 };
 
 // `now` interrupts the running turn; `next` reaches it between tool calls
@@ -248,19 +250,26 @@ function open(view: string, options: EpochOptions): Epoch {
   const memory = options.memory;
   const subagents = options.subagents;
   const schedules = options.schedules;
-  const mcpServers = memory ? { memory: createSdkMcpServer({ name: "memory", version: "1", tools: [
-    tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With a subagent's name as id, give that subagent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
+  const notebook = options.notebook;
+  // free: membr answers the tool itself from its own Store, so it runs with no approval. The allow list is built from the flag.
+  const defs: Array<{ def: ReturnType<typeof tool<any>>; free?: true }> = memory ? [
+    { free: true, def: tool("zoom", "Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole. With a subagent's name as id, give that subagent's whole chat. A long text comes in pages from character at, saying where to go on.", { id: z.union([z.number().int(), z.string()]), n: z.number().int().optional(), at: z.number().int().optional() }, async ({ id, n, at }) => {
       const answer = memory.zoom(id, n, at);
       return { content: [{ type: "text", text: answer.text }, ...answer.images.map((image) => ({ type: "image" as const, ...image }))], isError: answer.error };
-    }, { annotations: { readOnlyHint: true } }),
-    tool("date", "The date and time of message id.", { id: z.number().int() }, async ({ id }) => ({ content: [{ type: "text", text: memory.date(id) }] }), { annotations: { readOnlyHint: true } }),
+    }, { annotations: { readOnlyHint: true } }) },
+    { free: true, def: tool("date", "The date and time of message id.", { id: z.number().int() }, async ({ id }) => ({ content: [{ type: "text", text: memory.date(id) }] }), { annotations: { readOnlyHint: true } }) },
+    ...(notebook ? [{ free: true as const, def: tool("notebook_edit", `Change your notebook: exact-text replacements, applied in order, all or none. Each old must occur exactly once in the notebook. old "" appends new on its own line. The notebook holds at most ${NOTEBOOK_CAP} bytes; an edit over that is refused: merge or remove entries first.`, { edits: z.array(z.object({ old: z.string(), new: z.string() })).min(1) }, async ({ edits }) => {
+      const answer = notebook.edit(edits);
+      return { content: [{ type: "text" as const, text: answer.text }], isError: answer.error };
+    }) }] : []),
     ...(subagents ? [
-      tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.object({ name: z.string(), task: z.string() })), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: subagents.spawn(tasks, effort) }] })),
-      tool("tell", "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it.", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: subagents.tell(name, message) }] })),
+      { def: tool("spawn", "Start one subagent per task, in parallel, and return their names at once. Name each one for its work in a few words, such as store-reader. Each one's report reaches you as a message \"[name] report\" when it finishes, and then the subagent is gone: for more work, spawn a new one. A subagent sees the view and the user's instructions, but knows what you want only from its task.", { tasks: z.array(z.object({ name: z.string(), task: z.string() })), effort: z.enum(EFFORTS).optional() }, async ({ tasks, effort }) => ({ content: [{ type: "text" as const, text: subagents.spawn(tasks, effort) }] })) },
+      { def: tool("tell", "Send a message to a subagent at work, by name. It reads it between its tool calls, and its report answers it.", { name: z.string(), message: z.string() }, async ({ name, message }) => ({ content: [{ type: "text" as const, text: subagents.tell(name, message) }] })) },
     ] : []),
-    ...(schedules ? [scheduleTool(schedules)] : []),
-  ] }) } : undefined;
-  const readTools = memory ? ["mcp__memory__zoom", "mcp__memory__date"] : [];
+    ...(schedules ? [{ def: scheduleTool(schedules) }] : []),
+  ] : [];
+  const mcpServers = memory ? { memory: createSdkMcpServer({ name: "memory", version: "1", tools: defs.map(({ def }) => def) }) } : undefined;
+  const freeTools = defs.filter(({ free }) => free).map(({ def }) => `mcp__memory__${def.name}`);
   const session = query({
     prompt: inbox,
     options: {
@@ -278,7 +287,7 @@ function open(view: string, options: EpochOptions): Epoch {
       includePartialMessages: true,
       persistSession: true,
       canUseTool: async (tool, input, { signal }) =>
-        (readTools.includes(tool) || await options.ask?.(tool, input, signal))
+        (freeTools.includes(tool) || await options.ask?.(tool, input, signal))
           ? { behavior: "allow", updatedInput: input }
           : { behavior: "deny", message: "The user did not allow this tool call." },
     },

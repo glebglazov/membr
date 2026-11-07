@@ -59,6 +59,10 @@ The phase of a turn in which membr waits for compression to write the lines that
 A task text with a time (one ISO time, or a cron and a time zone name), stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
 _Avoid_: job, cron, timer, reminder
 
+**Notebook**:
+A small markdown text of at most 8192 bytes that holds what is true now: the user's preferences, standing decisions, and where things are. It belongs to one agent, and is stored in the log, one revision for each change. The agent changes it with its `notebook_edit` tool, and the user in the web client. It starts every epoch and every subagent's first message, before the view. The chat history is the record of what happened. The notebook is what stays true.
+_Avoid_: memory file, notes
+
 **Fire**:
 One run of a schedule at one of its times. Its act id holds the schedule and the time, so a fire is never written two times. A fire that membr missed runs late one time, or is skipped.
 _Avoid_: trigger, tick, occurrence

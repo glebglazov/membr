@@ -56,6 +56,9 @@ class Prefixes {
   get share() { return this.samples.reduce((n, s) => n + s.reuse, 0) / this.samples.reduce((n, s) => n + s.input, 0); }
 }
 
+// The 64 KB budget is the view's: the notebook block before it has its own cap.
+const withoutNotebook = (view: string) => view.slice(view.indexOf("The following chat"));
+
 test("3000 protocol messages retain at least 95% prompt prefixes and rotate only at complete batches", async () => {
   const turns = new Prefixes(), compactions = new Prefixes();
   const transcripts = new Map<FakeEpoch, string>();
@@ -68,10 +71,10 @@ test("3000 protocol messages retain at least 95% prompt prefixes and rotate only
     override open(view: string, options: Parameters<FakeEngine["open"]>[1]) {
       if (this.epochs.length) {
         expect(this.epochs.at(-1)!.closed).toBe(true);
-        expect(Buffer.byteLength(view)).toBeLessThanOrEqual(64000);
+        expect(Buffer.byteLength(withoutNotebook(view))).toBeLessThanOrEqual(64000);
         const state = saved(dir);
         const all = state.lines.map((part) => `${part.i * 2 ** part.l}+${2 ** part.l}|${part.text.replace(/\s*\n\s*/g, " ")}\n`).join("");
-        expect(Buffer.byteLength(view.slice(0, view.indexOf("<chat>\n")) + `<chat>\n${all}</chat>\n`)).toBeLessThanOrEqual(64000);
+        expect(Buffer.byteLength(withoutNotebook(view).slice(0, withoutNotebook(view).indexOf("<chat>\n")) + `<chat>\n${all}</chat>\n`)).toBeLessThanOrEqual(64000);
         const body = state.lines.filter((line) => (line.i + 1) * 2 ** line.l <= messages).map((line) => `${line.i * 2 ** line.l}+${2 ** line.l}|${line.text.replace(/\s*\n\s*/g, " ")}\n`).join("");
         expect(view.slice(view.indexOf("<chat>\n"))).toBe(`<chat>\n${body}</chat>\n`);
       }
@@ -231,7 +234,7 @@ test("a batch fits the complete view with a large pending tail and sends every i
   }
   expect(covered).toBe(hub.cutoff + pending.length + 1);
   const body = lines.map((part) => `${part.i * 2 ** part.l}+${2 ** part.l}|${part.text.replace(/\s*\n\s*/g, " ")}\n`).join("");
-  const full = epoch.view.slice(0, epoch.view.indexOf("<chat>\n")) + `<chat>\n${body}</chat>\n`;
+  const full = withoutNotebook(epoch.view).slice(0, withoutNotebook(epoch.view).indexOf("<chat>\n")) + `<chat>\n${body}</chat>\n`;
   expect(Buffer.byteLength(full)).toBeLessThanOrEqual(64000);
 });
 

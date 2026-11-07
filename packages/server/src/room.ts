@@ -95,6 +95,7 @@ export class Room {
     send({ type: "imports", imports: this.imports.status });
     send(this.chat.skills);
     send(this.chat.schedules.event);
+    send(this.chat.notebook.event);
     send({ type: "agents", agents });
     send({ type: "ready", version: VERSION });
   }
@@ -106,6 +107,7 @@ export class Room {
   async message(client: Client, message: Exclude<ClientMessage, { type: "hello" }>): Promise<void> {
     const send = (event: Event) => client.send(JSON.stringify(event));
     if (message.type === "read") return await this.read(send, message);
+    if (message.type === "act" && message.act === "notebook") { send(this.chat.notebook.act(message)); return; }
     send(isScheduleAct(message) ? this.chat.schedules.act(message) : message.act === "import" || message.act === "go" ? await this.imports.act(message) : this.chat.act(message));
   }
 
@@ -165,6 +167,11 @@ export class Room {
   export(request: Request): Response {
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
     return Response.json(this.chat.export(), { headers: { "Content-Disposition": `attachment; filename="membr-${this.name}-memory.json"`, "Cache-Control": "no-store" } });
+  }
+
+  notebook(request: Request): Response {
+    if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
+    return new Response(this.chat.notebook.current.text, { headers: { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": `attachment; filename="${this.name}-notebook.md"`, "Cache-Control": "no-store" } });
   }
 
   async image(request: Request, name: string): Promise<Response> {

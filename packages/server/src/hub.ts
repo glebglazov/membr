@@ -96,6 +96,7 @@ export function serveHub(options: {
       }
       if (where.rest === "/act/say") return room.say(request, url.searchParams.get("id") ?? "");
       if (where.rest === "/export") return room.export(request);
+      if (where.rest === "/notebook.md") return room.notebook(request);
       if (where.rest.startsWith("/docs/images/")) return room.image(request, where.rest.slice("/docs/images/".length));
       return web(request, where.rest);
     },

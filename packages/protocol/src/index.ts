@@ -23,6 +23,11 @@ export type Schedule = ScheduleSpec & {
 export type Fired = { at: string; result: "ran" | "late" | "skipped"; entry: number | null };
 // next and done are derived on each send, never stored. done is a "once" schedule that has fired.
 export type ScheduleView = Omit<Schedule, "phase"> & { phase: Schedule["phase"] | "done"; next: string[]; last: Fired | null };
+// The hard cap on the notebook in UTF-8 bytes, one number for the server, the tools and every client.
+export const NOTEBOOK_CAP = 8192;
+export type NotebookAuthor = "agent" | "user";
+// revision 0 is the empty notebook that every agent starts with.
+export type Notebook = { revision: number; text: string; by: NotebookAuthor | null; date: string | null };
 export type Entry = {
   i: number;
   kind: "user" | "unii" | "tool" | "echo" | "work" | "note" | "ai";
@@ -47,8 +52,10 @@ export type Act = { type: "act"; id: string } & (
   | { act: "unschedule"; schedule: string }
   | { act: "pause"; schedule: string; paused: boolean }
   | { act: "accept"; schedule: string }
+  | { act: "notebook"; text: string; base: number }
 );
 export type ScheduleAct = Extract<Act, { act: typeof SCHEDULE_ACTS[number] }>;
+export type NotebookAct = Extract<Act, { act: "notebook" }>;
 export type Read = { type: "read"; id: string } & (
   | { read: "zoom"; part: Part }
   | { read: "root" }
@@ -92,6 +99,7 @@ export type Event =
   | { type: "skills"; skills: Skill[] }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "schedules"; schedules: ScheduleView[] }
+  | { type: "notebook"; notebook: Notebook }
   | { type: "when"; id: string; when: When; text: string; next: string[] }
   | { type: "error"; id: string | null; reason: string };
 export type ClientMessage = Hello | Act | Read;
@@ -239,6 +247,8 @@ export function parseClientMessage(value: unknown): ClientMessage {
       case "unschedule": return { ...base, act: "unschedule", schedule: id(v.schedule) };
       case "pause": return { ...base, act: "pause", schedule: id(v.schedule), paused: boolean(v.paused) };
       case "accept": return { ...base, act: "accept", schedule: id(v.schedule) };
+      // The cap is not checked here: its refusal must be a recorded answer, so a retry gets the same one.
+      case "notebook": return { ...base, act: "notebook", text: string(v.text), base: integer(v.base) };
       default: throw new Error("Unknown act");
     }
   }
@@ -279,6 +289,7 @@ export function parseEvent(value: unknown): Event {
     case "agents": return { type: "agents", agents: list(v.agents, (item) => { const a = object(item); return { name: id(a.name), busy: boolean(a.busy), about: string(a.about) }; }) };
     case "skills": return { type: "skills", skills: list(v.skills, (item) => { const k = object(item); return { name: id(k.name), description: string(k.description), argumentHint: string(k.argumentHint) }; }) };
     case "schedules": return { type: "schedules", schedules: list(v.schedules, scheduleView) };
+    case "notebook": { const n = object(v.notebook); return { type: "notebook", notebook: { revision: integer(n.revision), text: string(n.text), by: nullable(n.by, (by) => oneOf(by, ["agent", "user"])), date: nullable(n.date, instant) } }; }
     case "when": return { type: "when", id: id(v.id), when: parseWhen(v.when), text: string(v.text), next: list(v.next, instant) };
     case "state": {
       const s = object(v.state);

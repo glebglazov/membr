@@ -3,19 +3,20 @@
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import fs from "node:fs";
 import path from "node:path";
-import { parseEntry, parseEvent, parseFired, parsePick, parseSchedule, type Act, type Answer, type Entry, type Fired, type Pick, type ImportEstimate, type ImportMark, type Schedule, type ScheduleAct } from "@membr/protocol";
+import { parseEntry, parseEvent, parseFired, parsePick, parseSchedule, type Act, type Answer, type Notebook, type NotebookAct, type NotebookAuthor, type Entry, type Fired, type Pick, type ImportEstimate, type ImportMark, type Schedule, type ScheduleAct } from "@membr/protocol";
 import { syncDirectory } from "./durable.ts";
 import { Journal } from "./journal.ts";
 
 type Turn = { id: number; phase: "running" | "done" };
 type SavedPick = { revision: number; value: Pick };
 type SavedGoal = { revision: number; value: string | null };
+type SavedNotebook = { revision: number; text: string; by: NotebookAuthor; date: string };
 type SavedSchedule = { revision: number; value: Schedule };
 export type FireRecord = { schedule: string; at: string; result: Fired["result"] };
 export type AllowRule = { tool: string; input: Record<string, unknown> };
 type ImportRun = { paused: boolean; estimate: ImportEstimate };
 type ImportControl = { id: string; value: ImportRun };
-type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; allow?: AllowRule; importRun?: ImportControl; schedule?: SavedSchedule; fire?: FireRecord };
+type LogRecord = ({ act: string; ans: Answer } | { event: string }) & Partial<Entry> & { turn?: Turn; pick?: SavedPick; goal?: SavedGoal; notebook?: SavedNotebook; allow?: AllowRule; importRun?: ImportControl; schedule?: SavedSchedule; fire?: FireRecord };
 
 export function identity(dir: string, name: string): string {
   const file = path.join(dir, name);
@@ -51,6 +52,8 @@ export class Log {
   private readonly allowed: AllowRule[] = [];
   private savedPick: SavedPick | null = null;
   private savedGoal: SavedGoal = { revision: 0, value: null };
+  private savedNotebook: SavedNotebook | null = null;
+  private lastUser = 0;
   private readonly revisions = new Map<string, number>();
   private readonly saved = new Map<string, Schedule>();
   private readonly fired = new Map<string, Fired>();
@@ -84,6 +87,12 @@ export class Log {
         if (goal === null || typeof goal !== "object" || !("revision" in goal) || typeof goal.revision !== "number" || !Number.isSafeInteger(goal.revision) || goal.revision < 1 || !("value" in goal) || (goal.value !== null && typeof goal.value !== "string")) throw new Error(`Invalid goal in ${file}`);
         if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid goal in ${file}`);
         if (goal.revision > this.savedGoal.revision) this.savedGoal = { revision: goal.revision, value: goal.value };
+      }
+      if ("notebook" in raw) {
+        const saved = raw.notebook;
+        if (saved === null || typeof saved !== "object" || !("revision" in saved) || typeof saved.revision !== "number" || !Number.isSafeInteger(saved.revision) || saved.revision < 1 || !("text" in saved) || typeof saved.text !== "string" || !("by" in saved) || (saved.by !== "agent" && saved.by !== "user") || !("date" in saved) || typeof saved.date !== "string") throw new Error(`Invalid notebook in ${file}`);
+        if ("act" in raw && (!raw.ans || typeof raw.ans !== "object" || !("ok" in raw.ans) || raw.ans.ok !== true)) throw new Error(`Invalid notebook in ${file}`);
+        this.rememberNotebook({ revision: saved.revision, text: saved.text, by: saved.by, date: saved.date });
       }
       if ("turn" in raw) {
         const turn = raw.turn;
@@ -148,6 +157,12 @@ export class Log {
     return answer;
   }
 
+  private rememberNotebook(saved: SavedNotebook): void {
+    if (saved.revision <= (this.savedNotebook?.revision ?? 0)) return;
+    this.savedNotebook = saved;
+    if (saved.by === "user") this.lastUser = saved.revision;
+  }
+
   private rememberSchedule({ revision, value }: SavedSchedule): void {
     if (revision <= (this.revisions.get(value.id) ?? 0)) return;
     this.revisions.set(value.id, revision);
@@ -176,6 +191,8 @@ export class Log {
   get allows(): readonly AllowRule[] { return this.allowed; }
   get pick(): Pick | null { return this.savedPick?.value ?? null; }
   get goal(): SavedGoal { return this.savedGoal; }
+  get notebook(): Notebook { return this.savedNotebook ?? { revision: 0, text: "", by: null, date: null }; }
+  get notebookUser(): number { return this.lastUser; }
   get schedules(): ReadonlyMap<string, Schedule> { return this.saved; }
   lastFire(schedule: string): Fired | undefined { return this.fired.get(schedule); }
 
@@ -221,6 +238,22 @@ export class Log {
       ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
       : { type: "answer", id: act.id, ok: false, reason: options.refusal ?? `Act ${act.act} saved no schedule` };
     this.write({ ...entry, ...(act && answer ? { act: act.id, ans: answer } : { event: crypto.randomUUID() }), ...(saved ? { schedule: saved } : {}) });
+    return { answer, entry, fresh: true };
+  }
+
+  // text is the notebook after the change, not the operation, so the fold needs no replay logic. null saves nothing:
+  // an act that changes nothing still answers ok. A refused act records its refusal, so a retry gets the same answer.
+  saveNotebook(text: string | null, by: NotebookAuthor, act: NotebookAct | null, options: { refusal?: string; note?: string } = {}): { answer: Answer | null; entry: Entry | null; fresh: boolean } {
+    this.journal.check();
+    const previous = act && this.answers.get(act.id);
+    if (previous) return { answer: previous, entry: null, fresh: false };
+    const saved = text !== null && !options.refusal ? { revision: (this.savedNotebook?.revision ?? 0) + 1, text, by, date: new Date().toISOString() } : undefined;
+    const entry = saved && options.note !== undefined ? this.entry("note", options.note) : null;
+    const answer: Answer | null = act === null ? null : options.refusal === undefined
+      ? { type: "answer", id: act.id, ok: true, entry: entry?.i ?? null }
+      : { type: "answer", id: act.id, ok: false, reason: options.refusal };
+    if (!saved && !answer) return { answer, entry, fresh: false };
+    this.write({ ...entry, ...(act && answer ? { act: act.id, ans: answer } : { event: crypto.randomUUID() }), ...(saved ? { notebook: saved } : {}) });
     return { answer, entry, fresh: true };
   }
 
@@ -286,6 +319,7 @@ export class Log {
     if (record.pick) this.savedPick = record.pick;
     if (record.goal) this.savedGoal = record.goal;
     if (record.importRun) this.importRuns.set(record.importRun.id, record.importRun.value);
+    if (record.notebook) this.rememberNotebook(record.notebook);
     if (record.schedule) this.rememberSchedule(record.schedule);
     if (record.fire) this.rememberFire(record.fire.schedule, { at: record.fire.at, result: record.fire.result, entry: entry?.i ?? null });
     if (entry) {

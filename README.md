@@ -233,6 +233,24 @@ fire sends it as your message, word for word.
 - Fires happen only while the server runs. On macOS, launchd keeps it running
   (see [Start membr](#start-membr)).
 
+## The notebook
+
+Each agent has a notebook: a small markdown text of at most 8192 bytes that
+holds what is true now, such as your preferences, standing decisions and where
+things are. The agent keeps it current with its `notebook_edit` tool, and its
+first message in each epoch starts with it. The chat history stays the record
+of what happened.
+
+- The web client has a Notebook page next to Chat, Memory and Schedules. It
+  shows the text as markdown. Edit opens a text box with a byte counter, and
+  Save is off over 8192 bytes. If the agent changes the notebook while you edit,
+  the page shows its newer text next to your draft.
+- Download on that page gives the text as a `.md` file, the same as
+  `GET /membr/<name>/notebook.md`. The memory export of an agent
+  (`GET /membr/<name>/export`) includes the notebook.
+- Your edit reaches the agent with your next message, as a short diff. A
+  subagent reads the notebook but cannot change it.
+
 ## Install the standalone binary
 
 Install Bun and run `bun install`, then build the binary:
@@ -376,6 +394,17 @@ without the time words, and `next`. A text that membr cannot read gets an
 {"type":"act","id":"s-2","act":"accept","schedule":"k3x9q2"}
 {"type":"act","id":"s-3","act":"pause","schedule":"k3x9q2","paused":true}
 {"type":"act","id":"s-4","act":"unschedule","schedule":"k3x9q2"}
+```
+
+Each agent also has a notebook. The server sends a `notebook` event before
+`ready` and after each revision:
+`{"type":"notebook","notebook":{"revision":2,"text":"- Editor: helix","by":"user","date":ISO}}`.
+`by` is `"agent"` or `"user"`, and revision 0 is the empty notebook. One act
+saves your text, and `base` is the revision you edited. The server refuses a
+`base` that is not the current revision, and text over 8192 bytes:
+
+```json
+{"type":"act","id":"n-1","act":"notebook","text":"- Editor: helix","base":1}
 ```
 
 Reads use their own request ids:
