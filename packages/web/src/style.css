@@ -220,7 +220,8 @@ footer > .schedule-preview { margin-bottom: 10px; }
 .notebook .over { color: var(--red); font-weight: 600; }
 
 @media (max-width: 600px) {
-  header { gap: 10px; padding-top: 10px; padding-bottom: 10px; }
+  header { flex-wrap: wrap; gap: 8px 10px; padding-top: 10px; padding-bottom: 10px; }
+  header nav { order: 1; width: 100%; }
   h1 { font-size: 20px; }
   .usage { display: none; }
   main { width: calc(100% - 28px); padding-top: 18px; gap: 18px; }

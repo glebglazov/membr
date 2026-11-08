@@ -74,10 +74,10 @@ async function compressionUse(browser: Browser): Promise<void> {
     const page = await openChat(context, url);
     await expect(page.locator(".usage")).toHaveCount(0);
     await send(page, "A message long enough for Haiku to compress. " + "x".repeat(600));
-    await expect(page.locator(".usage")).toHaveText("epoch 42k / 160k (26%)");
+    await expect(page.locator(".usage")).toHaveText("epoch 42k / 150k (28%)");
     await page.locator("summary[aria-label=Settings]").click();
     await expect(page.getByLabel("Compression use")).toContainText("100 sent, 90.0% cached, 5 out");
-    await expect(page.getByLabel("Epoch size")).toContainText("42,000 of 160,000 tokens");
+    await expect(page.getByLabel("Epoch size")).toContainText("42,000 of 150,000 tokens");
   } });
 }
 
