@@ -420,7 +420,7 @@ function App() {
   const body = rows(model);
   const chatting = model.page === "chat" && model.subagent === null;
   return h("div", { class: "app" },
-    h("header", { ref: scroll.header },
+    h("header", null,
       h("h1", null, "membr", h("span", { class: "brand-dot", "aria-hidden": "true" }, ".")),
       h(AgentSwitch, null),
       h("nav", { "aria-label": "Pages" }, h("a", { href: "#chat", "aria-current": model.page === "chat" ? "page" : undefined }, "Chat"), h("a", { href: "#tree", "aria-current": model.page === "tree" ? "page" : undefined }, "Memory"), h("a", { href: "#schedules", "aria-current": model.page === "schedules" ? "page" : undefined }, "Schedules"), h("a", { href: "#notebook", "aria-current": model.page === "notebook" ? "page" : undefined }, "Notebook")),
@@ -431,7 +431,7 @@ function App() {
         model.state.subagents.length > 0 && h("span", { class: "at-work" }, `${model.state.subagents.length} subagent${model.state.subagents.length === 1 ? "" : "s"} at work`),
         h(Usage, null),
         h(Settings, null))),
-    h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.page === "notebook" ? "Notebook" : model.subagent === null ? "Chat" : `${model.subagent} log` },
+    h("div", { class: "scroller", ref: scroll.scroller }, h("main", { ref: scroll.main, "aria-label": model.page === "tree" ? "Memory tree" : model.page === "schedules" ? "Schedules" : model.page === "notebook" ? "Notebook" : model.subagent === null ? "Chat" : `${model.subagent} log` },
       model.page === "tree" && h("h2", null, "Memory tree"),
       model.page === "schedules" && h("h2", null, "Schedules"),
       model.page === "notebook" && h("h2", null, "Notebook"),
@@ -451,8 +451,8 @@ function App() {
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
         body.map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
         model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
-      ]),
-    h("footer", { ref: scroll.footer },
+      ])),
+    h("footer", null,
       scroll.hasUnseen && h("div", { class: "new-messages" }, h("button", { type: "button", class: "primary", onClick: scroll.goToUnseen }, "New messages")),
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),

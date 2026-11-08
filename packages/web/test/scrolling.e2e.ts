@@ -46,7 +46,7 @@ async function send(page: Page, text: string): Promise<void> {
 
 
 async function gap(page: Page) {
-  return page.evaluate(() => document.documentElement.scrollHeight - innerHeight - scrollY);
+  return page.evaluate(() => { const node = document.querySelector(".scroller")!; return node.scrollHeight - node.clientHeight - node.scrollTop; });
 }
 
 async function following(browser: Browser) {
@@ -62,6 +62,13 @@ async function following(browser: Browser) {
       await expect(page.getByLabel("Live reply", { exact: true })).toContainText(`Paragraph ${i}.`);
       await expect.poll(() => gap(page), { message: "New text follows to the actual document bottom." }).toBeLessThanOrEqual(2);
     }
+    const layout = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollHeight - innerHeight,
+      scrollerBottom: document.querySelector(".scroller")?.getBoundingClientRect().bottom,
+      footerTop: document.querySelector("footer")!.getBoundingClientRect().top,
+    }));
+    expect(layout.overflow, "Only the messages scroll, not the page.").toBeLessThanOrEqual(0);
+    expect(layout.scrollerBottom, "The messages scroll above the composer, not under it.").toBe(layout.footerTop);
     const body = reply + "\n```mermaid\nflowchart TD\n A[Start] --> B[Next] --> C[End]\n```";
     engine.epochs[0].emit({ kind: "text", text: body }, END);
     await expect(page.locator("figure.diagram svg")).toBeVisible();
@@ -84,12 +91,12 @@ async function reading(browser: Browser) {
     await page.mouse.move(400, 400);
     await page.mouse.wheel(0, -650);
     await expect.poll(() => gap(page)).toBeGreaterThan(500);
-    const top = await page.evaluate(() => scrollY);
+    const top = await page.evaluate(() => document.querySelector(".scroller")!.scrollTop);
     const first = "First unseen reply.\n\n".repeat(40);
     epoch.emit({ kind: "delta", text: first });
     const button = page.getByRole("button", { name: "New messages", exact: true });
     await expect(button).toBeVisible();
-    expect(await page.evaluate(() => scrollY), "New text does not move a reader.").toBe(top);
+    expect(await page.evaluate(() => document.querySelector(".scroller")!.scrollTop), "New text does not move a reader.").toBe(top);
     epoch.emit({ kind: "text", text: first });
     epoch.emit({ kind: "text", text: "Second unseen reply.\n\n".repeat(40) });
     await expect(page.locator("article.unii").last()).toContainText("Second unseen reply.");
@@ -101,14 +108,14 @@ async function reading(browser: Browser) {
     expect(bounds!.y).toBeLessThan(header!.height + 20);
     await expect(button).toHaveCount(0);
     await expect.poll(() => gap(page)).toBeGreaterThan(1000);
-    const readerTop = await page.evaluate(() => scrollY);
+    const readerTop = await page.evaluate(() => document.querySelector(".scroller")!.scrollTop);
     epoch.emit({ kind: "delta", text: "Third unseen reply.\n\n".repeat(20) });
     await expect(page.getByLabel("Live reply", { exact: true })).toContainText("Third unseen reply.");
     await expect(button).toBeVisible();
-    expect(await page.evaluate(() => scrollY), "A jump to a long reply does not resume following.").toBe(readerTop);
+    expect(await page.evaluate(() => document.querySelector(".scroller")!.scrollTop), "A jump to a long reply does not resume following.").toBe(readerTop);
     epoch.emit({ kind: "text", text: "Third unseen reply.\n\n".repeat(20) }, END);
     await expect(page.getByRole("status")).toHaveText("Ready");
-    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    await page.evaluate(() => { const node = document.querySelector(".scroller")!; node.scrollTo(0, node.scrollHeight); });
     await expect.poll(() => gap(page)).toBeLessThanOrEqual(2);
     await send(page, "Continue.");
     epoch.emit({ kind: "delta", text: "Another reply.\n\n".repeat(40) });

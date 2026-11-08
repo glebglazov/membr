@@ -6,15 +6,14 @@ type Position = { mode: "following" } | { mode: "reading"; unseen: Target | null
 type Content = { log: string; entries: ReadonlyMap<number, Entry>; live: string; ready: boolean };
 
 export function useChatScroll(enabled: boolean, content: Content) {
+  const scroller = useRef<HTMLDivElement>(null);
   const main = useRef<HTMLElement>(null);
-  const footer = useRef<HTMLElement>(null);
-  const header = useRef<HTMLElement>(null);
   const position = useRef<Position>({ mode: "following" });
   const previous = useRef(content);
   const active = useRef(enabled);
   active.current = enabled;
   const [, update] = useState(0);
-  const lastTop = useRef(window.scrollY);
+  const lastTop = useRef(0);
   const frame = useRef(0);
 
   function setPosition(next: Position) {
@@ -22,13 +21,17 @@ export function useChatScroll(enabled: boolean, content: Content) {
     position.current = next;
     if ((before.mode === "reading" && before.unseen !== null) !== (next.mode === "reading" && next.unseen !== null)) update((n) => n + 1);
   }
+  function top(): number {
+    return scroller.current?.scrollTop ?? 0;
+  }
   function atBottom(): boolean {
-    return document.documentElement.scrollHeight - window.innerHeight - window.scrollY <= 2;
+    const node = scroller.current;
+    return !node || node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
   }
   function bottom() {
     if (!active.current || position.current.mode !== "following") return;
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
-    lastTop.current = window.scrollY;
+    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "instant" });
+    lastTop.current = top();
   }
   function schedule() {
     cancelAnimationFrame(frame.current);
@@ -42,7 +45,7 @@ export function useChatScroll(enabled: boolean, content: Content) {
     const node = find(target);
     if (!node) return false;
     const rect = node.getBoundingClientRect();
-    return rect.bottom > (footer.current?.getBoundingClientRect().top ?? window.innerHeight);
+    return rect.bottom > (scroller.current?.getBoundingClientRect().bottom ?? window.innerHeight);
   }
   function followLatest() {
     setPosition({ mode: "following" });
@@ -53,23 +56,24 @@ export function useChatScroll(enabled: boolean, content: Content) {
     if (current.mode !== "reading" || !current.unseen) return;
     const node = find(current.unseen);
     setPosition({ mode: "reading", unseen: null });
-    if (node) window.scrollTo({ top: window.scrollY + node.getBoundingClientRect().top - (header.current?.getBoundingClientRect().bottom ?? 0) - 12, behavior: "instant" });
-    lastTop.current = window.scrollY;
+    if (node && scroller.current) scroller.current.scrollTo({ top: top() + node.getBoundingClientRect().top - scroller.current.getBoundingClientRect().top - 12, behavior: "instant" });
+    lastTop.current = top();
     if (atBottom()) followLatest();
   }
 
   useLayoutEffect(() => {
-    if (!enabled) return;
-    lastTop.current = window.scrollY;
+    const surface = scroller.current;
+    if (!enabled || !surface) return;
+    lastTop.current = top();
     const scroll = () => {
       if (atBottom()) setPosition({ mode: "following" });
-      else if (window.scrollY < lastTop.current - 1 && position.current.mode === "following") setPosition({ mode: "reading", unseen: null });
-      lastTop.current = window.scrollY;
+      else if (top() < lastTop.current - 1 && position.current.mode === "following") setPosition({ mode: "reading", unseen: null });
+      lastTop.current = top();
     };
     const wheel = (event: WheelEvent) => {
-      if (event.defaultPrevented || event.ctrlKey || event.deltaY >= 0 || window.scrollY === 0) return;
+      if (event.defaultPrevented || event.ctrlKey || event.deltaY >= 0 || top() === 0) return;
       let node = event.target instanceof Element ? event.target : null;
-      while (node && node !== document.body) {
+      while (node && node !== surface) {
         if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
         node = node.parentElement;
       }
@@ -82,17 +86,17 @@ export function useChatScroll(enabled: boolean, content: Content) {
       }
     };
     const observer = new ResizeObserver(schedule);
-    for (const node of [main.current, footer.current, header.current]) if (node) observer.observe(node, { box: "border-box" });
-    window.addEventListener("scroll", scroll, { passive: true });
-    window.addEventListener("wheel", wheel, { passive: true });
+    for (const node of [main.current, surface]) if (node) observer.observe(node, { box: "border-box" });
+    surface.addEventListener("scroll", scroll, { passive: true });
+    surface.addEventListener("wheel", wheel, { passive: true });
     window.addEventListener("keydown", key);
     window.addEventListener("resize", schedule);
     schedule();
     return () => {
       observer.disconnect();
       cancelAnimationFrame(frame.current);
-      window.removeEventListener("scroll", scroll);
-      window.removeEventListener("wheel", wheel);
+      surface.removeEventListener("scroll", scroll);
+      surface.removeEventListener("wheel", wheel);
       window.removeEventListener("keydown", key);
       window.removeEventListener("resize", schedule);
     };
@@ -122,5 +126,5 @@ export function useChatScroll(enabled: boolean, content: Content) {
     }
   }, [enabled, content.log, content.entries, content.live, content.ready]);
 
-  return { main, footer, header, hasUnseen: enabled && position.current.mode === "reading" && position.current.unseen !== null, goToUnseen, followLatest };
+  return { scroller, main, hasUnseen: enabled && position.current.mode === "reading" && position.current.unseen !== null, goToUnseen, followLatest };
 }

@@ -192,9 +192,9 @@ async function diagramZoom(browser: Browser): Promise<void> {
     await diagram.getByRole("button", { name: "Reset diagram zoom", exact: true }).click();
     await expect(svg).toHaveAttribute("viewBox", original!);
     await svg.hover();
-    const beforeWheel = await page.evaluate(() => scrollY);
+    const beforeWheel = await page.evaluate(() => document.querySelector(".scroller")!.scrollTop);
     await page.mouse.wheel(0, 120);
-    await expect.poll(() => page.evaluate(() => scrollY), { message: "An ordinary wheel scrolls the page over a diagram." }).toBeGreaterThan(beforeWheel);
+    await expect.poll(() => page.evaluate(() => document.querySelector(".scroller")!.scrollTop), { message: "An ordinary wheel scrolls the page over a diagram." }).toBeGreaterThan(beforeWheel);
     await expect(svg).toHaveAttribute("viewBox", original!);
     await page.setViewportSize({ width: 390, height: 844 });
     await svg.scrollIntoViewIfNeeded();
@@ -217,12 +217,12 @@ async function diagramZoom(browser: Browser): Promise<void> {
     await expect(svg).toHaveAttribute("viewBox", original!);
     await svg.scrollIntoViewIfNeeded();
     const touchBox = (await svg.boundingBox())!;
-    const beforeSwipe = await page.evaluate(() => scrollY);
+    const beforeSwipe = await page.evaluate(() => document.querySelector(".scroller")!.scrollTop);
     const touchX = touchBox.x + touchBox.width / 2, touchY = touchBox.y + touchBox.height / 2;
     await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: touchX, y: touchY, id: 1 }] });
     for (const delta of [15, 30, 45, 60]) await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: touchX, y: touchY - delta, id: 1 }] });
     await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await expect.poll(() => page.evaluate(() => scrollY), { message: "A one-finger swipe scrolls the page over a diagram." }).toBeGreaterThan(beforeSwipe);
+    await expect.poll(() => page.evaluate(() => document.querySelector(".scroller")!.scrollTop), { message: "A one-finger swipe scrolls the page over a diagram." }).toBeGreaterThan(beforeSwipe);
     await expect(svg).toHaveAttribute("viewBox", original!);
     for (const colorScheme of ["light", "dark"] as const) {
       const previous = await svg.getAttribute("id");
