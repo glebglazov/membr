@@ -12,7 +12,7 @@ import { View } from "./view.ts";
 import { pump } from "./pump.ts";
 import { next, turnId, busy, wait, refusal, canDelegate, canAsk, closed, unattended, type Turn, type Input, type Effect } from "./turn.ts";
 import { Notebook, block } from "./notebook.ts";
-import { Schedules, type Fire } from "./schedules.ts";
+import { Schedules, tell, type Fire } from "./schedules.ts";
 import { type Clock, systemClock } from "./clock.ts";
 import type { Memory } from "./memory.ts";
 import type { AgentConfig } from "./config.ts";
@@ -61,7 +61,7 @@ export class Chat {
       spawn: (tasks, effort) => { this.canDelegate(); return this.subagents.spawn(tasks, effort, unattended(this.turn)); },
       tell: (name, message) => { this.canDelegate(); return this.subagents.tell(name, message); },
     };
-    this.schedules = new Schedules(log, engine, { fire: (fire) => this.fire(fire), record: (entry) => this.record(entry) }, emit, clock);
+    this.schedules = new Schedules(log, engine, { fire: (fire) => this.fire(fire), record: (entry) => this.record(entry), home: () => this.options.cwd, store: dir }, emit, clock);
     this.options.schedules = this.schedules.tools;
     this.notebook = new Notebook(log, { record: (entry) => this.record(entry), emit });
     this.options.notebook = this.notebook.tools;
@@ -219,22 +219,38 @@ export class Chat {
     return names.length ? text + "\n\nSubagents at work now: " + names.join(", ") + "." : text;
   }
 
-  // A run "turn" fire starts only from idle. A run "subagent" fire waits while this schedule's last subagent works.
-  // The fire record and the entry that starts the run are one log line, so a fire is never written twice.
+  // A run "turn" fire of a time starts only from idle. A watch fire answers something the agent waits for, so it takes
+  // the path of a subagent report: it joins a running turn, or starts one. A run "subagent" fire waits while this
+  // schedule's last subagent works. The fire record and the entry that starts the run are one log line, so a fire is
+  // never written twice.
   private fire(fire: Fire): "started" | "wait" {
     const s = fire.schedule, at = new Date(fire.at).toISOString();
+    if (fire.event) {
+      if (!canDelegate(this.turn) || s.run === "subagent" && this.subagents.scheduled(s.id)) return "wait";
+      const text = tell(s, fire.event), record = { schedule: s.id, at, result: fire.event.kind === "ended" ? "ended" : "ran" } as const;
+      if (s.run === "subagent") {
+        const entry = this.log.fire(record, { kind: "note", text: `Watch ${s.id} started a subagent.` }, null);
+        if (entry) {
+          this.record(entry);
+          this.subagents.spawn([{ name: "schedule-" + s.id, task: text, from: "membr", schedule: s.id }]);
+        }
+        return "started";
+      }
+      try { this.run({ kind: "report", text, stopped: false, schedule: s.id, record }); } catch (error) { this.fail(error); }
+      return "started";
+    }
     if (s.run === "turn" ? this.turn.phase !== "idle" : !canDelegate(this.turn) || this.subagents.scheduled(s.id)) return "wait";
     if (fire.late) this.record(this.log.append("note", `Schedule ${s.id} was due at ${at} and runs late.`));
     const record = { schedule: s.id, at, result: fire.late ? "late" : "ran" } as const;
     if (s.run === "subagent") {
-      const entry = this.log.fire(record, { kind: "note", text: `Schedule ${s.id} started a subagent.` }, false);
+      const entry = this.log.fire(record, { kind: "note", text: `Schedule ${s.id} started a subagent.` }, null);
       if (entry) {
         this.record(entry);
         this.subagents.spawn([{ name: "schedule-" + s.id, task: s.text, from: s.author, schedule: s.id }]);
       }
       return "started";
     }
-    const entry = this.log.fire(record, { kind: s.author === "user" ? "user" : "note", text: s.text }, true);
+    const entry = this.log.fire(record, { kind: s.author === "user" ? "user" : "note", text: s.text }, "own");
     if (!entry) return "started";
     this.record(entry);
     try { this.run({ kind: "start", input: { text: s.text, from: s.author, fire: { schedule: s.id } }, id: entry.i }); } catch (error) { this.fail(error); }
@@ -352,7 +368,11 @@ export class Chat {
       }
       case "continueGoal": this.run({ kind: "continued", entry: this.log.continueGoal(effect.text) }); break;
       case "work":
-        this.record(this.log.work(effect.text, effect.id));
+        if (effect.record) {
+          const entry = this.log.fire(effect.record, { kind: "work", text: effect.text }, effect.id);
+          if (!entry) break;
+          this.record(entry);
+        } else this.record(this.log.work(effect.text, effect.id));
         if (effect.id !== null) this.run({ kind: "start", input: { text: effect.text, from: "membr", ...effect.fire ? { fire: effect.fire } : {} }, id: effect.id });
         break;
     }

@@ -4,7 +4,7 @@ import { act, clientZone, complete, createModel, fireTime, hear } from "./src/in
 
 const cron: When = { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" };
 const view = (id: string, phase: ScheduleView["phase"], extra: Partial<ScheduleView> = {}): ScheduleView => ({
-  id, text: "read the inbox notes", when: cron, run: "subagent", missed: "once", author: "user", phase, since: "2026-11-06T09:00:00.000Z", next: [], last: null, ...extra,
+  id, text: "read the inbox notes", when: cron, run: "subagent", missed: "once", author: "user", phase, since: "2026-11-06T09:00:00.000Z", next: [], last: null, running: false, ...extra,
 });
 const ready = () => hear(createModel(), { type: "ready", version: "1.0" });
 

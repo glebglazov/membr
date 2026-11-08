@@ -1,13 +1,16 @@
-import type { Answer, Entry, Event, Read, Schedule, ScheduleAct, ScheduleSpec, ScheduleView, When } from "@membr/protocol";
+import { WATCH_QUIET, type Answer, type Entry, type Event, type Read, type Schedule, type ScheduleAct, type ScheduleSpec, type ScheduleView, type When } from "@membr/protocol";
 import { type Clock, systemClock } from "./clock.ts";
 import { checkZone, fires, latestDue, parseCron } from "./cron.ts";
 import type { Engine } from "./engine.ts";
 import type { Log } from "./log.ts";
+import { BURST, Watcher, type WatchEvent } from "./watcher.ts";
 
-export type Fire = { schedule: Schedule; at: number; late: boolean };
+// event is set for a watch fire: what its command printed, or how it ended.
+export type Fire = { schedule: Schedule; at: number; late: boolean; event?: Exclude<WatchEvent, { kind: "burst" }> };
 // fire: Chat answers "wait" when it cannot start this run now, and a later tick tries again.
 // record: the notes Schedules writes reach the view and the clients through Chat, like every entry.
-export type ChatPort = { fire(fire: Fire): "started" | "wait"; record(entry: Entry): void };
+// home: the directory a watch's command runs in. store: the agent's store, which holds the watches' process ids.
+export type ChatPort = { fire(fire: Fire): "started" | "wait"; record(entry: Entry): void; home(): string; store: string };
 export type ScheduleTools = { create(spec: ScheduleSpec): string; list(): string; cancel(id: string): string };
 
 // After a Mac sleeps, ticks resume within a minute of the wake.
@@ -16,13 +19,36 @@ const CAP = 60_000;
 const GRACE = 120_000;
 
 const iso = (t: number) => new Date(t).toISOString();
-const describe = (when: When) => when.kind === "once" ? `once at ${when.at}` : `cron "${when.expr}" ${when.zone}`;
+const describe = (when: When) => when.kind === "once" ? `once at ${when.at}` : when.kind === "cron" ? `cron "${when.expr}" ${when.zone}` : `watch on ${when.on}: ${when.command}`;
+// A watch has no times: it fires when its command prints or exits.
+const next = (when: When, now: number, count: number) => when.kind === "watch" ? [] : fires(when, now, count);
 
 // A schedule must name a task and fire at least once after now. A bad cron field or zone throws with its name.
 function check(spec: ScheduleSpec, now: number): void {
   if (!spec.text.trim()) throw new Error("A schedule needs a task.");
+  if (spec.when.kind === "watch") {
+    if (!spec.when.command.trim()) throw new Error("A watch needs a command.");
+    if (spec.when.quiet < WATCH_QUIET.min || spec.when.quiet > WATCH_QUIET.max) throw new Error(`A watch's quiet is ${WATCH_QUIET.min} to ${WATCH_QUIET.max} seconds.`);
+    return;
+  }
   if (spec.when.kind === "cron") { parseCron(spec.when.expr); checkZone(spec.when.zone); }
   if (!fires(spec.when, now, 1).length) throw new Error(spec.when.kind === "once" ? `${spec.when.at} is not in the future.` : `Cron "${spec.when.expr}" never fires.`);
+}
+
+const span = (ms: number) => ms < 60_000 ? `${Math.round(ms / 1000)}s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m` : `${(ms / 3_600_000).toFixed(1)}h`;
+const block = (lines: string[], dropped: number) => (dropped ? [`(${dropped} earlier lines dropped)`] : []).concat(lines).map((line) => "  " + line).join("\n");
+
+// The message a watch fire sends: what happened, the output, then the task the watch was made for.
+export function tell(s: Schedule, event: Exclude<WatchEvent, { kind: "burst" }>): string {
+  if (event.kind === "lines") {
+    const quiet = s.when.kind === "watch" ? s.when.quiet : 0;
+    return `Watch ${s.id} printed ${event.lines.length + event.dropped} new lines:\n${block(event.lines, event.dropped)}\nTask: ${s.text}\nThe watch goes on; its next fire comes no sooner than ${span(quiet * 1000)} from now.`;
+  }
+  const { code, signal, after, stderr } = event.exit;
+  const how = code !== null ? `exited with code ${code}` : signal ? `was ended by ${signal}` : "could not start";
+  const output = event.lines.length ? `\nLast output:\n${block(event.lines, event.dropped)}` : "\nIt printed nothing.";
+  const errors = code !== 0 && stderr.length ? `\nLast errors:\n${block(stderr, 0)}` : "";
+  return `Watch ${s.id} ended: the command ${how} after ${span(after)}.${output}${errors}\nTask: ${s.text}\nThe watch is done.`;
 }
 
 // The text without the time phrase, with the words on both sides joined by one space.
@@ -38,21 +64,24 @@ export class Schedules {
   readonly tools: ScheduleTools;
   // The schedules whose due fire the chat could not take yet. late is decided once, when the fire is first noticed.
   private readonly waiting = new Map<string, { due: number; late: boolean }>();
+  private readonly watcher: Watcher;
   private stopWake: (() => void) | null = null;
   private poked = false;
   private closed = false;
 
   constructor(private readonly log: Log, private readonly engine: Engine, private readonly chat: ChatPort, private readonly emit: (event: Event) => void, private readonly clock: Clock = systemClock) {
+    this.watcher = new Watcher(chat.store, () => this.chat.home(), (id, event) => this.deliver(id, event), () => this.emit(this.event), clock);
     this.tools = {
       create: (spec) => {
         const now = this.clock.now();
         check(spec, now);
         const value: Schedule = { ...spec, id: this.newId(), author: "membr", phase: "proposed", since: iso(now) };
         this.save(value, `membr proposed schedule ${value.id}: ${describe(value.when)}, as a ${value.run === "turn" ? "turn" : "subagent"}. It runs only after you accept it.`);
-        return `Proposed schedule ${value.id}. Next: ${fires(value.when, now, 3).map(iso).join(", ")}. It runs only after the user accepts it in a client.`;
+        const when = value.when.kind === "watch" ? `Its command: ${value.when.command}` : `Next: ${fires(value.when, now, 3).map(iso).join(", ")}.`;
+        return `Proposed schedule ${value.id}. ${when}\nIt runs only after the user accepts it in a client.`;
       },
       list: () => {
-        const lines = [...this.event.schedules].filter((s) => s.phase !== "cancelled").map((s) => `${s.id} ${s.phase} by ${s.author}, ${describe(s.when)}, next ${s.next[0] ?? "none"}: ${s.text}`);
+        const lines = [...this.event.schedules].filter((s) => s.phase !== "cancelled").map((s) => `${s.id} ${s.phase} by ${s.author}, ${describe(s.when)}, ${s.when.kind === "watch" ? (s.running ? "running" : "not running") : `next ${s.next[0] ?? "none"}`}: ${s.text}`);
         return lines.length ? lines.join("\n") : "No schedules.";
       },
       cancel: (id) => {
@@ -63,6 +92,7 @@ export class Schedules {
         return `Cancelled schedule ${id}.`;
       },
     };
+    this.restart();
     this.poke();
   }
 
@@ -70,8 +100,8 @@ export class Schedules {
     const now = this.clock.now();
     return { type: "schedules", schedules: [...this.log.schedules.values()].map((s): ScheduleView => {
       const last = this.log.lastFire(s.id) ?? null;
-      const done = s.when.kind === "once" && last !== null;
-      return { ...s, phase: done ? "done" : s.phase, next: (s.phase === "active" || s.phase === "proposed") && !done ? fires(s.when, now, 3).map(iso) : [], last };
+      const done = s.when.kind === "once" && last !== null || last?.result === "ended";
+      return { ...s, phase: done ? "done" : s.phase, next: (s.phase === "active" || s.phase === "proposed") && !done ? next(s.when, now, 3).map(iso) : [], last, running: this.watcher.running(s.id) };
     }) };
   }
 
@@ -82,7 +112,7 @@ export class Schedules {
     try { value = this.change(act, this.clock.now()); }
     catch (error) { refusal = error instanceof Error ? error.message : String(error); }
     const { answer } = this.log.saveSchedule(value, act, refusal === undefined ? {} : { refusal });
-    if (refusal === undefined) { this.emit(this.event); this.poke(); }
+    if (refusal === undefined) { this.watcher.sync(this.wanted()); this.emit(this.event); this.poke(); }
     return answer!;
   }
 
@@ -106,12 +136,45 @@ export class Schedules {
   poke(): void {
     if (this.poked || this.closed) return;
     this.poked = true;
-    queueMicrotask(() => { this.poked = false; this.tick(); });
+    queueMicrotask(() => { this.poked = false; this.tick(); this.watcher.poke(); });
   }
 
   close(): void {
     this.closed = true;
     this.stopWake?.();
+    this.watcher.close();
+  }
+
+  // The active watches whose command has not ended. Every change of a schedule converges the Watcher on them.
+  private wanted(): Schedule[] {
+    return [...this.log.schedules.values()].filter((s) => s.when.kind === "watch" && s.phase === "active" && this.log.lastFire(s.id)?.result !== "ended");
+  }
+
+  // membr was down while these watches were active, so their commands stopped and their output then is lost.
+  private restart(): void {
+    for (const s of this.wanted()) {
+      if (s.missed === "skip") this.save({ ...s, phase: "paused" }, `Watch ${s.id} was active when membr stopped, so it is paused.`, false);
+      else this.chat.record(this.log.append("note", `Watch ${s.id} started again after membr restarted. What its command printed while membr was down was not seen.`));
+    }
+    this.watcher.sync(this.wanted());
+  }
+
+  // A burst pauses the watch with one note. A fire's record and entry are written by Chat, in one log line.
+  private deliver(id: string, event: WatchEvent): "started" | "wait" {
+    const s = this.log.schedules.get(id);
+    if (!s || this.closed) return "wait";
+    if (event.kind === "burst") {
+      this.save({ ...s, phase: "paused" }, `Watch ${s.id} fired more than ${BURST} times in an hour, so membr paused it. ${event.dropped} lines were not sent. Resume it in a client, or ask for a quieter command.`);
+      return "started";
+    }
+    // Each fire of a watch gets its own millisecond, because the time is in the fire's act id.
+    const last = Date.parse(this.log.lastFire(id)?.at ?? "");
+    const answer = this.chat.fire({ schedule: s, at: Number.isNaN(last) ? this.clock.now() : Math.max(this.clock.now(), last + 1), late: false, event });
+    if (answer === "started") {
+      if (event.kind === "ended") this.watcher.sync(this.wanted());
+      this.emit(this.event);
+    }
+    return answer;
   }
 
   // The schedule after a user's act, or a throw with the refusal. since moves on accept and resume, so the slots
@@ -137,9 +200,10 @@ export class Schedules {
     }
   }
 
-  private save(value: Schedule, note: string): void {
+  private save(value: Schedule, note: string, sync = true): void {
     const { entry } = this.log.saveSchedule(value, null, { note });
     if (entry) this.chat.record(entry);
+    if (sync) this.watcher.sync(this.wanted());
     this.emit(this.event);
     this.poke();
   }
@@ -150,14 +214,14 @@ export class Schedules {
     const now = this.clock.now();
     let changed = false;
     for (const s of this.log.schedules.values()) {
-      if (s.phase !== "active") continue;
+      if (s.phase !== "active" || s.when.kind === "watch") continue;
       try {
         const due = latestDue(s.when, Math.max(Date.parse(s.since), Date.parse(this.log.lastFire(s.id)?.at ?? s.since)), now);
         if (due === null) { this.waiting.delete(s.id); continue; }
         const waiting = this.waiting.get(s.id);
         const late = waiting?.due === due ? waiting.late : !waiting && now - due > GRACE;
         if (late && s.missed === "skip") {
-          const entry = this.log.fire({ schedule: s.id, at: iso(due), result: "skipped" }, { kind: "note", text: `Schedule ${s.id} was due at ${iso(due)}, but membr was not running then, so it was skipped.` }, false);
+          const entry = this.log.fire({ schedule: s.id, at: iso(due), result: "skipped" }, { kind: "note", text: `Schedule ${s.id} was due at ${iso(due)}, but membr was not running then, so it was skipped.` }, null);
           if (entry) this.chat.record(entry);
           this.waiting.delete(s.id);
           changed = true;
@@ -176,8 +240,8 @@ export class Schedules {
   private arm(now: number): void {
     this.stopWake?.();
     this.stopWake = null;
-    const next = [...this.log.schedules.values()].filter((s) => s.phase === "active").flatMap((s) => fires(s.when, now, 1));
-    if (next.length) this.stopWake = this.clock.wake(Math.min(CAP, Math.min(...next) - now), () => this.tick());
+    const due = [...this.log.schedules.values()].filter((s) => s.phase === "active").flatMap((s) => next(s.when, now, 1));
+    if (due.length) this.stopWake = this.clock.wake(Math.min(CAP, Math.min(...due) - now), () => this.tick());
   }
 
   private newId(): string {

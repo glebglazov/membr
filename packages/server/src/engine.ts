@@ -13,7 +13,7 @@ import type { ScheduleTools } from "./schedules.ts";
 import type { NotebookTools } from "./notebook.ts";
 import type { MemoryTools } from "./memory.ts";
 import type { Image } from "./images.ts";
-import { NOTEBOOK_CAP, parseScheduleSpec, parseWhen, type Skill, type When } from "@membr/protocol";
+import { NOTEBOOK_CAP, WATCH_QUIET, parseScheduleSpec, parseTime, type Skill, type Time } from "@membr/protocol";
 
 declare const MEMBR_STANDALONE: boolean | undefined;
 
@@ -104,8 +104,8 @@ export interface Engine {
   open(view: string, options: EpochOptions): Epoch;
   compact(prompt: string): Promise<Compaction>;
   checkGoal(goal: string, chat: string, signal: AbortSignal): Promise<boolean>;
-  // the time words of a text as a When, and those exact words; throws on an answer it cannot read
-  when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }>;
+  // the time words of a text as a Time, and those exact words; throws on an answer it cannot read
+  when(text: string, zone: string, now: Date): Promise<{ when: Time; phrase: string }>;
   account(): Promise<Account>;
   deleteSession(session: string, cwd?: string): Promise<void>;
 }
@@ -119,9 +119,9 @@ const WHEN = `You read a time out of a user's words. The text holds a time phras
 
 Use "cron" for a time that repeats and "once" for one time. Read every time in the zone you are given, and write the cron in that zone. Work out a once time from the current time you are given. The phrase holds only the words that name the time, never the task.`;
 
-// Cron and Schedule tools of Claude Code keep their jobs in the session or in a file membr never reads,
-// so membr's own schedule tool is the only one.
-export const DISALLOWED_TOOLS = ["Agent", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger"];
+// Cron, Schedule and Monitor tools of Claude Code keep their jobs in the session or in a file membr never reads,
+// so membr's own schedule tool, with its watches, is the only one.
+export const DISALLOWED_TOOLS = ["Agent", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "Monitor"];
 
 // ported from UniiChat (commit 0500bf6, Apache-2.0): the compaction part of
 // UniiChat's prompt.txt, word for word
@@ -168,9 +168,11 @@ write the line as soon as you understand <input> well enough to compress it.
 `;
 
 // membr runs on the user's `claude` login: a stray API key in the shell would
-// silently bill the API instead of the plan
+// silently bill the API instead of the plan. A background task of Claude Code
+// (Bash run_in_background) wakes its session when it ends, after membr's turn
+// is over, and that reply belongs to no turn: a watch is the way to wait.
 function env(): Record<string, string | undefined> {
-  return { ...process.env, ANTHROPIC_API_KEY: undefined };
+  return { ...process.env, ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
 }
 
 // the input stream of a session: Claude Code reads each message when it is
@@ -225,19 +227,20 @@ function message(text: string, priority: Priority, from: From, images: Image[] =
 const whenShape = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("once"), at: z.string().describe("an ISO instant, written with Z") }),
   z.object({ kind: z.literal("cron"), expr: z.string().describe("5 fields: minute hour day-of-month month day-of-week"), zone: z.string().describe("an IANA zone name, such as Europe/Madrid") }),
+  z.object({ kind: z.literal("watch"), command: z.string().describe("a shell command, run by sh -c in your home"), on: z.enum(["exit", "lines"]).describe("exit: fire once when the command exits. lines: fire for each batch of lines it prints to stdout, and when it exits"), quiet: z.number().int().optional().describe(`for lines: the least seconds between two fires, ${WATCH_QUIET.min} to ${WATCH_QUIET.max}, default ${WATCH_QUIET.default}`) }),
 ]);
 
 // The boundary of the model's input: create needs text and when, and the protocol parser is the one validator.
 // An error comes back as text, so the model can correct itself.
 export function scheduleTool(schedules: ScheduleTools) {
-  return tool("schedule", "Create, list or cancel the user's schedules. create only proposes one: it runs after the user accepts it in a client. Its fires come to you as [membr] messages, not as the user. Give when as a 5-field cron with an IANA zone, or as a one-time ISO instant. run \"subagent\" (the default) starts a subagent at that time, and \"turn\" starts a turn of yours. missed says what to do if membr was not running then: \"once\" runs it late, \"skip\" drops it. cancel works only on schedules you proposed: for the user's own, ask the user to run /unschedule.",
+  return tool("schedule", "Create, list or cancel the user's schedules. create only proposes one: it runs after the user accepts it in a client. Its fires come to you as [membr] messages, not as the user. Give when as a 5-field cron with an IANA zone, as a one-time ISO instant, or as a watch. A watch is how you wait for something between turns, such as a build, a CI run, another agent or a log line: membr runs its shell command, and it stays through new epochs and server restarts. on \"exit\" fires once when the command exits, with its last output, so write a command that exits when the thing happens, such as `gh pr checks 412 --watch` or an until loop. on \"lines\" fires for each batch of stdout lines, such as `tail -n 0 -F app.log | grep --line-buffered ERROR`, at most once in quiet seconds; membr pauses a watch that fires more than 10 times in an hour. After a restart membr starts the command again and does not see what it printed while membr was down, so a command should check a state, not wait for one change. run \"turn\" starts a turn of yours, and a watch fire joins your turn when one runs; \"subagent\" starts a subagent. The default is \"turn\" for a watch and \"subagent\" for a time. missed says what to do if membr was not running then: \"once\" runs it late, \"skip\" drops it; for a watch, \"once\" starts it again and \"skip\" pauses it. cancel works only on schedules you proposed: for the user's own, ask the user to run /unschedule.",
     { action: z.enum(["create", "list", "cancel"]), text: z.string().optional().describe("the task, for create"), when: whenShape.optional().describe("for create"), run: z.enum(["turn", "subagent"]).optional(), missed: z.enum(["skip", "once"]).optional(), id: z.string().optional().describe("for cancel") },
     async ({ action, text, when, run, missed, id }) => {
       try {
         if (action === "cancel" && !id) throw new Error("cancel needs an id.");
         const answer = action === "list" ? schedules.list()
           : action === "cancel" ? schedules.cancel(id!)
-          : schedules.create(parseScheduleSpec({ text, when, run: run ?? "subagent", missed: missed ?? "once" }));
+          : schedules.create(parseScheduleSpec({ text, when: when?.kind === "watch" ? { ...when, quiet: when.quiet ?? WATCH_QUIET.default } : when, run: run ?? (when?.kind === "watch" ? "turn" : "subagent"), missed: missed ?? "once" }));
         return { content: [{ type: "text" as const, text: answer }] };
       } catch (error) {
         return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
@@ -539,7 +542,7 @@ async function checkGoal(goal: string, chat: string, signal: AbortSignal): Promi
   }
 }
 
-async function when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }> {
+async function when(text: string, zone: string, now: Date): Promise<{ when: Time; phrase: string }> {
   const inbox = new Inbox();
   inbox.push(message(`Zone: ${zone}\nNow: ${now.toISOString()}\nText: ${text}`, "next", "membr"));
   inbox.end();
@@ -568,13 +571,13 @@ async function when(text: string, zone: string, now: Date): Promise<{ when: When
   }
 }
 
-function readWhen(answer: string): { when: When; phrase: string } {
+function readWhen(answer: string): { when: Time; phrase: string } {
   let json: unknown;
   try { json = JSON.parse(answer.trim()); } catch { throw new Error(`The model did not answer with JSON: ${answer.slice(0, 200)}`); }
   try {
     const { phrase, when } = json as { phrase?: unknown; when?: unknown };
     if (typeof phrase !== "string" || !phrase) throw new Error("no phrase");
-    return { phrase, when: parseWhen(when) };
+    return { phrase, when: parseTime(when) };
   } catch (error) { throw new Error(`The model's time reading is not usable: ${error instanceof Error ? error.message : String(error)}`); }
 }
 

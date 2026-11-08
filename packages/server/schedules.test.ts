@@ -71,7 +71,7 @@ test("schedules arrives before ready, and a user's schedule is active with its n
   expect(types.indexOf("schedules")).toBeLessThan(types.indexOf("ready"));
   const id = await schedule(client, hourly());
   const view = client.events.findLast((event) => event.type === "schedules")!;
-  expect(view.type === "schedules" && view.schedules).toEqual([{ ...hourly(), id, author: "user", phase: "active", since: new Date(T0).toISOString(), next: ["2026-11-09T09:00:00.000Z", "2026-11-09T10:00:00.000Z", "2026-11-09T11:00:00.000Z"], last: null }]);
+  expect(view.type === "schedules" && view.schedules).toEqual([{ ...hourly(), id, author: "user", phase: "active", since: new Date(T0).toISOString(), next: ["2026-11-09T09:00:00.000Z", "2026-11-09T10:00:00.000Z", "2026-11-09T11:00:00.000Z"], last: null, running: false }]);
 });
 
 test("a schedule with a bad cron, an unknown zone or a past time is refused", async () => {

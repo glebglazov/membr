@@ -1,4 +1,4 @@
-import type { Skill, When } from "@membr/protocol";
+import type { Skill, Time } from "@membr/protocol";
 import { NO_USAGE, type Account, type Compaction, type Engine, type EngineEvent, type Epoch, type EpochOptions, type From, type Pick, type Priority, type Usage } from "../src/engine.ts";
 
 export const END: Extract<EngineEvent, { kind: "end" }> = { kind: "end", reply: "", error: null, usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, context: null, fast: null, through: 0 };
@@ -49,7 +49,7 @@ export class FakeEngine implements Engine {
   skills: Skill[] = [];
   onCheck: (goal: string, chat: string, signal: AbortSignal) => Promise<boolean> = async () => true;
   readonly whens: Array<{ text: string; zone: string; now: Date }> = [];
-  onWhen: (text: string, zone: string, now: Date) => Promise<{ when: When; phrase: string }> = async () => { throw new Error("No time reading was scripted"); };
+  onWhen: (text: string, zone: string, now: Date) => Promise<{ when: Time; phrase: string }> = async () => { throw new Error("No time reading was scripted"); };
   constructor(private readonly script: (epoch: FakeEpoch, message: Message) => void = () => {}) {}
   open(view: string, options: EpochOptions): Epoch {
     const epoch = new FakeEpoch(view, options, this.script);
@@ -64,7 +64,7 @@ export class FakeEngine implements Engine {
     this.checks.push({ goal, chat, signal });
     return this.onCheck(goal, chat, signal);
   }
-  async when(text: string, zone: string, now: Date): Promise<{ when: When; phrase: string }> {
+  async when(text: string, zone: string, now: Date): Promise<{ when: Time; phrase: string }> {
     this.whens.push({ text, zone, now });
     return this.onWhen(text, zone, now);
   }

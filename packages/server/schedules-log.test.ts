@@ -54,10 +54,10 @@ test("lastFire survives reopen and holds the latest fire of each schedule", () =
   const dir = directory();
   const log = new Log(dir);
   expect(log.lastFire("a")).toBeUndefined();
-  log.fire({ schedule: "a", at: "2026-11-09T07:30:00.000Z", result: "ran" }, { kind: "user", text: "Read the inbox." }, true);
-  log.fire({ schedule: "a", at: "2026-11-10T07:30:00.000Z", result: "late" }, { kind: "user", text: "Read the inbox." }, true);
-  log.fire({ schedule: "a", at: "2026-11-08T07:30:00.000Z", result: "skipped" }, { kind: "note", text: "skipped" }, false);
-  log.fire({ schedule: "b", at: AT, result: "ran" }, null, false);
+  log.fire({ schedule: "a", at: "2026-11-09T07:30:00.000Z", result: "ran" }, { kind: "user", text: "Read the inbox." }, "own");
+  log.fire({ schedule: "a", at: "2026-11-10T07:30:00.000Z", result: "late" }, { kind: "user", text: "Read the inbox." }, "own");
+  log.fire({ schedule: "a", at: "2026-11-08T07:30:00.000Z", result: "skipped" }, { kind: "note", text: "skipped" }, null);
+  log.fire({ schedule: "b", at: AT, result: "ran" }, null, null);
   for (const open of [log, new Log(dir)]) {
     expect(open.lastFire("a")).toEqual({ at: "2026-11-10T07:30:00.000Z", result: "late", entry: 1 });
     expect(open.lastFire("b")).toEqual({ at: AT, result: "ran", entry: null });
@@ -68,12 +68,12 @@ test("a second fire with the same id returns null before and after reopen", () =
   const dir = directory();
   const log = new Log(dir);
   const record = { schedule: "a", at: AT, result: "ran" } as const;
-  const entry = log.fire(record, { kind: "user", text: "Read the inbox." }, true);
+  const entry = log.fire(record, { kind: "user", text: "Read the inbox." }, "own");
   expect(entry).toMatchObject({ i: 0, kind: "user", text: "Read the inbox.", scheduled: { schedule: "a", late: false } });
   expect(log.answer(`schedule-a-${Date.parse(AT)}`)).toEqual({ type: "answer", id: `schedule-a-${Date.parse(AT)}`, ok: true, entry: 0 });
-  expect(log.fire(record, { kind: "user", text: "Read the inbox." }, true)).toBeNull();
+  expect(log.fire(record, { kind: "user", text: "Read the inbox." }, "own")).toBeNull();
   const reopened = new Log(dir);
-  expect(reopened.fire(record, { kind: "user", text: "Read the inbox." }, true)).toBeNull();
+  expect(reopened.fire(record, { kind: "user", text: "Read the inbox." }, "own")).toBeNull();
   expect(reopened.count).toBe(1);
   expect(reopened.read(0)?.scheduled).toEqual({ schedule: "a", late: false });
 });
@@ -81,8 +81,8 @@ test("a second fire with the same id returns null before and after reopen", () =
 test("a turn a fire opened and a restart cut off is finished by the interrupted sweep", () => {
   const dir = directory();
   const log = new Log(dir);
-  log.fire({ schedule: "a", at: AT, result: "late" }, { kind: "note", text: "Read the inbox." }, true);
-  log.fire({ schedule: "b", at: AT, result: "ran" }, { kind: "note", text: "A subagent started." }, false);
+  log.fire({ schedule: "a", at: AT, result: "late" }, { kind: "note", text: "Read the inbox." }, "own");
+  log.fire({ schedule: "b", at: AT, result: "ran" }, { kind: "note", text: "A subagent started." }, null);
   const reopened = new Log(dir);
   expect(reopened.interrupted).toEqual([0]);
   expect(reopened.read(0)?.scheduled).toEqual({ schedule: "a", late: true });

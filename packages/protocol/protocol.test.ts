@@ -74,7 +74,7 @@ test("schedule messages refuse a bad shape", async () => {
 
 test("schedules and when events round trip, and a view refuses an unknown phase", async () => {
   const { parseEvent } = await import("./src/index.ts");
-  const view = { ...spec, id: "k3x9q2", author: "user", phase: "active", since: "2026-11-06T10:00:00.000Z", next: ["2026-11-09T07:30:00.000Z"], last: { at: "2026-11-06T07:30:00.000Z", result: "late", entry: 4 } } as const;
+  const view = { ...spec, id: "k3x9q2", author: "user", phase: "active", since: "2026-11-06T10:00:00.000Z", next: ["2026-11-09T07:30:00.000Z"], last: { at: "2026-11-06T07:30:00.000Z", result: "late", entry: 4 }, running: false } as const;
   const schedules = { type: "schedules", schedules: [view, { ...view, id: "p7a01c", author: "membr", phase: "done", last: null, next: [] }] } as const;
   expect<unknown>(parseEvent(schedules)).toEqual(schedules);
   expect(() => parseEvent({ ...schedules, schedules: [{ ...view, phase: "gone" }] })).toThrow("Expected one of");
@@ -82,6 +82,18 @@ test("schedules and when events round trip, and a view refuses an unknown phase"
   const when = { type: "when", id: "r", when: spec.when, text: "read the inbox", next: ["2026-11-09T07:30:00.000Z"] } as const;
   expect<unknown>(parseEvent(when)).toEqual(when);
   expect(() => parseEvent({ ...when, when: { kind: "cron", zone: "UTC" } })).toThrow("Expected a string");
+  expect(() => parseEvent({ ...when, when: { kind: "watch", command: "true", on: "exit", quiet: 60 } })).toThrow("Unknown time");
+});
+
+test("a watch round trips in a schedule and its view, and refuses a quiet out of range or an unknown on", async () => {
+  const { parseClientMessage, parseEvent } = await import("./src/index.ts");
+  const watch = { text: "Tell me CI is done", when: { kind: "watch", command: "gh pr checks 412 --watch", on: "exit", quiet: 60 }, run: "turn", missed: "once" } as const;
+  expect<unknown>(parseClientMessage({ type: "act", id: "a", act: "schedule", schedule: watch })).toEqual({ type: "act", id: "a", act: "schedule", schedule: watch });
+  const schedules = { type: "schedules", schedules: [{ ...watch, id: "w1", author: "membr", phase: "done", since: "2026-11-06T10:00:00.000Z", next: [], last: { at: "2026-11-06T11:00:00.000Z", result: "ended", entry: 9 }, running: false }] } as const;
+  expect<unknown>(parseEvent(schedules)).toEqual(schedules);
+  const act = (when: unknown) => () => parseClientMessage({ type: "act", id: "a", act: "schedule", schedule: { ...watch, when } });
+  expect(act({ ...watch.when, quiet: 4 })).toThrow("Expected quiet from 5 to 86400 seconds");
+  expect(act({ ...watch.when, on: "change" })).toThrow("Expected one of exit, lines");
 });
 
 test("parseSchedule keeps a stored schedule and entries keep their scheduled mark", async () => {

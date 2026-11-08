@@ -1,4 +1,4 @@
-export const VERSION = "2.0";
+export const VERSION = "3.0";
 
 export type Hello = { type: "hello"; version: string; kind: "web" | "term"; device: null; token: string | null };
 export type Pick = { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; fast: boolean };
@@ -11,7 +11,12 @@ export type ImportEstimate = { sessions: number; messages: number; compactions: 
 export type ImportStatus = ImportEstimate & { id: string; phase: "running" | "paused" | "complete" };
 export type ImportMark = { run: string; session: string; message: string };
 // One time, or a 5-field cron in a named zone. The zone is a name, never an offset, so DST moves with it.
-export type When = { kind: "once"; at: string } | { kind: "cron"; expr: string; zone: string };
+export type Time = { kind: "once"; at: string } | { kind: "cron"; expr: string; zone: string };
+// A shell command that membr runs. on "exit": one fire when it exits. on "lines": a fire for each batch of the lines it
+// prints, then one when it exits. quiet is the least seconds between two fires of a lines watch.
+export type Watch = { kind: "watch"; command: string; on: "exit" | "lines"; quiet: number };
+export const WATCH_QUIET = { min: 5, default: 60, max: 86_400 } as const;
+export type When = Time | Watch;
 export type ScheduleSpec = { text: string; when: When; run: "turn" | "subagent"; missed: "skip" | "once" };
 // author is the voice of every fire. since is the latest move to active: no fire before it counts.
 export type Schedule = ScheduleSpec & {
@@ -20,9 +25,11 @@ export type Schedule = ScheduleSpec & {
   phase: "proposed" | "active" | "paused" | "cancelled";
   since: string;
 };
-export type Fired = { at: string; result: "ran" | "late" | "skipped"; entry: number | null };
-// next and done are derived on each send, never stored. done is a "once" schedule that has fired.
-export type ScheduleView = Omit<Schedule, "phase"> & { phase: Schedule["phase"] | "done"; next: string[]; last: Fired | null };
+// "ended" is the last fire of a watch: its command exited.
+export type Fired = { at: string; result: "ran" | "late" | "skipped" | "ended"; entry: number | null };
+// next, done and running are derived on each send, never stored. done is a "once" schedule that has fired, or a
+// watch whose command exited. running is a watch whose command is alive now.
+export type ScheduleView = Omit<Schedule, "phase"> & { phase: Schedule["phase"] | "done"; next: string[]; last: Fired | null; running: boolean };
 // The hard cap on the notebook in UTF-8 bytes, one number for the server, the tools and every client.
 export const NOTEBOOK_CAP = 8192;
 export type NotebookAuthor = "agent" | "user";
@@ -100,7 +107,7 @@ export type Event =
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "schedules"; schedules: ScheduleView[] }
   | { type: "notebook"; notebook: Notebook }
-  | { type: "when"; id: string; when: When; text: string; next: string[] }
+  | { type: "when"; id: string; when: Time; text: string; next: string[] }
   | { type: "error"; id: string | null; reason: string };
 export type ClientMessage = Hello | Act | Read;
 
@@ -155,13 +162,21 @@ export function parsePick(value: unknown): Pick {
   const v = object(value);
   return { model: id(v.model), effort: oneOf(v.effort, ["low", "medium", "high", "xhigh", "max"]), fast: boolean(v.fast) };
 }
-export function parseWhen(value: unknown): When {
+export function parseTime(value: unknown): Time {
   const v = object(value);
   switch (v.kind) {
     case "once": return { kind: "once", at: instant(v.at) };
     case "cron": return { kind: "cron", expr: string(v.expr), zone: string(v.zone) };
-    default: throw new Error("Unknown when");
+    default: throw new Error("Unknown time");
   }
+}
+export function parseWhen(value: unknown): When {
+  const v = object(value);
+  if (v.kind === "once" || v.kind === "cron") return parseTime(v);
+  if (v.kind !== "watch") throw new Error("Unknown when");
+  const quiet = integer(v.quiet);
+  if (quiet < WATCH_QUIET.min || quiet > WATCH_QUIET.max) throw new Error(`Expected quiet from ${WATCH_QUIET.min} to ${WATCH_QUIET.max} seconds`);
+  return { kind: "watch", command: string(v.command), on: oneOf(v.on, ["exit", "lines"]), quiet };
 }
 // Schedules persisted before the rename say "agent" for what is now a "subagent".
 function parseRun(value: unknown): ScheduleSpec["run"] {
@@ -178,12 +193,12 @@ export function parseSchedule(value: unknown): Schedule {
 }
 export function parseFired(value: unknown): Fired {
   const v = object(value);
-  return { at: instant(v.at), result: oneOf(v.result, ["ran", "late", "skipped"]), entry: nullable(v.entry, integer) };
+  return { at: instant(v.at), result: oneOf(v.result, ["ran", "late", "skipped", "ended"]), entry: nullable(v.entry, integer) };
 }
 function scheduleView(value: unknown): ScheduleView {
   const v = object(value);
   const phase = oneOf(v.phase, ["proposed", "active", "paused", "cancelled", "done"]);
-  return { ...parseSchedule({ ...v, phase: phase === "done" ? "active" : phase }), phase, next: list(v.next, instant), last: nullable(v.last, parseFired) };
+  return { ...parseSchedule({ ...v, phase: phase === "done" ? "active" : phase }), phase, next: list(v.next, instant), last: nullable(v.last, parseFired), running: boolean(v.running) };
 }
 function importFiles(value: unknown): ImportFile[] {
   const files = list(value, (item) => { const f = object(item); return { name: string(f.name), text: string(f.text) }; });
@@ -290,7 +305,7 @@ export function parseEvent(value: unknown): Event {
     case "skills": return { type: "skills", skills: list(v.skills, (item) => { const k = object(item); return { name: id(k.name), description: string(k.description), argumentHint: string(k.argumentHint) }; }) };
     case "schedules": return { type: "schedules", schedules: list(v.schedules, scheduleView) };
     case "notebook": { const n = object(v.notebook); return { type: "notebook", notebook: { revision: integer(n.revision), text: string(n.text), by: nullable(n.by, (by) => oneOf(by, ["agent", "user"])), date: nullable(n.date, instant) } }; }
-    case "when": return { type: "when", id: id(v.id), when: parseWhen(v.when), text: string(v.text), next: list(v.next, instant) };
+    case "when": return { type: "when", id: id(v.id), when: parseTime(v.when), text: string(v.text), next: list(v.next, instant) };
     case "state": {
       const s = object(v.state);
       const usage = (value: unknown): Usage => {

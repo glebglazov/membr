@@ -253,6 +253,28 @@ fire sends it as your message, word for word.
 - Fires happen only while the server runs. On macOS, launchd keeps it running
   (see [Start membr](#start-membr)).
 
+### Watches
+
+A watch is a schedule that waits for a command, not for a time. Ask the agent
+to tell you when something happens, such as "tell me when CI on PR 412 is
+green". The agent proposes a watch with a shell command, and you accept it.
+membr then runs the command in the agent's home:
+
+- `on: "exit"` fires one time, when the command exits, with its last output
+  and, after a failure, its last errors. Then the watch is done.
+- `on: "lines"` fires for each batch of lines that the command prints to
+  stdout, at most one time in `quiet` seconds (60 by default). membr pauses a
+  watch that fires more than 10 times in an hour.
+- A fire joins the agent's turn when one runs, or starts a turn.
+- The command keeps running when a new epoch starts. When the server restarts,
+  "once" starts the command again and "skip" pauses the watch. membr does not
+  see what the command printed while the server was down.
+- Pause and delete stop the command. The card shows "running now" while it
+  runs.
+
+Claude Code's own Monitor tool and background Bash commands are off in membr:
+they belong to one epoch, and they start replies outside membr's turns.
+
 ## The notebook
 
 Each agent has a notebook: a small markdown text of at most 8192 bytes that
@@ -343,7 +365,7 @@ all must match. The token stays in the base directory with mode `0600`.
 Send hello first:
 
 ```json
-{"type":"hello","version":"2.0","kind":"term","device":null,"token":"TOKEN"}
+{"type":"hello","version":"3.0","kind":"term","device":null,"token":"TOKEN"}
 ```
 
 The server replays logged `entry` events, then sends `ready`. A different major
@@ -396,9 +418,10 @@ the same list.
 Before `ready`, the server also sends a `schedules` event, and it sends the
 event again after each change and each fire. Each event replaces the earlier
 list. A schedule has `id`, `text`, `when` (`{"kind":"once","at":ISO}` or
-`{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"}`), `run`,
-`missed`, `author`, `phase`, `since`, `next` (up to three ISO times) and
-`last`. To turn plain words into a `when`, send a `when` read with the
+`{"kind":"cron","expr":"30 8 * * 1-5","zone":"Europe/London"}` or
+`{"kind":"watch","command":"gh pr checks 412 --watch","on":"exit","quiet":60}`),
+`run`, `missed`, `author`, `phase`, `since`, `next` (up to three ISO times),
+`last` and `running` (a watch whose command runs now). To turn plain words into a `when`, send a `when` read with the
 client's time zone:
 
 ```json

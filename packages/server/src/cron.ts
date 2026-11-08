@@ -1,4 +1,4 @@
-import type { When } from "@membr/protocol";
+import type { Time } from "@membr/protocol";
 
 type Field = readonly boolean[];
 export type Cron = { minute: Field; hour: Field; dom: Field; month: Field; dow: Field; anyDom: boolean; anyDow: boolean; anyHour: boolean };
@@ -102,7 +102,7 @@ function day(cron: Cron, zone: string, start: number): number[] {
 }
 
 // Fires strictly after `after`, ascending, at most count. A cron with no fire in 8 years has none.
-export function fires(when: When, after: number, count: number): number[] {
+export function fires(when: Time, after: number, count: number): number[] {
   if (when.kind === "once") { const at = Date.parse(when.at); return at > after && count > 0 ? [at] : []; }
   const cron = parseCron(when.expr), out: number[] = [];
   const first = localDay(after, when.zone) - DAY;
@@ -112,7 +112,7 @@ export function fires(when: When, after: number, count: number): number[] {
 }
 
 // The latest fire t with after < t <= upto, or null. It walks back from upto, so a week of downtime costs days, not fires.
-export function latestDue(when: When, after: number, upto: number): number | null {
+export function latestDue(when: Time, after: number, upto: number): number | null {
   if (when.kind === "once") { const at = Date.parse(when.at); return after < at && at <= upto ? at : null; }
   const cron = parseCron(when.expr), top = localDay(upto, when.zone) + DAY;
   const last = Math.max(localDay(after, when.zone) - DAY, top - DAYS * DAY);

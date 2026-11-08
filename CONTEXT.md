@@ -56,15 +56,19 @@ _Avoid_: compaction, compression
 The phase of a turn in which membr waits for compression to write the lines that the summary batch needs, before it starts a new epoch.
 
 **Schedule**:
-A task text with a time (one ISO time, or a cron and a time zone name), stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
+A task text with a time (one ISO time, or a cron and a time zone name) or a watch, stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
 _Avoid_: job, cron, timer, reminder
+
+**Watch**:
+A schedule whose fires come from a shell command that membr runs, not from a time. The command's stdout lines, in batches, and its exit are the fires. A watch fire joins the agent's turn when one runs, like a subagent report, or starts one. The command runs only while the watch is active, also through new epochs. After a restart membr starts it again, or pauses it when its missed is "skip". A watch that fires more than 10 times in an hour is paused.
+_Avoid_: monitor (Claude Code's own Monitor tool, which membr turns off), trigger
 
 **Notebook**:
 A small markdown text of at most 8192 bytes that holds what is true now: the user's preferences, standing decisions, and where things are. It belongs to one agent, and is stored in the log, one revision for each change. The agent changes it with its `notebook_edit` tool, and the user in the web client. It starts every epoch and every subagent's first message, before the view. The chat history is the record of what happened. The notebook is what stays true.
 _Avoid_: memory file, notes
 
 **Fire**:
-One run of a schedule at one of its times. Its act id holds the schedule and the time, so a fire is never written two times. A fire that membr missed runs late one time, or is skipped.
+One run of a schedule at one of its times, or for one event of a watch. Its act id holds the schedule and the time, so a fire is never written two times. A fire that membr missed runs late one time, or is skipped.
 _Avoid_: trigger, tick, occurrence
 
 **Goal check**:

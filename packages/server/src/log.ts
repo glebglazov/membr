@@ -257,14 +257,16 @@ export class Log {
     return { answer, entry, fresh: true };
   }
 
-  // The act id schedule-<id>-<at ms> makes a fire answer once, so answers dedupes it, also after a restart. A turn the entry opens is finished by the interrupted sweep.
-  fire(record: FireRecord, entry: { kind: "user" | "note"; text: string } | null, opensTurn: boolean): Entry | null {
+  // The act id schedule-<id>-<at ms> makes a fire answer once, so answers dedupes it, also after a restart. turn is the
+  // turn the entry belongs to: "own" opens one at the entry, a number joins or opens that one, null starts none. A turn
+  // left open is finished by the interrupted sweep.
+  fire(record: FireRecord, entry: { kind: "user" | "note" | "work"; text: string } | null, turn: "own" | number | null): Entry | null {
     this.journal.check();
     const id = `schedule-${record.schedule}-${Date.parse(record.at)}`;
     if (this.answers.has(id)) return null;
-    const written = entry && { ...this.entry(entry.kind, entry.text), ...(opensTurn ? { scheduled: { schedule: record.schedule, late: record.result === "late" } } : {}) };
+    const written = entry && { ...this.entry(entry.kind, entry.text), ...(turn !== null ? { scheduled: { schedule: record.schedule, late: record.result === "late" } } : {}) };
     const answer: Answer = { type: "answer", id, ok: true, entry: written?.i ?? null };
-    this.write({ ...written, act: id, ans: answer, fire: record, ...(written && opensTurn ? { turn: { id: written.i, phase: "running" } } : {}) });
+    this.write({ ...written, act: id, ans: answer, fire: record, ...(written && turn !== null ? { turn: { id: turn === "own" ? written.i : turn, phase: "running" } } : {}) });
     return written;
   }
 

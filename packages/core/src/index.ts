@@ -1,12 +1,12 @@
 // Adapted from UniiChat View.ts at commit 0500bf6. Copyright 2026 Higher Order Company.
 // Licensed under Apache-2.0. See licenses/UniiChat.txt.
 import { brief, type Brief } from "./briefs.ts";
-import { epochLimit, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Notebook, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type State, type Usage, type When, type Context } from "@membr/protocol";
+import { epochLimit, type AgentInfo, type ImportInput, type ImportEstimate, type ImportStatus, type Act, type Entry, type Event, type MemoryLine, type Notebook, type Part, type Pick, type Read, type ScheduleSpec, type ScheduleView, type Skill, type Time, type State, type Usage, type When, type Context } from "@membr/protocol";
 
 export type Attachment = { id: string; name: string; type: string; data: string };
 export type Upload = { id: string; text: string; images: Attachment[] };
 export type SubagentLog = { entries: ReadonlyMap<number, Entry>; live: string; loaded: boolean };
-export type Proposal = { when: When; text: string; next: string[] };
+export type Proposal = { when: Time; text: string; next: string[] };
 export type Page = "chat" | "tree" | "schedules" | "notebook";
 export type Model = {
   importPlan: { id: string; input: ImportInput; estimate: ImportEstimate | null } | null;
@@ -335,6 +335,7 @@ export function fireTime(iso: string, zone: string = clientZone(), now: number =
 }
 
 export function describeWhen(when: When): string {
+  if (when.kind === "watch") return `watch ${when.on === "exit" ? "until it exits" : `each line, ${when.quiet}s apart`}: ${when.command}`;
   return when.kind === "cron" ? `cron "${when.expr}" ${when.zone}` : `once ${fireTime(when.at)}`;
 }
 
@@ -414,7 +415,8 @@ export function scheduleLine(schedule: ScheduleView): string {
   const zone = schedule.when.kind === "cron" ? schedule.when.zone : undefined;
   const next = schedule.next[0] ? `, next ${fireTime(schedule.next[0], zone)}` : "";
   const by = schedule.author === "membr" ? ", by membr" : "";
-  return `${describeWhen(schedule.when)}  ${schedule.phase}, ${runLabel(schedule.run)}${by}${next}  ${schedule.text}`;
+  const running = schedule.running ? ", running now" : "";
+  return `${describeWhen(schedule.when)}  ${schedule.phase}, ${runLabel(schedule.run)}${by}${next}${running}  ${schedule.text}`;
 }
 
 function listSchedules(model: Model): string {

@@ -277,6 +277,7 @@ function ScheduleCard({ schedule }: { schedule: ScheduleView }) {
     h("p", { class: "label" }, [
       schedule.next.length ? `Next: ${schedule.next.map((time) => fireTime(time, zone)).join(", ")}` : null,
       runLabel(schedule.run),
+      schedule.running ? "running now" : null,
       schedule.last ? `Last: ${schedule.last.result}, ${fireTime(schedule.last.at, zone)}` : null,
       schedule.author === "membr" && schedule.phase !== "proposed" ? "set by membr" : null,
     ].filter(Boolean).join(" · ")),

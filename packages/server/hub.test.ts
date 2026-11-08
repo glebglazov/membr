@@ -107,7 +107,7 @@ test("a process restart preserves messages, answers and source sequence", async 
 test("header, query and cookie bearer tokens authorize the same protocol", async () => {
   const server = await serve();
   const header = await connect(server, { headers: { Authorization: `Bearer ${server.token}` } });
-  const cookie = await connect(server, { kind: "web", headers: { Cookie: `other=x; token=${server.token}` }, version: "2.20.3" });
+  const cookie = await connect(server, { kind: "web", headers: { Cookie: `other=x; token=${server.token}` }, version: "3.20.3" });
   const query = await TestClient.connect(`${server.url}?token=${server.token}`);
   clients.push(query);
   await query.wait("ready");

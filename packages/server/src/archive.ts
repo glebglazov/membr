@@ -21,6 +21,8 @@ const LEFT_OUT: readonly Rule[] = [
     matches: named((name) => name === "machine") },
   { why: "epochs.json names Claude Code sessions that exist only on the old computer",
     matches: named((name) => name === "epochs.json") },
+  { why: "watches.pids names processes of the old computer",
+    matches: named((name) => name === "watches.pids") },
   { why: "a temporary file is half of a write that has not finished",
     matches: named((name) => name.endsWith(".tmp")) },
   { why: "a legacy index is rebuilt from the journal",

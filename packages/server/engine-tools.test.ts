@@ -6,11 +6,11 @@ import { z } from "zod";
 import { DISALLOWED_TOOLS, scheduleTool } from "./src/engine.ts";
 import type { ScheduleTools } from "./src/schedules.ts";
 
-test("every scheduling tool the SDK declares is disallowed", () => {
+test("every scheduling and monitor tool the SDK declares is disallowed", () => {
   const sdk = path.dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk")));
   const declared = [...fs.readFileSync(path.join(sdk, "sdk-tools.d.ts"), "utf8").matchAll(/^export interface (\w+)Input\b/gm)].map((match) => match[1]!);
-  const scheduling = declared.filter((name) => /^(Cron|Schedule|RemoteTrigger)/.test(name));
-  expect(scheduling).toContain("CronCreate");
+  const scheduling = declared.filter((name) => /^(Cron|Schedule|RemoteTrigger|Monitor)/.test(name));
+  expect(scheduling).toEqual(expect.arrayContaining(["CronCreate", "Monitor"]));
   expect(DISALLOWED_TOOLS).toEqual(expect.arrayContaining(scheduling));
 });
 
@@ -33,6 +33,14 @@ test("the schedule tool defaults run to subagent and missed to once", async () =
   expect(z.object(tool.inputSchema).safeParse({ action: "create", text: "Read the inbox.", when }).success).toBe(true);
   expect((await call(tool, { action: "create", text: "Read the inbox.", when })).text).toBe("Proposed schedule abc123.");
   expect(fake.specs).toEqual([{ text: "Read the inbox.", when, run: "subagent", missed: "once" }]);
+});
+
+test("the schedule tool defaults a watch to a turn, quiet to 60 seconds and missed to once", async () => {
+  const fake = tools();
+  const tool = scheduleTool(fake);
+  const when = { kind: "watch", command: "gh pr checks 412 --watch", on: "exit" } as const;
+  expect((await call(tool, { action: "create", text: "Tell me CI is done.", when })).text).toBe("Proposed schedule abc123.");
+  expect(fake.specs).toEqual([{ text: "Tell me CI is done.", when: { ...when, quiet: 60 }, run: "turn", missed: "once" }]);
 });
 
 test("the schedule tool refuses a cron with no zone, and a create with no text or when, as text the model can read", async () => {

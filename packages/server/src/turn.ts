@@ -1,7 +1,7 @@
 import { epochLimit, type Act, type Entry, type State, type Usage } from "@membr/protocol";
 import type { Context, From, Priority } from "./engine.ts";
 import type { Image } from "./images.ts";
-import type { Log } from "./log.ts";
+import type { FireRecord, Log } from "./log.ts";
 
 // fire marks an input a schedule sent while nobody was at the screen.
 export type FireTag = { schedule: string };
@@ -29,7 +29,7 @@ export type Input =
   | { kind: "checkFailed"; attempt: number; error: unknown }
   | { kind: "continued"; entry: Entry }
   | { kind: "continueRecorded"; id: number }
-  | { kind: "report"; text: string; stopped: boolean; schedule?: string }
+  | { kind: "report"; text: string; stopped: boolean; schedule?: string; record?: FireRecord }
   | { kind: "fail"; error: unknown }
   | { kind: "failed"; previous: Turn; reason: string }
   | { kind: "reload" | "reopen" }
@@ -50,7 +50,7 @@ export type Effect =
   | { kind: "note"; text: string }
   | { kind: "completeGoal"; revision: number }
   | { kind: "continueGoal"; text: string }
-  | { kind: "work"; text: string; id: number | null; fire?: FireTag };
+  | { kind: "work"; text: string; id: number | null; fire?: FireTag; record?: FireRecord };
 export type Transition = { turn: Turn; effects: Effect[] };
 const MODELS: readonly string[] = ["opus", "sonnet", "haiku"];
 const GOAL_NO = "The goal isn't satisfied yet: keep working.";
@@ -157,7 +157,7 @@ function step(turn: Turn, input: Input, facts: Facts): Transition {
       if (closed(turn)) return { turn, effects: [] };
       if (!input.stopped && turn.phase === "checking") return { turn, effects: [{ kind: "halt" }, { kind: "dispatch", input: { kind: "idle" } }, { kind: "dispatch", input }] };
       const deliver = !input.stopped && (turn.phase === "idle" || turn.phase === "running" || turn.phase === "summaries");
-      return { turn, effects: [{ kind: "work", text: input.text, id: deliver ? turnId(turn, facts.count) : null, ...input.schedule === undefined ? {} : { fire: { schedule: input.schedule } } }] };
+      return { turn, effects: [{ kind: "work", text: input.text, id: deliver ? turnId(turn, facts.count) : null, ...input.schedule === undefined ? {} : { fire: { schedule: input.schedule } }, ...input.record ? { record: input.record } : {} }] };
     }
     case "fail": {
       if (closed(turn) || turn.phase === "failed") return { turn, effects: [] };
