@@ -78,6 +78,10 @@ The step after a turn ends in which membr asks whether the goal is met, and star
 The append-only record files of one store (the log or the tree) under one directory, one file for each day. On open it reads every record, cuts off a half-written last line, and after that it can read any record by where it was written.
 _Avoid_: storage, database, index
 
+**Hook**:
+A shell command that a terminal client runs on one event of its chat: the client opens or closes, or the chat status changes to working, blocked, done or failed. The user sets it in `hooks.json` in membr's config directory, outside the base directory. membr itself knows no tool that a hook drives.
+_Avoid_: integration, callback, after-turn command
+
 **Archive**:
 A .tar.gz of the base directory's config.json and every store, made by `membr export` and restored by `membr import`. It leaves out the token, the lock, serve.log, the machine files and epochs.json: they belong to one computer, so a copy gets its own.
 _Avoid_: backup, dump

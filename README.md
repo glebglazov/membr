@@ -128,6 +128,40 @@ for example when Tailscale is not up yet after login.
 the same base directory, because the lock stops the second server. Run
 `membr server stop` first, or set another `MEMBR_DIR`.
 
+## Run commands when the chat changes
+
+A terminal chat can run your shell commands, hooks, when the chat starts to
+work, waits for you, ends a turn, and when the terminal opens or closes. Use
+hooks to show the status of the chat in tmux, or to send a notification. Put
+them in `~/.config/membr/hooks.json`, or in `membr/hooks.json` in
+`XDG_CONFIG_HOME` when you set it. Each key is an event, and each value is a
+command:
+
+```json
+{
+  "open": "my-status-script",
+  "working": "my-status-script",
+  "blocked": "my-status-script",
+  "done": "my-status-script",
+  "failed": "my-status-script",
+  "close": "my-status-script"
+}
+```
+
+- `open` runs when the terminal chat starts, and `close` when it ends.
+- `working` runs when a turn starts. `blocked` runs when the agent waits for
+  your approval. `done` runs when a turn ends, and `failed` when a turn fails.
+  A hook runs only when the status changes.
+
+membr runs each command with `sh -c` in the environment of the terminal chat,
+so `TMUX_PANE` and your other variables are there. It adds `MEMBR_EVENT`, the
+event, and `MEMBR_AGENT`, the agent's name, so one script can serve all
+events. The hooks run one at a time, in the order of the events. membr ignores
+their output and their exit status, and stops a hook after 10 seconds. Each
+terminal chat runs its own hooks, so two open terminals run each hook two
+times. The web client runs no hooks. An error in `hooks.json` stops `membr`
+before it opens the chat, and membr prints the error.
+
 ## Configure the server
 
 The server reads `config.json` in the base directory. All keys are optional:
