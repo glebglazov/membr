@@ -53,7 +53,7 @@ try {
   keys("Tab");
   await waitFor("the completed name", (t) => t.includes("> /review") && !t.includes("Review a change"));
   keys("src/app.ts", "Enter");
-  const turn = await waitFor("the skill turn", (t) => t.includes("Reviewed src/app.ts. No problems found.") && t.includes("epoch 42k / 160k (26%)"));
+  const turn = await waitFor("the skill turn", (t) => t.includes("Reviewed src/app.ts. No problems found.") && t.includes("epoch 42k / 150k (28%)"));
   show("after /review src/app.ts", turn);
   if (engine.epochs[0].messages[0].text !== "/review src/app.ts") throw new Error("The skill did not reach the agent as a say act");
   if (!turn.includes("> Made 1 tool call: Read")) throw new Error("The tool call is not collapsed into a brief");
