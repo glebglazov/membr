@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { render } from "ink-testing-library";
 import { complete, createModel, hear } from "@membr/core";
 import { App } from "../src/app.ts";
-import { EMPTY_COMPOSER, edit, insert } from "../src/composer.ts";
+import { EMPTY_COMPOSER, edit, insert, layout } from "../src/composer.ts";
 import { openEditor, terminalInput } from "../src/terminal.ts";
 import { connectSession, type Session } from "../src/session.ts";
 import { PassThrough } from "node:stream";
@@ -311,4 +311,15 @@ test("d drops a proposal and nothing is scheduled; /pause and /resume act on a l
   await type(screen, "/resume 1");
   screen.stdin.write("\r");
   await until(() => session.model().schedules[0].phase === "active", "the resume");
+});
+
+test("the composer moves a word that does not fit to the next row, and cuts only a word longer than the row", () => {
+  const rows = (text: string, cursor: number, width: number) => layout({ ...EMPTY_COMPOSER, text, cursor }, width).map((line) => line.cursor ? `${line.before}[${line.at}]${line.after}` : line.before);
+  expect(rows("say the end", 11, 5)).toEqual(["say ", "the ", "end[ ]"]);
+  expect(rows("abc the", 7, 5)).toEqual(["abc ", "the[ ]"]);
+  expect(rows("hello world", 0, 5), "A word that fills the row hides the space after it.").toEqual(["[h]ello", "world"]);
+  expect(rows("hello world", 5, 5), "The cursor on that hidden space shows on its own row.").toEqual(["hello", "[ ]", "world"]);
+  expect(rows("hello world", 6, 5)).toEqual(["hello", "[w]orld"]);
+  expect(rows("abcdefgh ij", 11, 5)).toEqual(["abcde", "fgh ", "ij[ ]"]);
+  expect(rows("abcde\nfg", 5, 5), "A full row that ends a line keeps the cursor inside the width.").toEqual(["abcde", "[ ]", "fg"]);
 });

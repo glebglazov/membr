@@ -93,25 +93,36 @@ export function edit(composer: Composer, press: Press, menu: Completion, history
 
 export type ComposerLine = { before: string; at: string; after: string; cursor: boolean };
 
-// Hard-wraps the text to `width` and finds the cursor, so the screen can draw it as an inverse cell.
+// Where each row of one line ends. A row ends after its last space, so a word that does not fit moves whole to the next row, and only a word longer than the row is cut. A word that fills the row keeps the space after it, which the row does not draw.
+function rowEnds(line: string, width: number): number[] {
+  const ends: number[] = [];
+  let start = 0;
+  while (line.length - start > width) {
+    const space = line.lastIndexOf(" ", start + width - 1);
+    start = line[start + width] === " " ? start + width + 1 : space >= start ? space + 1 : start + width;
+    ends.push(start);
+  }
+  ends.push(line.length);
+  return ends;
+}
+
+// Wraps the text at words to `width` and finds the cursor, so the screen can draw it as an inverse cell. A cursor past the last cell of a row gets a row of its own.
 export function layout(composer: Composer, width: number): ComposerLine[] {
   const lines: ComposerLine[] = [];
   let offset = 0;
-  const logical = composer.text.split("\n");
-  logical.forEach((line, index) => {
-    const chunks = line.length === 0 ? [""] : line.match(new RegExp(`.{1,${width}}`, "gs")) ?? [""];
-    if (line.length > 0 && line.length % width === 0 && index === logical.length - 1 && composer.cursor === composer.text.length) chunks.push("");
-    chunks.forEach((chunk, n) => {
-      const last = n === chunks.length - 1;
-      const start = offset, end = offset + chunk.length;
-      const holds = composer.cursor >= start && (composer.cursor < end || last && composer.cursor === end);
-      const column = composer.cursor - start;
-      lines.push(holds
-        ? { before: chunk.slice(0, column), at: chunk[column] ?? " ", after: chunk.slice(column + 1), cursor: true }
-        : { before: chunk, at: "", after: "", cursor: false });
-      offset = end;
+  for (const line of composer.text.split("\n")) {
+    const ends = rowEnds(line, width);
+    let start = 0;
+    ends.forEach((end, n) => {
+      const shown = line.slice(start, Math.min(end, start + width));
+      const column = composer.cursor - offset - start;
+      const holds = column >= 0 && (start + column < end || n === ends.length - 1 && start + column === end);
+      if (holds && column >= width) lines.push({ before: shown, at: "", after: "", cursor: false }, { before: "", at: " ", after: "", cursor: true });
+      else if (holds) lines.push({ before: shown.slice(0, column), at: shown[column] ?? " ", after: shown.slice(column + 1), cursor: true });
+      else lines.push({ before: shown, at: "", after: "", cursor: false });
+      start = end;
     });
-    offset += 1;
-  });
+    offset += line.length + 1;
+  }
   return lines;
 }
