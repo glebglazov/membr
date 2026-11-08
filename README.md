@@ -63,6 +63,15 @@ These are the commands:
 - `membr server stop` stops the server and removes the launchd agent. Then
   nothing starts the server until the next `membr`, also not a login. It also
   stops a server that `make run` started.
+- `membr export FILE` saves `config.json` and every agent's store to a
+  `.tar.gz`, from a running server or not, and never over a file that exists.
+  It leaves out the token, the lock, `serve.log`, the machine ids and
+  `epochs.json`, so a copy never writes as the original does.
+- `membr import FILE` restores that archive into the base directory. The
+  directory must be new or empty and no server may hold it. The new computer
+  makes its own token at the first start, so the sign-in link changes. If an
+  agent's `home` is not a directory here, the import works and prints the
+  error: fix `config.json` before the server starts.
 - `membr server run` runs the server in the foreground. launchd and
   `make run` use this command. It takes no options.
 

@@ -10,6 +10,7 @@ import type { Engine } from "./engine.ts";
 export const HELP = `usage: membr [AGENT | URL] [--token TOKEN]
        membr agent list | new NAME
        membr server start | stop | status | reload | run
+       membr export FILE | import FILE
 
 Opens the chat with an agent in this terminal. With no AGENT, it is the
 agent "default". membr starts the local server when it does not run.
@@ -29,6 +30,10 @@ Server:
   membr server status    show the PID, the addresses, the sign-in link and the log
   membr server reload    read config.json again and show the result
   membr server run       run the server in the foreground (launchd and make run)
+
+Archive:
+  membr export FILE      save config.json and every agent to a .tar.gz, with no token
+  membr import FILE      restore it into a new or empty base directory
 
 Keys: Enter sends. Shift+Enter, Ctrl+J or a trailing \\ adds a line. Tab
 takes the chosen / completion, and Up and Down move through it. PageUp
@@ -74,6 +79,11 @@ export async function main(engine?: Engine) {
     if (sub === "stop") return await print(stopServer(dir, host));
     if (sub === "start") return await print(startServer(dir, host));
     usage();
+  }
+  if (command === "export" || command === "import") {
+    if (positionals.length !== 2) usage();
+    const { exportArchive, importArchive } = await import("./archive.ts");
+    return await print((command === "export" ? exportArchive : importArchive)(dir, sub!));
   }
   if (command === "agent") {
     const { agentList, agentNew } = await import("./control.ts");

@@ -23,7 +23,7 @@ const DAY = 24 * 60 * 60_000;
 const LOOPBACK = "127.0.0.1";
 const NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 // The CLI reads its first word as an agent name unless it is one of its commands.
-const RESERVED = new Set(["server", "agent", "help"]);
+const RESERVED = new Set(["server", "agent", "export", "import", "help"]);
 const AGENT_KEYS = new Set(["prompt", "home", "approvalTimeout"]);
 const MOVED: Record<string, string> = {
   home: "home is now a key of each agent: move it to agents.default.home",

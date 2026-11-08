@@ -8,6 +8,7 @@ import { tailscaleServe } from "./tailscale.ts";
 import { web } from "./web.ts";
 import { access, admit, type Admitted } from "./access.ts";
 import { Room } from "./room.ts";
+import { archiveResponse } from "./archive.ts";
 import type { Clock } from "./clock.ts";
 
 type Connection = { room: string } & ({ phase: "hello"; access: Admitted } | { phase: "ready" });
@@ -19,9 +20,10 @@ export const BASE_PATH = "/membr";
 const same = (a: Listen, b: Listen) => a.port === b.port && a.host === b.host && a.tailscale === b.tailscale;
 
 // A path names the agent it is for. A path outside /membr/ is the default agent's, so clients from before many agents still work.
-export function route(pathname: string): { kind: "list" } | { kind: "slash"; to: string } | { kind: "agent"; agent: string; rest: string } {
+export function route(pathname: string): { kind: "list" } | { kind: "archive" } | { kind: "slash"; to: string } | { kind: "agent"; agent: string; rest: string } {
   if (pathname === BASE_PATH) return { kind: "slash", to: BASE_PATH + "/" };
   if (pathname === BASE_PATH + "/" || pathname === BASE_PATH + "/agents.json") return { kind: "list" };
+  if (pathname === BASE_PATH + "/membr.tar.gz") return { kind: "archive" };
   if (!pathname.startsWith(BASE_PATH + "/")) return { kind: "agent", agent: DEFAULT_AGENT, rest: pathname };
   const tail = pathname.slice(BASE_PATH.length + 1);
   const slash = tail.indexOf("/");
@@ -84,6 +86,10 @@ export function serveHub(options: {
       const page = where.kind === "list" ? !url.pathname.endsWith(".json") : where.kind === "agent" && where.rest === "/";
       if (page && url.searchParams.has("token") && request.method === "GET") return signIn(url, granted.secureCookie);
       if (where.kind === "slash") return new Response(null, { status: 301, headers: { Location: where.to + url.search } });
+      if (where.kind === "archive") {
+        if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
+        return archiveResponse(options.dir).catch((error) => new Response(error instanceof Error ? error.message : "Export failed", { status: 500 }));
+      }
       if (where.kind === "list") {
         if (url.pathname.endsWith(".json")) return Response.json(agents(), { headers: { "Cache-Control": "no-store" } });
         return new Response(listPage(agents()), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });

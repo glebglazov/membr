@@ -73,3 +73,7 @@ The step after a turn ends in which membr asks whether the goal is met, and star
 **Journal**:
 The append-only record files of one store (the log or the tree) under one directory, one file for each day. On open it reads every record, cuts off a half-written last line, and after that it can read any record by where it was written.
 _Avoid_: storage, database, index
+
+**Archive**:
+A .tar.gz of the base directory's config.json and every store, made by `membr export` and restored by `membr import`. It leaves out the token, the lock, serve.log, the machine files and epochs.json: they belong to one computer, so a copy gets its own.
+_Avoid_: backup, dump
