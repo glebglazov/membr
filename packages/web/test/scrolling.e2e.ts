@@ -135,7 +135,22 @@ async function opening(browser: Browser) {
     engine.epochs[0].emit({ kind: "text", text: "Newest paragraph.\n\n".repeat(80) }, END);
     await expect(writer.getByRole("status")).toHaveText("Ready");
     await writer.close();
-    const page = await openChat(context, url);
+    const page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.routeWebSocket(/./, (socket) => {
+      const server = socket.connectToServer();
+      server.onMessage(async (message) => {
+        if (typeof message === "string" && message.includes('"type":"ready"')) await held;
+        socket.send(message);
+      });
+    });
+    await page.goto(url);
+    await expect(page.getByText("Loading chat...", { exact: true }), "The history loads behind a loading sign.").toBeVisible();
+    await expect(page.locator("main article"), "The history does not show from its start while it loads.").toHaveCount(0);
+    release();
+    await expect(page.getByRole("status")).toHaveText("Ready");
     const newest = page.locator("article.unii").last();
     await expect(newest).toContainText("Newest paragraph.");
     const offset = () => page.evaluate(() => {

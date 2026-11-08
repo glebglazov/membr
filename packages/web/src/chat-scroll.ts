@@ -18,6 +18,9 @@ export function useChatScroll(enabled: boolean, content: Content) {
   const [, update] = useState(0);
   const lastTop = useRef(0);
   const frame = useRef(0);
+  // The logs whose history has come in. A reconnect sends the history again, and the chat stays on screen meanwhile.
+  const loadedLogs = useRef(new Set<string>());
+  if (content.ready) loadedLogs.current.add(content.log);
 
   function jump(): Jump {
     const current = position.current;
@@ -165,5 +168,5 @@ export function useChatScroll(enabled: boolean, content: Content) {
     }
   }, [enabled, content.log, content.entries, content.live, content.ready]);
 
-  return { scroller, main, jump: enabled ? jump() : null, goToUnseen, followLatest };
+  return { scroller, main, loaded: loadedLogs.current.has(content.log), jump: enabled ? jump() : null, goToUnseen, followLatest };
 }

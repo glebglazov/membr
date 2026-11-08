@@ -7,6 +7,7 @@ import { readExport } from "./export.ts";
 import { Markdown } from "./markdown.ts";
 import { BriefRow } from "./briefs.ts";
 import { useChatScroll } from "./chat-scroll.ts";
+import { followVisibleArea } from "./viewport.ts";
 
 let model = createModel();
 let socket: WebSocket | null = null;
@@ -444,10 +445,9 @@ function App() {
           h("button", { type: "button", class: "ghost small", onClick: () => input({ type: "subagent", name: null }) }, "← Main chat"),
           h("h2", null, model.subagent),
           model.subagent !== null && model.state.subagents.includes(model.subagent) && h("span", { class: "label" }, "at work")),
-        !subagent.loaded && h("p", { key: "loading", role: "status" }, "Loading subagent log..."),
-        brief([...subagent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
+        !scroll.loaded ? h("p", { key: "loading", class: "loading" }, "Loading subagent log...") : brief([...subagent.entries.values()].sort((a, b) => a.i - b.i)).map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
         subagent.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live subagent reply" }, h("div", { class: "label" }, model.subagent), h(Markdown, { text: subagent.live, diagrams: false })),
-      ] : [
+      ] : model.page === "chat" && !scroll.loaded ? h("p", { key: "loading", class: "loading" }, "Loading chat...") : [
         body.length === 0 && !model.live && h("p", { key: "empty", class: "empty" }, model.page === "tree" || model.folded ? model.reads.size ? "Loading memory..." : "No memory yet." : "Start a conversation."),
         body.map((row) => h(MemoryBlock, { row, key: rowKey(row) })),
         model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
@@ -487,5 +487,6 @@ function App() {
           h("button", { type: "submit", class: "send", "aria-label": "Send", title: "Send", disabled: (!draft.trim() && !model.attachments.length) || readingImages || model.connection === "refused" }, h(Icon, { name: "up" }))))));
 }
 
+followVisibleArea();
 render(h(App, null), document.getElementById("app")!);
 connect();

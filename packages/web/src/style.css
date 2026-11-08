@@ -15,7 +15,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
-.app { height: 100dvh; display: flex; flex-direction: column; }
+.app { position: fixed; left: 0; right: 0; top: var(--visible-top, 0px); height: var(--visible-height, 100dvh); display: flex; flex-direction: column; }
 .scroller { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -139,6 +139,10 @@ main h2 { margin: 0; font: 600 24px/1.2 var(--serif); }
 .memory-open { display: flex; flex-direction: column; gap: 18px; padding-left: 16px; border-left: 2px solid var(--line); }
 .close-block { align-self: flex-start; }
 .attached-image { display: block; max-width: 100%; max-height: 400px; border-radius: 10px; margin-top: 10px; }
+.loading { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 18vh 0; color: var(--mid); font: italic 18px var(--serif); }
+.loading::before { content: ""; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .loading::before { animation-duration: 2.4s; } }
 .empty { color: var(--mid); text-align: center; margin: 18vh 0; font: italic 18px var(--serif); }
 .fold-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: -10px; }
 .info { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
@@ -236,3 +240,4 @@ footer > .schedule-preview { margin-bottom: 10px; }
 }
 
 .agent-switch { font: inherit; font-size: 0.9rem; color: var(--mid); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-right: 0.75rem; min-width: 0; max-width: 9rem; }
+:root[data-keyboard] footer { padding-bottom: 10px; }
