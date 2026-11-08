@@ -124,6 +124,42 @@ async function reading(browser: Browser) {
   } });
 }
 
+async function opening(browser: Browser) {
+  const engine = new FakeEngine(() => {});
+  await withChat({ browser, engine, check: async (context, url) => {
+    const writer = await openChat(context, url);
+    await send(writer, "Start the history.");
+    engine.epochs[0].emit({ kind: "text", text: "Old paragraph.\n\n".repeat(60) }, END);
+    await expect(writer.getByRole("status")).toHaveText("Ready");
+    await send(writer, "Write a long reply.");
+    engine.epochs[0].emit({ kind: "text", text: "Newest paragraph.\n\n".repeat(80) }, END);
+    await expect(writer.getByRole("status")).toHaveText("Ready");
+    await writer.close();
+    const page = await openChat(context, url);
+    const newest = page.locator("article.unii").last();
+    await expect(newest).toContainText("Newest paragraph.");
+    const offset = () => page.evaluate(() => {
+      const rows = document.querySelectorAll("main [data-entry]");
+      return Math.round(rows[rows.length - 1].getBoundingClientRect().top - document.querySelector(".scroller")!.getBoundingClientRect().top);
+    });
+    await expect.poll(offset, { message: "The chat opens at the start of the newest message." }).toBe(12);
+    await expect(page.getByRole("button", { name: "Back to newest", exact: true })).toHaveCount(0);
+    await page.mouse.move(400, 400);
+    await page.mouse.wheel(0, -3000);
+    const back = page.getByRole("button", { name: "Back to newest", exact: true });
+    await expect(back, "A reader far from the newest messages gets a way back.").toBeVisible();
+    await back.click();
+    await expect.poll(() => gap(page), { message: "Back to newest goes to the bottom and follows." }).toBeLessThanOrEqual(2);
+    await expect(back).toHaveCount(0);
+    await send(page, "A short one.");
+    engine.epochs[0].emit({ kind: "text", text: "Short." }, END);
+    await expect(page.getByRole("status")).toHaveText("Ready");
+    const again = await openChat(context, url);
+    await expect(again.locator("article.unii").last()).toContainText("Short.");
+    await expect.poll(() => gap(again), { message: "A newest message that fits opens at the bottom." }).toBeLessThanOrEqual(2);
+  } });
+}
+
 async function briefTarget(browser: Browser) {
   const engine = new FakeEngine(() => {});
   await withChat({ browser, engine, check: async (context, url) => {
@@ -189,6 +225,8 @@ try {
   console.log("PASS Reading stays in place, and New messages opens the first unseen reply after finalization.");
   await subagentFollowing(browser);
   console.log("PASS Subagent logs follow new text without sharing unseen targets with the main chat.");
+  await opening(browser);
+  console.log("PASS The chat opens at the start of the newest message, and Back to newest returns a far reader to the bottom.");
   await briefTarget(browser);
   console.log("PASS An unseen tool result opens its grouped brief.");
 } finally { await browser.close(); }

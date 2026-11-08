@@ -453,7 +453,9 @@ function App() {
         model.page === "chat" && model.live && h("article", { key: "live", class: "message unii live", "data-live": true, "aria-label": "Live reply" }, h("div", { class: "label" }, "membr"), h(Markdown, { text: model.live, diagrams: false })),
       ])),
     h("footer", null,
-      scroll.hasUnseen && h("div", { class: "new-messages" }, h("button", { type: "button", class: "primary", onClick: scroll.goToUnseen }, "New messages")),
+      scroll.jump && h("div", { class: "new-messages" }, scroll.jump === "unseen"
+        ? h("button", { type: "button", class: "primary", onClick: scroll.goToUnseen }, "New messages")
+        : h("button", { type: "button", class: "primary", onClick: scroll.followLatest }, "Back to newest")),
       h(ApprovalCards, null),
       model.error && h("div", { class: "error toast", role: "alert" }, h("span", null, model.error), h("button", { type: "button", class: "ghost small", "aria-label": "Dismiss error", onClick: () => input({ type: "dismiss-error" }) }, "Close")),
       model.pending.size > 0 && h("p", { class: "pending" }, `${model.pending.size} request${model.pending.size === 1 ? "" : "s"} awaiting an answer`),
