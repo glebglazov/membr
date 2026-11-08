@@ -10,7 +10,7 @@ import type { Epochs } from "./epochs.ts";
 import type { Tree } from "./tree.ts";
 import { View } from "./view.ts";
 import { pump } from "./pump.ts";
-import { next, turnId, busy, wait, refusal, canDelegate, canAsk, closed, unattended, type Turn, type Input, type Effect } from "./turn.ts";
+import { next, turnId, busy, status, wait, refusal, canDelegate, canAsk, closed, unattended, type Turn, type Input, type Effect } from "./turn.ts";
 import { Notebook, block } from "./notebook.ts";
 import { Schedules, tell, type Fire } from "./schedules.ts";
 import { type Clock, systemClock } from "./clock.ts";
@@ -33,6 +33,8 @@ export class Chat {
   private usage: State["usage"] = null;
   // the size of the epoch at the end of its last turn; unknown until a turn of the epoch ends
   private context: Context = null;
+  // how the last finished turn ended; a stop is "done", because the user ended it
+  private ending: "done" | "failed" | null = null;
   private sent = 0;
   private knownImports = 0;
   // the notebook revision that the open epoch has seen
@@ -45,14 +47,19 @@ export class Chat {
   private readonly prompt: string;
 
   constructor(private readonly log: Log, private readonly epochs: Epochs, private readonly tree: Tree, memory: Memory, private readonly dir: string, private readonly emit: (event: Event) => void, private readonly engine: Engine = claude, options: Partial<EpochOptions> = {}, private config: AgentConfig, private readonly reloadAll: () => string | null, clock: Clock = systemClock) {
-    this.approvals = new Approvals(log, emit, () => this.config.approvalTimeout, (text) => this.record(this.log.append("note", text)), clock);
+    this.approvals = new Approvals(log, (event) => {
+      emit(event);
+      if (event.type === "ask" || event.type === "ask-closed") this.change();
+    }, () => this.config.approvalTimeout, (text) => this.record(this.log.append("note", text)), clock);
     this.prompt = options.append ?? PROMPT;
     this.options = { pick: PICK, ...options, ...this.harness(this.config), memory, ask: (tool, input, signal) => {
       if (!canAsk(this.turn)) return Promise.resolve(false);
       return this.approvals.ask(tool, input, signal, unattended(this.turn));
     } };
     if (log.pick) this.options.pick = log.pick;
-    for (const turn of log.interrupted) log.finish(turn, "The server restarted before the turn ended.");
+    const interrupted = log.interrupted;
+    for (const turn of interrupted) log.finish(turn, "The server restarted before the turn ended.");
+    if (interrupted.length) this.ending = "failed";
     this.view = new View(dir, log, tree, this.options.pick);
     this.options.pick = this.view.pick;
     this.subagents = new Subagents(dir, engine, () => this.options, () => this.opening(), this.approvals.ask, emit, () => this.change(), (text, stopped, schedule) => this.report(text, stopped, schedule));
@@ -87,7 +94,7 @@ export class Chat {
   get asks() { return this.approvals.requests; }
 
   get state(): State {
-    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, subagents: this.subagents.active, subagentNames: this.subagents.names, usage: this.usage, compression: this.tree.usage, context: this.context };
+    return { busy: busy(this.turn), wait: wait(this.turn), goal: this.view.goal, pick: this.options.pick, subagents: this.subagents.active, subagentNames: this.subagents.names, usage: this.usage, compression: this.tree.usage, context: this.context, status: status(this.turn, this.ending, this.approvals.requests.length > 0) };
   }
 
   // Answers an act id the hub could not parse or accept, so a retry with that id gets the same refusal.
@@ -333,6 +340,7 @@ export class Chat {
       case "finish":
         try {
           const entry = this.log.finish(effect.id, effect.reason);
+          this.ending = effect.reason === undefined ? "done" : "failed";
           this.run({ kind: "finished", source: effect.source, entry, error: effect.reason !== undefined });
         } catch (error) {
           if (effect.source === "stopped") this.fail(error);

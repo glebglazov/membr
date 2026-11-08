@@ -80,7 +80,9 @@ export type Skill = { name: string; description: string; argumentHint: string };
 // One agent of the server, for the agent switcher. about is the first line of its prompt.
 export type AgentInfo = { name: string; busy: boolean; about: string };
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
-export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; subagents: string[]; subagentNames?: string[]; usage: Usage | null; compression?: Usage; context?: Context };
+export type State = { busy: boolean; wait: string; goal: string | null; pick: Pick | null; subagents: string[]; subagentNames?: string[]; usage: Usage | null; compression?: Usage; context?: Context; status?: ChatStatus | null };
+// what the chat asks of the person watching it; null until a turn ends after the server starts
+export type ChatStatus = "working" | "blocked" | "done" | "failed";
 // how full the epoch was at the end of its last turn: `used` of the model's
 // `window` tokens, "overflow" when it no longer fit, null before a turn ends
 export type Context = { used: number; window: number } | "overflow" | null;
@@ -312,7 +314,7 @@ export function parseEvent(value: unknown): Event {
         const u = object(value);
         return { input: integer(u.input), cacheRead: integer(u.cacheRead), cacheWrite: integer(u.cacheWrite), output: integer(u.output) };
       };
-      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), subagents: list(s.subagents, id), ...(s.subagentNames === undefined ? {} : { subagentNames: list(s.subagentNames, id) }), usage: nullable(s.usage, usage), ...(s.compression === undefined ? {} : { compression: usage(s.compression) }), ...(s.context === undefined ? {} : { context: s.context === "overflow" ? "overflow" : nullable(s.context, (value) => { const c = object(value); return { used: integer(c.used), window: integer(c.window) }; }) }) } };
+      return { type: "state", state: { busy: boolean(s.busy), wait: string(s.wait), goal: nullable(s.goal, string), pick: nullable(s.pick, parsePick), subagents: list(s.subagents, id), ...(s.subagentNames === undefined ? {} : { subagentNames: list(s.subagentNames, id) }), usage: nullable(s.usage, usage), ...(s.compression === undefined ? {} : { compression: usage(s.compression) }), ...(s.context === undefined ? {} : { context: s.context === "overflow" ? "overflow" : nullable(s.context, (value) => { const c = object(value); return { used: integer(c.used), window: integer(c.window) }; }) }), ...(s.status === undefined ? {} : { status: nullable(s.status, (value) => oneOf(value, ["working", "blocked", "done", "failed"])) }) } };
     }
     default: throw new Error("Unknown event");
   }

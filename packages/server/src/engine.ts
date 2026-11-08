@@ -172,7 +172,8 @@ write the line as soon as you understand <input> well enough to compress it.
 // (Bash run_in_background) wakes its session when it ends, after membr's turn
 // is over, and that reply belongs to no turn: a watch is the way to wait.
 function env(): Record<string, string | undefined> {
-  return { ...process.env, ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
+  // the user's Claude Code hooks mark $TMUX_PANE; a server started from a pane must not let its engine mark that pane
+  return { ...process.env, ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1", TMUX_PANE: undefined };
 }
 
 // the input stream of a session: Claude Code reads each message when it is

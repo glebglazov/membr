@@ -1,4 +1,4 @@
-import { epochLimit, type Act, type Entry, type State, type Usage } from "@membr/protocol";
+import { epochLimit, type Act, type ChatStatus, type Entry, type State, type Usage } from "@membr/protocol";
 import type { Context, From, Priority } from "./engine.ts";
 import type { Image } from "./images.ts";
 import type { FireRecord, Log } from "./log.ts";
@@ -62,6 +62,12 @@ function full(context: Context): boolean { return context === "overflow" || (con
 
 export function closed(turn: Turn): boolean { return turn.phase === "closing" || turn.phase === "closed"; }
 export function turnId(turn: Turn, count: number): number { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" ? turn.id : count; }
+// What the chat asks of the person: an approval to answer first, then work in flight, then how the last turn ended.
+export function status(turn: Turn, ending: "done" | "failed" | null, asking: boolean): ChatStatus | null {
+  if (asking) return "blocked";
+  if (busy(turn)) return "working";
+  return turn.phase === "failed" ? "failed" : ending;
+}
 export function busy(turn: Turn): boolean { return turn.phase === "running" || turn.phase === "stopping" || turn.phase === "summaries" || turn.phase === "checking"; }
 export function wait(turn: Turn): State["wait"] { return turn.phase === "summaries" ? "summaries" : turn.phase === "checking" ? "goal" : turn.phase === "stopping" ? "Stopping" : ""; }
 export function canDelegate(turn: Turn): boolean { return !closed(turn) && turn.phase !== "stopping" && turn.phase !== "failed"; }
