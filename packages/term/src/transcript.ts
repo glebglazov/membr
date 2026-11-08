@@ -23,7 +23,7 @@ export function wrap(text: string, width: number): string[] {
   return out;
 }
 
-const LABELS: Record<Entry["kind"], string> = { user: "You", unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note", ai: "Imported chat" };
+const LABELS: Record<Exclude<Entry["kind"], "user">, string> = { unii: "membr", tool: "Tool call", echo: "Tool result", work: "Report", note: "Note", ai: "Imported chat" };
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 const preview = (text: string) => text.trim().split("\n")[0];
 
@@ -47,8 +47,9 @@ function rowLines(row: Row, width: number): Line[] {
   switch (row.kind) {
     case "message": {
       const { entry } = row;
-      const body = wrap(entry.text, width - 2).map((text): Line => ({ text: "  " + text, tone: entry.kind === "user" ? "user" : "plain" }));
-      return [{ text: LABELS[entry.kind], tone: "label" }, ...body, ...(entry.images ?? []).map((name): Line => ({ text: `  [image ${name}]`, tone: "dim" }))];
+      const images = (entry.images ?? []).map((name): Line => ({ text: `  [image ${name}]`, tone: "dim" }));
+      if (entry.kind === "user") return [...wrap(entry.text, width - 2).map((text, n): Line => ({ text: (n ? "  " : "> ") + text, tone: "user" })), ...images];
+      return [{ text: LABELS[entry.kind], tone: "label" }, ...wrap(entry.text, width - 2).map((text): Line => ({ text: "  " + text, tone: "plain" })), ...images];
     }
     case "brief": { const line = briefLine(row.brief); return wrap(line.text, width).map((text) => ({ ...line, text })); }
     case "summary": return wrap(`[${plural(2 ** row.part.l, "message")}] ${row.text}`, width).map((text) => ({ text, tone: "dim" as const }));
@@ -77,5 +78,5 @@ export function status(model: Model, agent?: string): Line {
     epochWords(model.state.context),
     model.pending.size ? `${plural(model.pending.size, "request")} waiting` : null,
   ];
-  return { text: parts.filter(Boolean).join(" | "), tone: model.connection === "refused" ? "error" : model.connection === "ready" ? "info" : "warn" };
+  return { text: parts.filter(Boolean).join(" | "), tone: model.connection === "refused" ? "error" : model.connection === "ready" ? "dim" : "warn" };
 }

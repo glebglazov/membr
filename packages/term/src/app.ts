@@ -6,8 +6,8 @@ import type { Wheel } from "./terminal.ts";
 import { newId, type Session } from "./session.ts";
 import { status, transcript, wrap, type Line, type Tone } from "./transcript.ts";
 
-const COLORS: Record<Tone, { color?: string; dimColor?: boolean; bold?: boolean }> = {
-  user: { color: "cyan" }, label: { bold: true }, plain: {}, dim: { dimColor: true }, error: { color: "red" }, info: { color: "green" }, warn: { color: "yellow" },
+const COLORS: Record<Tone, { color?: string; backgroundColor?: string; dimColor?: boolean; bold?: boolean }> = {
+  user: { color: "#000000", backgroundColor: "#c6dbf7" }, label: { bold: true }, plain: {}, dim: { dimColor: true }, error: { color: "red" }, info: { color: "green" }, warn: { color: "yellow" },
 };
 const MENU_ROWS = 6;
 const COMPOSER_ROWS = 6;
@@ -75,7 +75,7 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   const shownComposer = composerLines.slice(firstRow, firstRow + COMPOSER_ROWS);
   const menuFirst = Math.max(0, Math.min(composer.pick - MENU_ROWS + 1, menu.length - MENU_ROWS));
   const shownMenu = menu.slice(menuFirst, menuFirst + MENU_ROWS);
-  const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 1 + shownMenu.length + shownComposer.length;
+  const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 3 + shownMenu.length + shownComposer.length;
   const height = Math.max(3, rowsHigh - 1 - bottom);
   const lines = transcript(model, columns);
   const maxScroll = Math.max(0, lines.length - height);
@@ -130,15 +130,19 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   });
   usePaste((text) => { if (!approval && !proposal) setComposer((previous) => insert(previous, text)); });
 
-  const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] }, line.text || " ");
+  // A sent message fills the whole row, so its background marks it as one block.
+  const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] }, line.tone === "user" ? line.text.padEnd(columns) : line.text || " ");
+  const rule = (key: string) => h(Text, { key, dimColor: true }, "─".repeat(columns));
   return h(Box, { flexDirection: "column" },
     ...visible.map(text("t")),
     ...approvals.map(text("a")),
     ...notices.map(text("n")),
-    h(Text, { ...COLORS[state.tone], inverse: true }, ` ${state.text}${offset ? `  (scrolled up ${offset})` : ""} `),
-    ...shownMenu.map((command, index) => h(Text, { key: command.name, inverse: menuFirst + index === composer.pick },
-      `${command.name}${command.hint ? " " + command.hint : ""}`.padEnd(24) + " " + command.description)),
+    rule("above"),
     ...shownComposer.map((line, index) => h(Text, { key: index }, index + firstRow === 0 ? "> " : "  ", line.before,
       line.cursor ? h(Text, { inverse: true }, line.at) : null, line.after)),
-    approval || proposal ? h(Text, { dimColor: true }, approval ? "Answer the approval above. Esc stops the turn." : "Accept or delete the schedule above.") : null);
+    approval || proposal ? h(Text, { dimColor: true }, approval ? "Answer the approval above. Esc stops the turn." : "Accept or delete the schedule above.") : null,
+    rule("below"),
+    ...shownMenu.map((command, index) => h(Text, { key: command.name, inverse: menuFirst + index === composer.pick },
+      `${command.name}${command.hint ? " " + command.hint : ""}`.padEnd(24) + " " + command.description)),
+    h(Text, COLORS[state.tone], `${state.text}${offset ? `  (scrolled up ${offset})` : ""}`));
 }

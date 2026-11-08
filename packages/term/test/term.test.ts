@@ -51,7 +51,7 @@ test("typing / offers membr commands and skills, Tab takes one, Enter sends the 
 
   await until(() => engine.epochs[0]?.messages.length, "the message to reach the engine");
   expect(engine.epochs[0].messages[0].text).toBe("/review src/app.ts");
-  await until(() => frame(screen).includes("  /review src/app.ts") && frame(screen).includes("Reviewing now"), "the turn on screen");
+  await until(() => frame(screen).includes("> /review src/app.ts") && frame(screen).includes("Reviewing now"), "the turn on screen");
 });
 
 test("a membr command runs locally: /help shows the commands and sends nothing", async () => {
