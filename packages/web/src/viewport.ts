@@ -22,4 +22,31 @@ export function followVisibleArea(): void {
   area.addEventListener("resize", sync);
   area.addEventListener("scroll", sync);
   sync();
+  holdPageOnFocus();
+}
+
+// Safari moves the whole page up when a tap puts focus in a field that the keyboard will cover,
+// and the app moves back down only when the keyboard is open, so the page jumps. For a tap on a
+// field in the footer, the field goes to the top of the screen for one frame while it gets focus:
+// Safari sees it in view and does not move the page. The app then shrinks onto the keyboard.
+function holdPageOnFocus(): void {
+  let start: { x: number; y: number } | null = null;
+  document.addEventListener("touchstart", (event) => {
+    const touch = event.touches[0];
+    start = event.touches.length === 1 && touch ? { x: touch.clientX, y: touch.clientY } : null;
+  }, { passive: true });
+  document.addEventListener("touchend", (event) => {
+    const touch = event.changedTouches[0];
+    const tap = start && touch && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) < 10;
+    start = null;
+    if (!tap) return;
+    const field = event.target instanceof Element ? event.target.closest("footer :is(textarea, input:not([type=checkbox]):not([type=file]))") : null;
+    if (!(field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) || field === document.activeElement || field.disabled) return;
+    event.preventDefault();
+    const { transform, opacity } = field.style;
+    field.style.transform = `translateY(${-field.getBoundingClientRect().top}px)`;
+    field.style.opacity = "0";
+    field.focus({ preventScroll: true });
+    requestAnimationFrame(() => { field.style.transform = transform; field.style.opacity = opacity; });
+  }, { passive: false });
 }

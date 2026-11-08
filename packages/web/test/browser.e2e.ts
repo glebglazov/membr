@@ -140,6 +140,9 @@ async function responsiveLayout(browser: Browser): Promise<void> {
       await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${layout.colorScheme} mode at ${layout.width} px has no horizontal overflow.`).toBe(true);
     }
+    const fields = await page.evaluate(() => ({ touch: matchMedia("(pointer: coarse)").matches, sizes: [...document.querySelectorAll("textarea, input:not([type=checkbox]):not([type=file]), select")].map((node) => parseFloat(getComputedStyle(node).fontSize)) }));
+    expect(fields.touch, "The test context is a touch screen.").toBe(true);
+    expect(Math.min(...fields.sizes), "Fields on a touch screen have text of 16px or more, so iOS Safari does not zoom into them.").toBeGreaterThanOrEqual(16);
     await card.getByRole("button", { name: "Deny", exact: true }).click();
     await expect(card).toHaveCount(0);
     await expect(page.getByRole("status")).toHaveText("Ready");

@@ -14,6 +14,7 @@
     --accent: #e08a5f; --on-accent: #1a1410; --ok: #5cc27c; --busy: #e3a63a; --red: #f8857c; --shadow: 0 8px 28px -16px rgba(0, 0, 0, .8); }
 }
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
 .app { position: fixed; left: 0; right: 0; top: var(--visible-top, 0px); height: var(--visible-height, 100dvh); display: flex; flex-direction: column; }
 .scroller { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
@@ -241,3 +242,5 @@ footer > .schedule-preview { margin-bottom: 10px; }
 
 .agent-switch { font: inherit; font-size: 0.9rem; color: var(--mid); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; margin-right: 0.75rem; min-width: 0; max-width: 9rem; }
 :root[data-keyboard] footer { padding-bottom: 10px; }
+/* iOS Safari zooms into a field with text under 16px when it gets focus. The zoom makes the page wider than the screen and stops the app from following the keyboard. */
+@media (pointer: coarse) { :root :is(textarea, input:not([type=checkbox]):not([type=file]), select) { font-size: 16px; } }
