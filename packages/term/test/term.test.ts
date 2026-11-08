@@ -5,6 +5,7 @@ import { complete, createModel, hear } from "@membr/core";
 import { App } from "../src/app.ts";
 import { EMPTY_COMPOSER, edit, insert, layout } from "../src/composer.ts";
 import { openEditor, terminalInput } from "../src/terminal.ts";
+import { markdown, wrap } from "../src/transcript.ts";
 import { connectSession, type Session } from "../src/session.ts";
 import { PassThrough } from "node:stream";
 import { END, FakeEngine } from "../../server/test/engine.ts";
@@ -322,4 +323,14 @@ test("the composer moves a word that does not fit to the next row, and cuts only
   expect(rows("hello world", 6, 5)).toEqual(["hello", "[w]orld"]);
   expect(rows("abcdefgh ij", 11, 5)).toEqual(["abcde", "fgh ", "ij[ ]"]);
   expect(rows("abcde\nfg", 5, 5), "A full row that ends a line keeps the cursor inside the width.").toEqual(["abcde", "[ ]", "fg"]);
+});
+
+test("a reply draws **bold** and `code` without their markers, and wraps by the text it shows", () => {
+  const drawn = (text: string, width: number) => markdown(text, width, "plain").map((line) => line.spans!.map((span) => span.bold && span.code ? `<B${span.text}B>` : span.bold ? `<b${span.text}b>` : span.code ? `<c${span.text}c>` : span.text).join(""));
+  expect(drawn("Run **the tests** with `bun test` now", 40)).toEqual(["  Run <bthe testsb> with <cbun testc> now"]);
+  expect(drawn("**one two three four**", 12), "Markers do not count toward the width.").toEqual(["  <bone twob>", "  <bthree fourb>"]);
+  expect(drawn("**use `x` here**", 40)).toEqual(["  <buse b><BxB><b hereb>"]);
+  expect(drawn("```\na **b** `c`\n```\n**d**", 40), "Text in a code block keeps its markers.").toEqual(["  ```", "  <ca **b** `c`c>", "  ```", "  <bdb>"]);
+  expect(drawn("2 ** 3 and a lone ` stay", 40)).toEqual(["  2 ** 3 and a lone ` stay"]);
+  expect(wrap("  a  b " + "x".repeat(7) + " c", 5), "Plain wrapping keeps its old rows.").toEqual(["a  b", "xxxxx", "xx c"]);
 });

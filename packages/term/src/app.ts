@@ -131,7 +131,8 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   usePaste((text) => { if (!approval && !proposal) setComposer((previous) => insert(previous, text)); });
 
   // A sent message fills the whole row, so its background marks it as one block.
-  const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] }, line.tone === "user" ? line.text.padEnd(columns) : line.text || " ");
+  const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] },
+    line.spans ? line.spans.map((span, n) => h(Text, { key: n, bold: span.bold, color: span.code ? "cyan" : undefined }, span.text)) : line.tone === "user" ? line.text.padEnd(columns) : line.text || " ");
   const rule = (key: string) => h(Text, { key, dimColor: true }, "─".repeat(columns));
   return h(Box, { flexDirection: "column" },
     ...visible.map(text("t")),
