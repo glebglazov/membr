@@ -83,6 +83,8 @@ try {
 
   keys("long", "Enter");
   await waitFor("the long reply", (t) => t.includes("long line 59") && t.includes("Ready"));
+  const pane = tmux("display", "-p", "-t", "e2e", "#{alternate_on} #{history_size}").trim();
+  if (pane !== "1 0") throw new Error(`The chat must draw in the alternate screen and leave the scrollback empty, not "${pane}"`);
   // A wheel-up report as the terminal sends it, then a key: the transcript scrolls and nothing of the report is typed.
   tmux("send-keys", "-t", "e2e", "-H", ..."\x1b[<64;10;10M".split("").map((c) => c.charCodeAt(0).toString(16)));
   show("wheel up", await waitFor("the scroll", (t) => t.includes("scrolled up 3") && !t.includes("long line 59")));

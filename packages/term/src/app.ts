@@ -76,7 +76,7 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   const menuFirst = Math.max(0, Math.min(composer.pick - MENU_ROWS + 1, menu.length - MENU_ROWS));
   const shownMenu = menu.slice(menuFirst, menuFirst + MENU_ROWS);
   const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 3 + shownMenu.length + shownComposer.length;
-  const height = Math.max(3, rowsHigh - 1 - bottom);
+  const height = Math.max(3, rowsHigh - bottom);
   const lines = transcript(model, columns);
   const maxScroll = Math.max(0, lines.length - height);
   const offset = Math.min(scroll, maxScroll);

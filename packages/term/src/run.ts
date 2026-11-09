@@ -29,7 +29,8 @@ export async function runTerm(options: { url?: string; token?: string | null }):
   // An older server sends no status, so its chat runs only the open and close hooks.
   const unsubscribe = session.subscribe(() => { const status = session.model().state.status; if (status !== undefined) runner.status(status); });
   try {
-    const app = render(createElement(App, { session, agent, wheel: terminal.wheel, editor: terminal.edit }), { stdin: terminal.stdin, kittyKeyboard: { mode: "auto" } });
+    // The app draws and scrolls the transcript itself, so the alternate screen keeps old frames out of the scrollback and tells tmux that the app owns the screen.
+    const app = render(createElement(App, { session, agent, wheel: terminal.wheel, editor: terminal.edit }), { stdin: terminal.stdin, kittyKeyboard: { mode: "auto" }, alternateScreen: true });
     await app.waitUntilExit();
   } finally {
     terminal.close();
