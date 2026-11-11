@@ -90,7 +90,7 @@ export type ChatStatus = "working" | "blocked" | "done" | "failed";
 export type Context = { used: number; window: number } | "overflow" | null;
 // A turn that ends with the epoch at this many tokens or more gets a new epoch: past it, each request
 // costs more and the model reads its context less well. A small window lowers it to 80%, so the next turn still fits.
-export const EPOCH_BUDGET = 150_000;
+export const EPOCH_BUDGET = 220_000;
 export function epochLimit(window: number): number { return Math.min(EPOCH_BUDGET, Math.round(window * 0.8)); }
 export type Event =
   | { type: "ready"; version: string }

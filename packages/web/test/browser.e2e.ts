@@ -68,16 +68,16 @@ async function sameTurn(browser: Browser): Promise<void> {
 }
 
 async function compressionUse(browser: Browser): Promise<void> {
-  const engine = new FakeEngine((epoch) => epoch.emit({ ...END, context: { used: 42_000, window: 200_000 } }));
+  const engine = new FakeEngine((epoch) => epoch.emit({ ...END, context: { used: 42_000, window: 1_000_000 } }));
   engine.compactUsage = { input: 10, cacheRead: 90, cacheWrite: 0, output: 5 };
   await withChat({ browser, engine, check: async (context, url) => {
     const page = await openChat(context, url);
     await expect(page.locator(".usage")).toHaveCount(0);
     await send(page, "A message long enough for Haiku to compress. " + "x".repeat(600));
-    await expect(page.locator(".usage")).toHaveText("epoch 42k / 150k (28%)");
+    await expect(page.locator(".usage")).toHaveText("epoch 42k / 220k (19%)");
     await page.locator("summary[aria-label=Settings]").click();
     await expect(page.getByLabel("Compression use")).toContainText("100 sent, 90.0% cached, 5 out");
-    await expect(page.getByLabel("Epoch size")).toContainText("42,000 of 150,000 tokens");
+    await expect(page.getByLabel("Epoch size")).toContainText("42,000 of 220,000 tokens");
   } });
 }
 

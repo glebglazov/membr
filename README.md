@@ -246,9 +246,9 @@ more. If the file has an error, the server keeps the old config.
 `membr server reload` and `/reload` show the error.
 
 Large tool output stays in the epoch until the next summary batch. When a turn
-ends with the epoch at 150k tokens or more, the next turn starts in a new
+ends with the epoch at 220k tokens or more, the next turn starts in a new
 epoch. Past that size each request costs more and the model reads its context
-less well. For a model with a window under 187,500 tokens, the limit is 80% of
+less well. For a model with a window under 275,000 tokens, the limit is 80% of
 the window, so the next turn still fits. If a turn makes the epoch too large for the model,
 the turn fails with "Prompt is too long". membr then starts a new epoch and
 writes a note in the chat. Send the message again. membr does not send it
