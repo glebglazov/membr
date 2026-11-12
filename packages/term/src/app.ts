@@ -2,7 +2,7 @@ import { createElement as h, useEffect, useRef, useState, useSyncExternalStore, 
 import { Box, Text, useApp, useInput, usePaste, useWindowSize } from "ink";
 import { answering, complete, earlier, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
 import { EMPTY_COMPOSER, edit, insert, layout, type Composer } from "./composer.ts";
-import type { Wheel } from "./terminal.ts";
+import type { Mouse } from "./terminal.ts";
 import { newId, type Session } from "./session.ts";
 import { status, transcript, wrap, type Line, type Tone } from "./transcript.ts";
 
@@ -46,19 +46,27 @@ function history(model: Model, sent: readonly string[]): string[] {
 }
 
 // `editor` opens the composer text in an external editor and gives back the saved text, or null.
-export function App({ session, agent, wheel, editor }: { session: Session; agent?: string; wheel?: Wheel; editor?: (text: string) => string | null }): ReactElement {
+export function App({ session, agent, mouse, editor }: { session: Session; agent?: string; mouse?: Mouse; editor?: (text: string) => string | null }): ReactElement {
   const { suspendTerminal } = useApp();
   const model = useSyncExternalStore(session.subscribe, session.model);
   const size = useWindowSize();
   const columns = size.columns || 80, rowsHigh = size.rows || 24;
   const [composer, setComposer] = useState<Composer>(EMPTY_COMPOSER);
+  // How many lines the screen is above the bottom of the transcript. 0 follows the newest lines.
   const [scroll, setScroll] = useState(0);
+  // How many lines at the bottom came in while the reader was scrolled up.
+  const [fresh, setFresh] = useState(0);
   const [sent, setSent] = useState<string[]>([]);
   const scrollLimit = useRef(0);
+  // The screen row of the jump line, or 0 when it is not shown. A click on it goes to the bottom.
+  const jumpRow = useRef(0);
   // Ctrl+X starts a two-key command, as in Claude Code: Ctrl+X then g goes back to the bottom of the chat.
   const chord = useRef(false);
   useEffect(() => () => session.close(), [session]);
-  useEffect(() => wheel?.((lines) => setScroll((previous) => Math.max(0, Math.min(scrollLimit.current, Math.min(previous, scrollLimit.current) + lines)))), [wheel]);
+  useEffect(() => mouse?.((event) => {
+    if (event.kind === "wheel") setScroll((previous) => Math.max(0, Math.min(scrollLimit.current, Math.min(previous, scrollLimit.current) + event.lines)));
+    else if (jumpRow.current && event.row === jumpRow.current) setScroll(0);
+  }), [mouse]);
 
   const menu = complete(model, composer.text, composer.cursor).commands;
   const approval = [...model.approvals.values()][0];
@@ -78,10 +86,26 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 3 + shownMenu.length + shownComposer.length;
   const height = Math.max(3, rowsHigh - bottom);
   const lines = transcript(model, columns);
+  // Lines that come in at the bottom while the reader is scrolled up add to the offset, so the lines on screen stay. Older pages come in at the top, and a change of page, fold or width draws other lines, so those leave the offset as it is.
+  const shape = { length: lines.length, from: model.from, view: `${model.page} ${model.folded} ${columns}` };
+  const [drawn, setDrawn] = useState(shape);
+  if (drawn.length !== shape.length || drawn.from !== shape.from || drawn.view !== shape.view) {
+    setDrawn(shape);
+    const added = shape.length - drawn.length;
+    if (scroll > 0 && shape.from === drawn.from && shape.view === drawn.view) {
+      setScroll(Math.max(0, scroll + added));
+      setFresh(Math.max(0, fresh + added));
+    }
+  }
   const maxScroll = Math.max(0, lines.length - height);
   const offset = Math.min(scroll, maxScroll);
   scrollLimit.current = maxScroll;
+  if (offset === 0 && fresh) setFresh(0);
   const visible = lines.slice(Math.max(0, lines.length - height - offset), lines.length - offset);
+  // The new lines are unseen while the first of them is still below the screen.
+  const jump = offset > 0 ? `↓ Jump to bottom${fresh > 0 && offset >= fresh ? " (new messages)" : ""} · Ctrl+X g` : null;
+  if (jump) visible.pop();
+  jumpRow.current = jump ? visible.length + 1 : 0;
   const state = status(model, agent);
   // Reaching the top of the loaded chat asks for the next older page. The offset counts from the bottom, so the rows that arrive above leave the same content on screen.
   const atTop = offset >= maxScroll && !model.folded && model.page === "chat" && earlier(model) === "idle";
@@ -143,6 +167,7 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
   const rule = (key: string) => h(Text, { key, dimColor: true }, "─".repeat(columns));
   return h(Box, { flexDirection: "column" },
     ...visible.map(text("t")),
+    jump ? h(Box, { key: "jump", width: columns, justifyContent: "center" }, h(Text, { inverse: true }, ` ${jump} `)) : null,
     ...approvals.map(text("a")),
     ...notices.map(text("n")),
     rule("above"),
@@ -152,5 +177,5 @@ export function App({ session, agent, wheel, editor }: { session: Session; agent
     rule("below"),
     ...shownMenu.map((command, index) => h(Text, { key: command.name, inverse: menuFirst + index === composer.pick },
       `${command.name}${command.hint ? " " + command.hint : ""}`.padEnd(24) + " " + command.description)),
-    h(Text, COLORS[state.tone], `${state.text}${offset ? `  (scrolled up ${offset})` : ""}`));
+    h(Text, COLORS[state.tone], state.text));
 }

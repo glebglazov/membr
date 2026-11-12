@@ -4,11 +4,11 @@ import { render } from "ink-testing-library";
 import { complete, createModel, hear } from "@membr/core";
 import { App } from "../src/app.ts";
 import { EMPTY_COMPOSER, edit, insert, layout } from "../src/composer.ts";
-import { openEditor, terminalInput } from "../src/terminal.ts";
+import { openEditor, terminalInput, type MouseEvent } from "../src/terminal.ts";
 import { markdown, wrap } from "../src/transcript.ts";
 import { connectSession, type Session } from "../src/session.ts";
 import { PassThrough } from "node:stream";
-import { END, FakeEngine } from "../../server/test/engine.ts";
+import { END, FakeEngine, type FakeEpoch } from "../../server/test/engine.ts";
 import { startHub } from "./hub.ts";
 import { Log } from "../../server/src/log.ts";
 import { PAGE } from "../../server/src/view.ts";
@@ -206,46 +206,69 @@ test("Up in an empty composer brings back the last message sent, and Enter sends
   expect(engine.epochs[0].messages[1].text).toBe("hello there");
 });
 
-test("the mouse wheel scrolls the transcript, and Ink gets the keys without the mouse reports", async () => {
+test("the mouse wheel scrolls the transcript, new lines leave the screen in place, and the jump line goes back to the bottom", async () => {
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => stdin, ref: () => stdin, unref: () => stdin }) as unknown as NodeJS.ReadStream;
   const written: string[] = [];
   const stdout = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
   const mouse = terminalInput(stdin, stdout);
   cleanups.push(() => mouse.close());
-  const keys: string[] = [], wheel: number[] = [];
+  const keys: string[] = [], events: MouseEvent[] = [];
   mouse.stdin.on("data", (chunk) => keys.push(String(chunk)));
-  mouse.wheel((lines) => wheel.push(lines));
+  mouse.mouse((event) => events.push(event));
   stdin.write("a\x1b[<64;10;5Mb\x1b[<65;10;5M\x1b[<0;1;1M\x1b[<0;1;1m\x1b[<");
   stdin.write("80;1;1Mc");
   await until(() => keys.join("") === "abc", "the keys");
-  expect(wheel).toEqual([3, -3, 3]);
+  expect(events).toEqual([{ kind: "wheel", lines: 3 }, { kind: "wheel", lines: -3 }, { kind: "click", row: 1 }, { kind: "wheel", lines: 3 }]);
   expect(written.join("")).toContain("\x1b[?1006h\x1b[>4;2m");
   mouse.close();
   expect(written.join("")).toContain("\x1b[?1006l");
 
   const long = (text: string) => `${text} reply\n` + Array.from({ length: 40 }, (_, n) => `line ${n}`).join("\n");
-  const engine = new FakeEngine((epoch, message) => epoch.emit({ kind: "text", text: long(message.text) }, { ...END, reply: long(message.text) }));
+  const reply = (epoch: FakeEpoch, text: string) => epoch.emit({ kind: "text", text: long(text) }, { ...END, reply: long(text) });
+  // The reply to "later" waits, so it comes in while the reader is scrolled up.
+  const engine = new FakeEngine((epoch, message) => { if (message.text !== "later") reply(epoch, message.text); });
   const server = await startHub(engine);
   const session = connectSession({ url: server.url, token: null, delays: [50] });
-  let scroll: ((lines: number) => void) | null = null;
-  const app = render(createElement(App, { session, wheel: (listener) => { scroll = listener; return () => { scroll = null; }; } }));
+  let send: ((event: MouseEvent) => void) | null = null;
+  const scroll = (lines: number) => send!({ kind: "wheel", lines });
+  const app = render(createElement(App, { session, mouse: (listener) => { send = listener; return () => { send = null; }; } }));
   cleanups.push(() => app.unmount(), () => session.close(), () => server.close(), () => server.remove());
   await until(() => frame(app).includes("Ready"), "ready");
   await type(app, "ping");
   app.stdin.write("\r");
   await until(() => frame(app).includes("line 39") && !frame(app).includes("ping reply"), "the reply at the bottom");
-  for (let i = 0; i < 20; i++) scroll!(3);
-  await until(() => frame(app).includes("ping reply") && !frame(app).includes("line 39") && frame(app).includes("scrolled up"), "the top of the reply");
-  for (let i = 0; i < 20; i++) scroll!(-3);
-  await until(() => frame(app).includes("line 39") && !frame(app).includes("scrolled up"), "the bottom again");
+  for (let i = 0; i < 20; i++) scroll(3);
+  await until(() => frame(app).includes("ping reply") && !frame(app).includes("line 39") && frame(app).includes("↓ Jump to bottom · Ctrl+X g"), "the top of the reply");
+  for (let i = 0; i < 20; i++) scroll(-3);
+  await until(() => frame(app).includes("line 39") && !frame(app).includes("Jump to bottom"), "the bottom again");
 
-  for (let i = 0; i < 20; i++) scroll!(3);
-  await until(() => frame(app).includes("scrolled up"), "the scroll up again");
+  for (let i = 0; i < 20; i++) scroll(3);
+  await until(() => frame(app).includes("Jump to bottom"), "the scroll up again");
   app.stdin.write("\x18");
   await Bun.sleep(20);
   app.stdin.write("g");
-  await until(() => frame(app).includes("line 39") && !frame(app).includes("scrolled up"), "Ctrl+X g to go to the bottom");
+  await until(() => frame(app).includes("line 39") && !frame(app).includes("Jump to bottom"), "Ctrl+X g to go to the bottom");
   expect(frame(app)).not.toContain("> g");
+
+  await type(app, "later");
+  app.stdin.write("\r");
+  await until(() => engine.epochs[0]?.messages.length === 2, "the second message");
+  for (let i = 0; i < 20; i++) scroll(3);
+  await until(() => frame(app).includes("ping reply") && frame(app).includes("Jump to bottom"), "the top of the chat");
+  const screen = () => frame(app).split("\n").slice(0, 10).join("\n");
+  const before = screen();
+  reply(engine.epochs[0], "later");
+  await until(() => [...session.model().entries.values()].some((entry) => entry.text.startsWith("later reply")) && frame(app).includes("↓ Jump to bottom (new messages) · Ctrl+X g"), "the reply below the screen");
+  expect(screen(), "the lines on screen stay when the reply comes in below them").toBe(before);
+  const row = frame(app).split("\n").findIndex((line) => line.includes("Jump to bottom")) + 1;
+  const jumpLine = frame(app).split("\n")[row - 1].trimEnd();
+  const left = jumpLine.length - jumpLine.trimStart().length, right = frame(app).split("\n").find((line) => line.startsWith("─"))!.length - jumpLine.length;
+  expect(Math.abs(left - right), "the jump line is in the middle of the row").toBeLessThanOrEqual(1);
+  send!({ kind: "click", row: row + 1 });
+  await Bun.sleep(50);
+  expect(frame(app), "a click on another row does nothing").toContain("Jump to bottom");
+  send!({ kind: "click", row });
+  await until(() => frame(app).includes("line 39") && !frame(app).includes("Jump to bottom"), "a click on the jump line to go to the bottom");
 });
 
 test("scrolling to the top of a long chat loads the older page and leaves the same lines on screen", async () => {
@@ -255,18 +278,19 @@ test("scrolling to the top of a long chat loads the older page and leaves the sa
   for (let i = 0; i < count; i++) log.append(i % 2 ? "unii" : "user", name(i));
   const server = await startHub(new FakeEngine(), { dir });
   const session = connectSession({ url: server.url, token: null, delays: [50] });
-  let scroll: ((lines: number) => void) | null = null;
-  const app = render(createElement(App, { session, wheel: (listener) => { scroll = listener; return () => { scroll = null; }; } }));
+  let send: ((event: MouseEvent) => void) | null = null;
+  const scroll = (lines: number) => send!({ kind: "wheel", lines });
+  const app = render(createElement(App, { session, mouse: (listener) => { send = listener; return () => { send = null; }; } }));
   cleanups.push(() => app.unmount(), () => session.close(), () => server.close(), () => server.remove());
   await until(() => frame(app).includes(name(count - 1)), "the latest message");
   expect(session.model().from).toBe(count - PAGE);
-  scroll!(100_000);
-  await until(() => frame(app).includes("scrolled up") && !frame(app).includes(name(count - 1)), "the top of the loaded chat");
+  scroll(100_000);
+  await until(() => frame(app).includes("Jump to bottom") && !frame(app).includes(name(count - 1)), "the top of the loaded chat");
   const top = frame(app);
   await until(() => session.model().from < count - PAGE, "the older page");
   await Bun.sleep(100);
   expect(frame(app), "the same lines stay on screen after the page loads").toBe(top);
-  await until(() => { scroll!(100_000); return frame(app).includes(name(0)); }, "the first message");
+  await until(() => { scroll(100_000); return frame(app).includes(name(0)); }, "the first message");
   expect(session.model().from).toBe(0);
 });
 

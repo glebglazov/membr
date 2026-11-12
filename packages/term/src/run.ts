@@ -30,7 +30,7 @@ export async function runTerm(options: { url?: string; token?: string | null }):
   const unsubscribe = session.subscribe(() => { const status = session.model().state.status; if (status !== undefined) runner.status(status); });
   try {
     // The app draws and scrolls the transcript itself, so the alternate screen keeps old frames out of the scrollback and tells tmux that the app owns the screen.
-    const app = render(createElement(App, { session, agent, wheel: terminal.wheel, editor: terminal.edit }), { stdin: terminal.stdin, kittyKeyboard: { mode: "auto" }, alternateScreen: true });
+    const app = render(createElement(App, { session, agent, mouse: terminal.mouse, editor: terminal.edit }), { stdin: terminal.stdin, kittyKeyboard: { mode: "auto" }, alternateScreen: true });
     await app.waitUntilExit();
   } finally {
     terminal.close();

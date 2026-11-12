@@ -84,8 +84,11 @@ Up on the first line shows the message you sent before. Down on the last line
 goes forward, and then gives back the text you typed. Ctrl or Option with Left
 or Right moves one word. Cmd with Left or Right goes to the start or the end of
 the line. Ctrl or Option with Backspace erases one word, and Cmd+Backspace
-erases to the start of the line. The mouse wheel, Page Up and Page Down scroll the chat. Ctrl+X and
-then g goes back to the bottom. Because membr reads the mouse, hold Option
+erases to the start of the line. The mouse wheel, Page Up and Page Down scroll the chat. While you
+are scrolled up, new messages come in below and the lines on the screen stay. A
+"Jump to bottom" line shows at the bottom of the chat, with "(new messages)"
+when new messages are below the screen. Click it, or press Ctrl+X and then g,
+to go back to the bottom. Because membr reads the mouse, hold Option
 (iTerm2, Terminal) or Shift (Ghostty, kitty, WezTerm) to select text. Press o,
 a or d to answer an approval. Esc stops the turn, and Ctrl+C quits. The memory
 tree, the subagent logs, imports and images are only in the web view.
