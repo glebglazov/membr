@@ -16,7 +16,7 @@ test("every scheduling and monitor tool the SDK declares is disallowed", () => {
 
 function tools(): ScheduleTools & { specs: unknown[] } {
   const specs: unknown[] = [];
-  return { specs, create: (spec) => { specs.push(spec); return "Proposed schedule abc123."; }, list: () => "No schedules.", cancel: (id) => `Cancelled schedule ${id}.` };
+  return { specs, create: (spec) => { specs.push(spec); return "Added schedule abc123."; }, list: () => "No schedules.", cancel: (id) => `Cancelled schedule ${id}.` };
 }
 type Tool = ReturnType<typeof scheduleTool>;
 type Input = Partial<Parameters<Tool["handler"]>[0]> & { action: "create" | "list" | "cancel" };
@@ -31,7 +31,7 @@ test("the schedule tool defaults run to subagent and missed to once", async () =
   const tool = scheduleTool(fake);
   const when = { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" } as const;
   expect(z.object(tool.inputSchema).safeParse({ action: "create", text: "Read the inbox.", when }).success).toBe(true);
-  expect((await call(tool, { action: "create", text: "Read the inbox.", when })).text).toBe("Proposed schedule abc123.");
+  expect((await call(tool, { action: "create", text: "Read the inbox.", when })).text).toBe("Added schedule abc123.");
   expect(fake.specs).toEqual([{ text: "Read the inbox.", when, run: "subagent", missed: "once" }]);
 });
 
@@ -39,7 +39,7 @@ test("the schedule tool defaults a watch to a turn, quiet to 60 seconds and miss
   const fake = tools();
   const tool = scheduleTool(fake);
   const when = { kind: "watch", command: "gh pr checks 412 --watch", on: "exit" } as const;
-  expect((await call(tool, { action: "create", text: "Tell me CI is done.", when })).text).toBe("Proposed schedule abc123.");
+  expect((await call(tool, { action: "create", text: "Tell me CI is done.", when })).text).toBe("Added schedule abc123.");
   expect(fake.specs).toEqual([{ text: "Tell me CI is done.", when: { ...when, quiet: 60 }, run: "turn", missed: "once" }]);
 });
 

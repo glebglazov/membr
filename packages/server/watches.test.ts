@@ -40,11 +40,9 @@ async function act(client: TestClient, body: Record<string, unknown>) {
   return await client.wait("answer", mark, (event) => event.id === id);
 }
 
-// The agent proposes the watch with its tool, and the user accepts it in a client.
-async function watch(client: TestClient, tools: { create(spec: ScheduleSpec): string }, value: ScheduleSpec): Promise<string> {
-  const id = /Proposed schedule (\w+)\./.exec(tools.create(value))![1]!;
-  expect((await act(client, { act: "accept", schedule: id })).ok).toBe(true);
-  return id;
+// The agent adds the watch with its tool, and it is active at once.
+async function watch(_client: TestClient, tools: { create(spec: ScheduleSpec): string }, value: ScheduleSpec): Promise<string> {
+  return /Added schedule (\w+)\./.exec(tools.create(value))![1]!;
 }
 
 // Waits in real time for what a real process does, moving the fake clock by tick on each try.
@@ -63,14 +61,11 @@ const entries = (client: TestClient): Entry[] => client.entries;
 const fires = (client: TestClient) => entries(client).filter((entry) => entry.kind === "work" && entry.text.startsWith("Watch "));
 const notes = (client: TestClient) => entries(client).filter((entry) => entry.kind === "note").map((entry) => entry.text);
 
-test("a proposed watch runs nothing until the user accepts it, then its exit starts a membr turn with its output and task, and it is done", async () => {
+test("a watch the agent adds runs at once, then its exit starts a membr turn with its output and task, and it is done", async () => {
   const { dir, client, main, tools } = await serve();
   const flag = path.join(dir, "ci-green");
   const command = `until [ -f '${flag}' ]; do sleep 0.05; done; echo 'checks: 14 passed'; echo ok >&2`;
-  const id = /Proposed schedule (\w+)\./.exec(tools.create(spec({ command })))![1]!;
-  await Bun.sleep(100);
-  expect(view(client, id)).toMatchObject({ phase: "proposed", running: false });
-  expect((await act(client, { act: "accept", schedule: id })).ok).toBe(true);
+  const id = /Added schedule (\w+)\./.exec(tools.create(spec({ command })))![1]!;
   expect(await until(() => view(client, id)?.running)).toBe(true);
   expect(fires(client)).toEqual([]);
   fs.writeFileSync(flag, "");

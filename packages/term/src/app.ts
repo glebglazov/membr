@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Box, Text, useApp, useInput, usePaste, useWindowSize } from "ink";
-import { answering, complete, earlier, describeWhen, fireTime, runLabel, type Model } from "@membr/core";
+import { answering, complete, earlier, type Model } from "@membr/core";
 import { EMPTY_COMPOSER, edit, insert, layout, type Composer } from "./composer.ts";
 import type { Mouse } from "./terminal.ts";
 import { newId, type Session } from "./session.ts";
@@ -25,17 +25,9 @@ function approvalLines(model: Model, width: number): Line[] {
   ];
 }
 
-function previewLines(model: Model, width: number): Line[] {
-  const proposal = model.preview?.proposal;
+function previewLines(model: Model): Line[] {
   if (!model.preview) return [];
-  if (!proposal) return [{ text: "Reading the time...", tone: "dim" }];
-  const zone = proposal.when.kind === "cron" ? proposal.when.zone : undefined;
-  const next = proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}.` : "It does not fire again.";
-  const waiting = [...model.pending.values()].some((request) => request.act === "schedule");
-  return [
-    ...wrap(`Proposed: ${describeWhen(proposal.when)}, as a ${runLabel("subagent")}.`, width).map((text): Line => ({ text, tone: "warn" })),
-    ...wrap(`${next}${waiting ? "" : "  [a] accept  [d] delete"}`, width).map((text): Line => ({ text, tone: waiting ? "dim" : "warn" })),
-  ];
+  return [{ text: model.preview.proposal ? "Saving the schedule..." : "Reading the time...", tone: "dim" }];
 }
 
 // What up and down recall: the user's messages in the chat, then what this terminal sent that is not in the chat yet or never goes there, such as /help.
@@ -75,15 +67,14 @@ export function App({ session, agent, mouse, editor }: { session: Session; agent
     ...model.info ? wrap(model.info, columns).map((text): Line => ({ text, tone: "info" })) : [],
     ...model.error ? wrap(model.error, columns).map((text): Line => ({ text, tone: "error" })) : [],
   ];
-  const proposal = model.preview?.proposal ?? null;
-  const approvals = [...approvalLines(model, columns), ...previewLines(model, columns)];
-  const composerLines = approval || proposal ? [] : layout(composer, columns - 2);
+  const approvals = [...approvalLines(model, columns), ...previewLines(model)];
+  const composerLines = approval ? [] : layout(composer, columns - 2);
   const cursorRow = composerLines.findIndex((line) => line.cursor);
   const firstRow = Math.max(0, Math.min(cursorRow - COMPOSER_ROWS + 1, composerLines.length - COMPOSER_ROWS));
   const shownComposer = composerLines.slice(firstRow, firstRow + COMPOSER_ROWS);
   const menuFirst = Math.max(0, Math.min(composer.pick - MENU_ROWS + 1, menu.length - MENU_ROWS));
   const shownMenu = menu.slice(menuFirst, menuFirst + MENU_ROWS);
-  const bottom = notices.length + approvals.length + (approval || proposal ? 1 : 0) + 3 + shownMenu.length + shownComposer.length;
+  const bottom = notices.length + approvals.length + (approval ? 1 : 0) + 3 + shownMenu.length + shownComposer.length;
   const height = Math.max(3, rowsHigh - bottom);
   const lines = transcript(model, columns);
   // Lines that come in at the bottom while the reader is scrolled up add to the offset, so the lines on screen stay. Older pages come in at the top, and a change of page, fold or width draws other lines, so those leave the offset as it is.
@@ -144,11 +135,6 @@ export function App({ session, agent, mouse, editor }: { session: Session; agent
       if (choice) session.input({ type: "answer", id: newId(), approval: first.id, choice });
       return;
     }
-    if (current.preview?.proposal) {
-      if (input === "a") session.input({ type: "schedule-accept", id: newId() });
-      else if (input === "d") session.input({ type: "schedule-discard" });
-      return;
-    }
     if (key.ctrl && input === "g") {
       if (!editor) return;
       let saved: string | null = null;
@@ -159,7 +145,7 @@ export function App({ session, agent, mouse, editor }: { session: Session; agent
     if (result.submit === null) return setComposer(result.composer);
     if (!send(result.submit)) setComposer(result.composer);
   });
-  usePaste((text) => { if (!approval && !proposal) setComposer((previous) => insert(previous, text)); });
+  usePaste((text) => { if (!approval) setComposer((previous) => insert(previous, text)); });
 
   // A sent message fills the whole row, so its background marks it as one block.
   const text = (group: string) => (line: Line, index: number) => h(Text, { key: `${group}${index}`, ...COLORS[line.tone] },
@@ -173,7 +159,7 @@ export function App({ session, agent, mouse, editor }: { session: Session; agent
     rule("above"),
     ...shownComposer.map((line, index) => h(Text, { key: index }, index + firstRow === 0 ? "> " : "  ", line.before,
       line.cursor ? h(Text, { inverse: true }, line.at) : null, line.after)),
-    approval || proposal ? h(Text, { dimColor: true }, approval ? "Answer the approval above. Esc stops the turn." : "Accept or delete the schedule above.") : null,
+    approval ? h(Text, { dimColor: true }, "Answer the approval above. Esc stops the turn.") : null,
     rule("below"),
     ...shownMenu.map((command, index) => h(Text, { key: command.name, inverse: menuFirst + index === composer.pick },
       `${command.name}${command.hint ? " " + command.hint : ""}`.padEnd(24) + " " + command.description)),

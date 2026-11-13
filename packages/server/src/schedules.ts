@@ -75,10 +75,10 @@ export class Schedules {
       create: (spec) => {
         const now = this.clock.now();
         check(spec, now);
-        const value: Schedule = { ...spec, id: this.newId(), author: "membr", phase: "proposed", since: iso(now) };
-        this.save(value, `membr proposed schedule ${value.id}: ${describe(value.when)}, as a ${value.run === "turn" ? "turn" : "subagent"}. It runs only after you accept it.`);
+        const value: Schedule = { ...spec, id: this.newId(), author: "membr", phase: "active", since: iso(now) };
+        this.save(value, `membr added schedule ${value.id}: ${describe(value.when)}, as a ${value.run === "turn" ? "turn" : "subagent"}.`);
         const when = value.when.kind === "watch" ? `Its command: ${value.when.command}` : `Next: ${fires(value.when, now, 3).map(iso).join(", ")}.`;
-        return `Proposed schedule ${value.id}. ${when}\nIt runs only after the user accepts it in a client.`;
+        return `Added schedule ${value.id}. ${when}`;
       },
       list: () => {
         const lines = [...this.event.schedules].filter((s) => s.phase !== "cancelled").map((s) => `${s.id} ${s.phase} by ${s.author}, ${describe(s.when)}, ${s.when.kind === "watch" ? (s.running ? "running" : "not running") : `next ${s.next[0] ?? "none"}`}: ${s.text}`);

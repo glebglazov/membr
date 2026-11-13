@@ -323,40 +323,30 @@ test("membr accepts the sign-in link that membr status prints", async () => {
 });
 
 
-test("/schedule shows the proposal in words, a accepts it, and /schedules lists it", async () => {
+test("/schedule saves the schedule at once, shows the time membr read, and /schedules lists it", async () => {
   const engine = new FakeEngine();
   engine.onWhen = async () => ({ when: { kind: "cron", expr: "30 8 * * 1-5", zone: "Europe/London" }, phrase: "every weekday 8:30" });
   const { session, screen } = await open(engine);
   await until(() => frame(screen).includes("Ready"), "ready");
   await type(screen, "/schedule every weekday 8:30 read the inbox notes");
   screen.stdin.write("\r");
-  await until(() => frame(screen).includes('Proposed: cron "30 8 * * 1-5" Europe/London, as a subagent.') && frame(screen).includes("[a] accept  [d] delete"), "the proposal");
-  expect(frame(screen)).toMatch(/Next: \w{3} 08:30, \w{3} 08:30, \w{3} 08:30\./);
+  await until(() => frame(screen).includes('Scheduled cron "30 8 * * 1-5" Europe/London, as a subagent: read the inbox notes'), "the saved schedule");
+  expect(frame(screen)).toMatch(/Next: \w{3} 08:30, \w{3} 08:30, \w{3} 08:30\. Use \/unschedule to delete it\./);
   expect(engine.whens[0].text).toBe("every weekday 8:30 read the inbox notes");
-  screen.stdin.write("a");
-  await until(() => !frame(screen).includes("[a] accept"), "the proposal to close");
+  expect(session.model().schedules).toMatchObject([{ phase: "active", author: "user" }]);
   await type(screen, "/schedules");
   screen.stdin.write("\r");
   await until(() => frame(screen).includes("1. "), "the numbered list");
   expect(session.model().info).toMatch(/^1\. \w+  cron "30 8 \* \* 1-5" Europe\/London  active, subagent/);
 });
 
-test("d drops a proposal and nothing is scheduled; /pause and /resume act on a listed schedule", async () => {
+test("/pause and /resume act on a listed schedule", async () => {
   const engine = new FakeEngine();
   engine.onWhen = async () => ({ when: { kind: "cron", expr: "0 9 * * *", zone: "UTC" }, phrase: "daily at 9" });
   const { session, screen } = await open(engine);
   await until(() => frame(screen).includes("Ready"), "ready");
   await type(screen, "/schedule daily at 9 check mail");
   screen.stdin.write("\r");
-  await until(() => frame(screen).includes("[d] delete"), "the proposal");
-  screen.stdin.write("d");
-  await until(() => !frame(screen).includes("[d] delete"), "the proposal to close");
-  expect(session.model().schedules).toEqual([]);
-
-  await type(screen, "/schedule daily at 9 check mail");
-  screen.stdin.write("\r");
-  await until(() => frame(screen).includes("[a] accept"), "the proposal");
-  screen.stdin.write("a");
   await until(() => session.model().schedules.length === 1, "the schedule");
   await type(screen, "/pause 1");
   screen.stdin.write("\r");

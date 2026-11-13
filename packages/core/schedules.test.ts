@@ -8,29 +8,31 @@ const view = (id: string, phase: ScheduleView["phase"], extra: Partial<ScheduleV
 });
 const ready = () => hear(createModel(), { type: "ready", version: "1.0" });
 
-test("S5 /schedule reads the time with the client's zone, then accept sends the proposal with the defaults", () => {
+test("S5 /schedule reads the time with the client's zone, then saves what the server understood with the defaults", () => {
   const asked = act(ready(), { type: "send", id: "w1", text: "/schedule every weekday 8:30 read the inbox notes" });
   expect(asked.reads).toEqual([{ type: "read", read: "when", id: "w1", text: "every weekday 8:30 read the inbox notes", zone: clientZone() }]);
-  expect(asked.model.preview).toEqual({ id: "w1", text: "every weekday 8:30 read the inbox notes", proposal: null });
-  expect(act(asked.model, { type: "schedule-accept", id: "s1" }).acts).toEqual([]);
+  expect(asked.model.preview).toEqual({ id: "w1", text: "every weekday 8:30 read the inbox notes", run: "subagent", missed: "once", proposal: null });
+  expect(act(asked.model, { type: "schedule-save", id: "s1" }).acts).toEqual([]);
 
   const heard = hear(asked.model, { type: "when", id: "w1", when: cron, text: "read the inbox notes", next: ["2026-11-09T08:30:00.000Z"] });
   expect(heard.reads.size).toBe(0);
-  expect(heard.preview?.proposal).toEqual({ when: cron, text: "read the inbox notes", next: ["2026-11-09T08:30:00.000Z"] });
+  const saved = act(heard, { type: "schedule-save", id: "s1" });
+  expect(saved.acts).toEqual([{ type: "act", act: "schedule", id: "s1", schedule: { text: "read the inbox notes", when: cron, run: "subagent", missed: "once" } }]);
 
-  const accepted = act(heard, { type: "schedule-accept", id: "s1" });
-  expect(accepted.acts).toEqual([{ type: "act", act: "schedule", id: "s1", schedule: { text: "read the inbox notes", when: cron, run: "subagent", missed: "once" } }]);
-  expect(accepted.model.preview).not.toBeNull();
-  expect(hear(accepted.model, { type: "answer", id: "s1", ok: true, entry: null }).preview).toBeNull();
+  const answered = hear(saved.model, { type: "answer", id: "s1", ok: true, entry: null });
+  expect(answered.preview).toBeNull();
+  expect(answered.info).toStartWith('Scheduled cron "30 8 * * 1-5" Europe/London, as a subagent: read the inbox notes\nNext: ');
+  expect(answered.info).toContain("/unschedule");
 });
 
-test("S5 accept sends the chosen run and missed, and a refused schedule keeps the preview", () => {
-  let model = act(ready(), { type: "schedule-preview", id: "w1", text: "x", zone: "UTC" }).model;
+test("S5 the save sends the run and missed chosen with the text, and a refused schedule shows the reason", () => {
+  let model = act(ready(), { type: "schedule-preview", id: "w1", text: "x", zone: "UTC", run: "turn", missed: "skip" }).model;
   model = hear(model, { type: "when", id: "w1", when: cron, text: "x", next: [] });
-  const accepted = act(model, { type: "schedule-accept", id: "s1", run: "turn", missed: "skip" });
-  expect(accepted.acts[0]).toMatchObject({ act: "schedule", schedule: { run: "turn", missed: "skip" } });
-  const refused = hear(accepted.model, { type: "answer", id: "s1", ok: false, reason: "No." });
-  expect(refused.preview?.proposal).not.toBeNull();
+  const saved = act(model, { type: "schedule-save", id: "s1" });
+  expect(saved.acts[0]).toMatchObject({ act: "schedule", schedule: { run: "turn", missed: "skip" } });
+  const refused = hear(saved.model, { type: "answer", id: "s1", ok: false, reason: "No." });
+  expect(refused.preview).toBeNull();
+  expect(refused.info).toBeNull();
   expect(refused.error).toBe("No.");
 });
 

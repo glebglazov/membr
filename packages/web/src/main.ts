@@ -68,6 +68,7 @@ function connect() {
       model = hear(model, event);
       if (event.type === "ready") input({ type: "flush" });
       else if (event.type === "view") input({ type: "reads" });
+      else if (event.type === "when") input({ type: "schedule-save", id: id() });
       changed();
     } catch {
       model = hear(model, { type: "refused", reason: "The server sent an invalid response." });
@@ -241,27 +242,11 @@ function ImportPanel() {
 }
 
 function SchedulePreview() {
-  const [run, setRun] = useState<ScheduleSpec["run"]>("subagent");
-  const [missed, setMissed] = useState<ScheduleSpec["missed"]>("once");
   const preview = model.preview;
   if (!preview) return null;
-  const { proposal } = preview;
-  const zone = proposal?.when.kind === "cron" ? proposal.when.zone : undefined;
-  const saving = [...model.pending.values()].some((request) => request.act === "schedule");
-  const discard = h("button", { type: "button", class: "ghost", onClick: () => input({ type: "schedule-discard" }) }, "Discard");
-  if (!proposal) return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" }, h("p", { role: "status" }, "Reading the time..."), h("div", { class: "schedule-actions" }, discard));
-  return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" },
-    h("p", { class: "schedule-when" }, describeWhen(proposal.when)),
-    h("p", { class: "schedule-text" }, proposal.text),
-    h("p", { class: "label" }, proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}` : "It does not fire again."),
-    h("div", { class: "schedule-actions" },
-      h("label", null, "Run as", h("select", { "aria-label": "Run as", value: run, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setRun(event.currentTarget.value === "turn" ? "turn" : "subagent"); } },
-        h("option", { value: "subagent" }, "A subagent"), h("option", { value: "turn" }, "A turn in the chat"))),
-      h("label", null, "If missed", h("select", { "aria-label": "If missed", value: missed, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setMissed(event.currentTarget.value === "skip" ? "skip" : "once"); } },
-        h("option", { value: "once" }, "Run once when back"), h("option", { value: "skip" }, "Skip"))),
-      h("span", { class: "grow" }),
-      discard,
-      h("button", { type: "button", class: "primary", disabled: saving || model.connection !== "ready", onClick: () => input({ type: "schedule-accept", id: id(), run, missed }) }, "Accept")));
+  if (preview.proposal) return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" }, h("p", { role: "status" }, "Saving the schedule..."));
+  return h("section", { class: "schedule-preview", "aria-label": "Schedule preview" }, h("p", { role: "status" }, "Reading the time..."),
+    h("div", { class: "schedule-actions" }, h("button", { type: "button", class: "ghost", onClick: () => input({ type: "schedule-discard" }) }, "Discard")));
 }
 
 function ScheduleCard({ schedule }: { schedule: ScheduleView }) {
@@ -290,17 +275,22 @@ function ScheduleCard({ schedule }: { schedule: ScheduleView }) {
 
 function SchedulesPage() {
   const [text, setText] = useState("");
+  const [run, setRun] = useState<ScheduleSpec["run"]>("subagent");
+  const [missed, setMissed] = useState<ScheduleSpec["missed"]>("once");
   const schedules = model.schedules.filter((schedule) => schedule.phase !== "cancelled");
-  const reading = model.preview !== null;
-  function preview() {
+  function add() {
     if (!text.trim() || model.connection !== "ready") return;
-    input({ type: "schedule-preview", id: id(), text: text.trim(), zone: clientZone() });
+    input({ type: "schedule-preview", id: id(), text: text.trim(), zone: clientZone(), run, missed });
     setText("");
   }
   return h("div", { class: "schedules" },
-    h("form", { class: "schedule-form", onSubmit: (event: SubmitEvent) => { event.preventDefault(); preview(); } },
+    h("form", { class: "schedule-form", onSubmit: (event: SubmitEvent) => { event.preventDefault(); add(); } },
       h("input", { "aria-label": "When and what", placeholder: "every weekday 8:30 read the inbox notes", value: text, onInput: (event: Event) => { if (event.currentTarget instanceof HTMLInputElement) setText(event.currentTarget.value); } }),
-      h("button", { type: "submit", class: "primary", disabled: !text.trim() || model.connection !== "ready" }, reading ? "Preview again" : "Preview")),
+      h("label", null, "Run as", h("select", { "aria-label": "Run as", value: run, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setRun(event.currentTarget.value === "turn" ? "turn" : "subagent"); } },
+        h("option", { value: "subagent" }, "A subagent"), h("option", { value: "turn" }, "A turn in the chat"))),
+      h("label", null, "If missed", h("select", { "aria-label": "If missed", value: missed, onChange: (event: Event) => { if (event.currentTarget instanceof HTMLSelectElement) setMissed(event.currentTarget.value === "skip" ? "skip" : "once"); } },
+        h("option", { value: "once" }, "Run once when back"), h("option", { value: "skip" }, "Skip"))),
+      h("button", { type: "submit", class: "primary", disabled: !text.trim() || model.connection !== "ready" }, "Add")),
     h(SchedulePreview, null),
     schedules.length === 0 && h("p", { class: "empty" }, "No schedules yet."),
     schedules.map((schedule) => h(ScheduleCard, { schedule, key: schedule.id })));

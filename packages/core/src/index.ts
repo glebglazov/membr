@@ -39,8 +39,8 @@ export type Model = {
   agents: AgentInfo[];
   schedules: ScheduleView[];
   notebook: Notebook | null;
-  // One /schedule request: the read in flight, then what the server understood.
-  preview: { id: string; text: string; proposal: Proposal | null } | null;
+  // One /schedule request: the read in flight, then what the server understood, which the client saves at once.
+  preview: { id: string; text: string; run: ScheduleSpec["run"]; missed: ScheduleSpec["missed"]; proposal: Proposal | null } | null;
 };
 export type Input =
   | { type: "import-plan"; id: string; input: ImportInput }
@@ -60,8 +60,8 @@ export type Input =
   | { type: "fold" }
   | { type: "older"; id: string }
   | { type: "page"; page: Page }
-  | { type: "schedule-preview"; id: string; text: string; zone: string }
-  | { type: "schedule-accept"; id: string; run?: ScheduleSpec["run"]; missed?: ScheduleSpec["missed"] }
+  | { type: "schedule-preview"; id: string; text: string; zone: string; run?: ScheduleSpec["run"]; missed?: ScheduleSpec["missed"] }
+  | { type: "schedule-save"; id: string }
   | { type: "schedule-discard" }
   | { type: "schedule-act"; id: string; schedule: string; change: "accept" | "pause" | "resume" | "unschedule" }
   | { type: "notebook-save"; id: string; text: string; base: number }
@@ -209,7 +209,7 @@ export function hear(model: Model, event: Event | ConnectionEvent): Model {
       pending.delete(event.id);
       const uploads = new Map(model.uploads);
       uploads.delete(event.id);
-      return { ...model, pending, uploads, importPlan: event.ok && model.pending.get(event.id)?.act === "import" ? null : model.importPlan, preview: event.ok && model.pending.get(event.id)?.act === "schedule" ? null : model.preview, error: event.ok ? model.error : event.reason };
+      return { ...model, pending, uploads, importPlan: event.ok && model.pending.get(event.id)?.act === "import" ? null : model.importPlan, preview: model.pending.get(event.id)?.act === "schedule" ? null : model.preview, info: event.ok && model.pending.get(event.id)?.act === "schedule" && model.preview?.proposal ? scheduled(model.preview) : model.info, error: event.ok ? model.error : event.reason };
     }
     case "error": {
       const request = event.id === null ? undefined : model.reads.get(event.id);
@@ -264,13 +264,13 @@ export function act(model: Model, input: Input): { model: Model; acts: Act[]; re
     const reads = new Map([...model.reads].filter(([, request]) => request.read !== "when"));
     const request: Read = { type: "read", read: "when", id: input.id, text: input.text, zone: input.zone };
     reads.set(request.id, request);
-    return output({ ...model, reads, preview: { id: input.id, text: input.text, proposal: null }, error: null }, [], [request]);
+    return output({ ...model, reads, preview: { id: input.id, text: input.text, run: input.run ?? "subagent", missed: input.missed ?? "once", proposal: null }, error: null }, [], [request]);
   }
   if (input.type === "schedule-discard") return output({ ...model, preview: null, reads: new Map([...model.reads].filter(([, request]) => request.read !== "when")) });
-  if (input.type === "schedule-accept") {
-    const proposal = model.preview?.proposal;
-    if (!proposal) return output(model);
-    const schedule = { text: proposal.text, when: proposal.when, run: input.run ?? "subagent", missed: input.missed ?? "once" };
+  if (input.type === "schedule-save") {
+    const preview = model.preview;
+    if (!preview?.proposal) return output(model);
+    const schedule = { text: preview.proposal.text, when: preview.proposal.when, run: preview.run, missed: preview.missed };
     return post(model, [{ type: "act", act: "schedule", id: input.id, schedule }]);
   }
   if (input.type === "schedule-act") {
@@ -336,7 +336,7 @@ export const COMMANDS: Command[] = [
   { name: "/speed", hint: "[normal|fast]", description: "Show speeds, or select one." },
   { name: "/fold", hint: "", description: "Fold or unfold the chat." },
   { name: "/tree", hint: "", description: "Open the memory tree." },
-  { name: "/schedule", hint: "<when and task>", description: "Preview a schedule, then accept it." },
+  { name: "/schedule", hint: "<when and task>", description: "Add a schedule." },
   { name: "/schedules", hint: "", description: "List the schedules." },
   { name: "/unschedule", hint: "<id>", description: "Delete a schedule." },
   { name: "/pause", hint: "<id>", description: "Pause a schedule." },
@@ -363,6 +363,14 @@ export function describeWhen(when: When): string {
 }
 
 export function runLabel(run: ScheduleSpec["run"]): string { return run === "turn" ? "turn" : "subagent"; }
+
+// The preview is gone once the schedule is saved, so this line is where the user sees the time that membr read.
+function scheduled({ proposal, run }: NonNullable<Model["preview"]>): string {
+  if (!proposal) return "";
+  const zone = proposal.when.kind === "cron" ? proposal.when.zone : undefined;
+  const next = proposal.next.length ? `Next: ${proposal.next.map((time) => fireTime(time, zone)).join(", ")}.` : "It does not fire again.";
+  return `Scheduled ${describeWhen(proposal.when)}, as a ${runLabel(run)}: ${proposal.text}\n${next} Use /unschedule to delete it.`;
+}
 
 function skill(model: Model, name: string): Skill | undefined {
   return COMMANDS.some((command) => command.name === name) ? undefined : model.skills.find((skill) => "/" + skill.name === name);

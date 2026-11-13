@@ -56,7 +56,7 @@ _Avoid_: compaction, compression
 The phase of a turn in which membr waits for compression to write the lines that the summary batch needs, before it starts a new epoch.
 
 **Schedule**:
-A task text with a time (one ISO time, or a cron and a time zone name) or a watch, stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent proposes speaks as membr, and runs only after the user accepts it.
+A task text with a time (one ISO time, or a cron and a time zone name) or a watch, stored in the log. It belongs to one agent, and runs as a turn of that agent or as a subagent. A schedule that the user makes speaks as the user. A schedule that the agent makes speaks as membr. Both are active at once, with no step to accept them.
 _Avoid_: job, cron, timer, reminder
 
 **Watch**:

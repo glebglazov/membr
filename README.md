@@ -267,25 +267,28 @@ words:
 /schedule every weekday 8:30 read the inbox notes and write a summary
 ```
 
-membr finds the time words, and shows the cron and the time zone of your client
-and the next three fire times. Press `a` in the terminal, or Accept on the web,
-to keep the schedule. The task is your own words without the time words. A
-fire sends it as your message, word for word.
+membr finds the time words and saves the schedule at once. It then shows the
+cron and the time zone of your client and the next three fire times. If membr
+read the time incorrectly, delete the schedule with `/unschedule`. The task is
+your own words without the time words. A fire sends it as your message, word
+for word.
 
-- The web client has a Schedules page next to Chat and Memory. It can preview,
-  accept, pause, resume and delete schedules. You can also set two options on
-  it. "Run as" is a subagent (the default) or a turn in the main chat. "If
-  missed" is "once" (the default) or "skip".
+- The web client has a Schedules page next to Chat and Memory. It can add,
+  pause, resume and delete schedules. You can also set two options on it
+  before you add a schedule. "Run as" is a subagent (the default) or a turn in
+  the main chat. "If missed" is "once" (the default) or "skip".
 - `/schedules` lists the schedules. `/pause`, `/resume`, `/unschedule` and
-  `/accept` take an id or a number from that list.
+  `/accept` take an id or a number from that list. `/accept` is only for a
+  schedule that an earlier version of membr left as proposed.
 - A subagent run sends its report to the chat. A turn waits until the current
   turn ends. Fires of one schedule that come while the chat is busy become one
   run.
 - If the server did not run at a fire time, or the Mac was asleep, "once" runs
   the newest missed fire one time, and a note says that it is late. "skip"
   writes a note and does not run it.
-- The agent can propose a schedule with its `schedule` tool. It does not run
-  until you accept it, and its fires come as membr's messages, not as yours.
+- The agent can add a schedule with its `schedule` tool. It is active at once,
+  and its fires come as membr's messages, not as yours. A note in the chat
+  tells you about it.
   The agent can cancel only its own schedules.
 - Fires happen only while the server runs. On macOS, launchd keeps it running
   (see [Start membr](#start-membr)).
@@ -294,8 +297,8 @@ fire sends it as your message, word for word.
 
 A watch is a schedule that waits for a command, not for a time. Ask the agent
 to tell you when something happens, such as "tell me when CI on PR 412 is
-green". The agent proposes a watch with a shell command, and you accept it.
-membr then runs the command in the agent's home:
+green". The agent adds a watch with a shell command, and membr starts the command in
+the agent's home at once:
 
 - `on: "exit"` fires one time, when the command exits, with its last output
   and, after a failure, its last errors. Then the watch is done.

@@ -51,6 +51,7 @@ export function connectSession(options: SessionOptions): Session {
         change(hear(model, event));
         if (event.type === "ready") { attempt = 0; input({ type: "flush" }); }
         else if (event.type === "view") input({ type: "reads" });
+        else if (event.type === "when") input({ type: "schedule-save", id: newId() });
       } catch {
         change(hear(model, { type: "refused", reason: "The server sent an invalid response." }));
         current.close();

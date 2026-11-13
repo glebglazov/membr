@@ -141,11 +141,10 @@ test("after a gap, a reopened log gives one late fire for missed once and one sk
   expect(log.lastFire(skipped)).toEqual({ at: "2026-11-09T11:00:00.000Z", result: "skipped", entry: 2 });
 });
 
-test("paused and proposed schedules never fire, and a resume does not fire the slots it missed while paused", async () => {
-  const { client, clock, tools, main } = await serve();
+test("a paused schedule never fires, and a resume does not fire the slots it missed while paused", async () => {
+  const { client, clock, main } = await serve();
   const paused = await schedule(client, hourly());
   expect((await act(client, { act: "pause", schedule: paused, paused: true })).answer.ok).toBe(true);
-  tools.create(hourly({ text: "Proposed work." }));
   clock.until(at("11:00:30"));
   await settle(client);
   expect(fires(client)).toEqual([]);
@@ -160,22 +159,15 @@ test("paused and proposed schedules never fire, and a resume does not fire the s
   expect(fires(client)).toHaveLength(1);
 });
 
-test("a schedule the agent creates is proposed with a note and its next fires, and fires as membr only after the user accepts it", async () => {
+test("a schedule the agent creates is active at once, with a note and its next fires, and fires as membr", async () => {
   const { client, clock, tools, main } = await serve();
   const mark = client.events.length;
   const reply = tools.create(hourly());
-  const id = /^Proposed schedule (\w+)\. Next: 2026-11-09T09:00:00\.000Z, /.exec(reply)?.[1];
-  expect(reply).toEndWith("It runs only after the user accepts it in a client.");
+  const id = /^Added schedule (\w+)\. Next: 2026-11-09T09:00:00\.000Z, 2026-11-09T10:00:00\.000Z, 2026-11-09T11:00:00\.000Z\.$/.exec(reply)?.[1];
   const note = await client.wait("entry", mark, (event) => event.entry.kind === "note");
-  expect(note.entry.text).toBe(`membr proposed schedule ${id}: cron "0 * * * *" UTC, as a turn. It runs only after you accept it.`);
-  expect((await client.wait("schedules", mark)).schedules).toMatchObject([{ id, author: "membr", phase: "proposed", next: ["2026-11-09T09:00:00.000Z", "2026-11-09T10:00:00.000Z", "2026-11-09T11:00:00.000Z"] }]);
-  clock.until(at("09:00:30"));
-  await settle(client);
-  expect(fires(client)).toEqual([]);
-  expect((await act(client, { act: "accept", schedule: id })).answer.ok).toBe(true);
-  await settle(client);
-  expect(fires(client)).toEqual([]);
-  clock.until(at("10:00:00"));
+  expect(note.entry.text).toBe(`membr added schedule ${id}: cron "0 * * * *" UTC, as a turn.`);
+  expect((await client.wait("schedules", mark)).schedules).toMatchObject([{ id, author: "membr", phase: "active", next: ["2026-11-09T09:00:00.000Z", "2026-11-09T10:00:00.000Z", "2026-11-09T11:00:00.000Z"] }]);
+  clock.until(at("09:00:00"));
   const fired = (await client.wait("entry", 0, (event) => event.entry.scheduled !== undefined)).entry;
   expect(fired).toMatchObject({ kind: "note", text: TEXT, scheduled: { schedule: id, late: false } });
   expect(main.messages.at(-1)).toEqual({ text: TEXT, priority: "now", from: "membr" });
@@ -185,7 +177,7 @@ test("the agent cannot cancel the user's schedule, and can cancel its own", asyn
   const { client, tools } = await serve();
   const user = await schedule(client, hourly());
   expect(tools.cancel(user)).toBe(`Ask the user to run /unschedule ${user}.`);
-  const own = /^Proposed schedule (\w+)/.exec(tools.create(hourly({ text: "Own work." })))![1]!;
+  const own = /^Added schedule (\w+)/.exec(tools.create(hourly({ text: "Own work." })))![1]!;
   expect(tools.cancel(own)).toBe(`Cancelled schedule ${own}.`);
   expect(tools.cancel(own)).toBe(`No schedule ${own}.`);
   expect(tools.list()).toBe(`${user} active by user, cron "0 * * * *" UTC, next 2026-11-09T09:00:00.000Z: ${TEXT}`);
